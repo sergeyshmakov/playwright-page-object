@@ -1,6 +1,6 @@
 # playwright-page-object
 
-`playwright-page-object` is a TypeScript-first Page Object Model framework for Playwright that replaces raw `page.locator()` chains with a **typed, composable, decorator-driven control graph**.
+`playwright-page-object` is a TypeScript-first Page Object Model framework for Playwright that replaces raw `page.locator()` chains with a typed, composable, decorator-driven control graph.
 
 Every piece of UI becomes a class. Every selector becomes a typed accessor. Every test becomes a readable composition of controls.
 
