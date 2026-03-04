@@ -16,21 +16,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: 'lts/*'
           
       - name: Install dependencies
         run: npm ci
         
       - name: Check Formatting & Linting
         run: npm run lint
+
+      - name: Build
+        run: npm run build
         
       - name: Run Tests
         run: npm run test
-        
-      - name: Build
-        run: npm run build
         
       - name: Semantic Release
         env:
