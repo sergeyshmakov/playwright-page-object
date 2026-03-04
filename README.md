@@ -7,7 +7,7 @@ Every piece of UI becomes a class. Every selector becomes a typed accessor. Ever
 ## 🧬 Package DNA & Philosophy
 
 - **Everything is a PageObject**: No artificial hierarchy between "pages" and "components". A modal, a button, and a page are all constructed the exact same way.
-- **Typed over stringly-typed**: Eliminate raw locator strings in tests completely. Tests only use typed accessors.
+- **Strongly Typed over Stringly-Typed**: Eliminate raw locator strings in tests completely. Tests only use typed accessors.
 - **Composable over flat**: Controls nest inside controls to mirror the actual DOM structure.
 - **Relative Locators & Reusability**: Because controls nest, locators are chained under the hood (`parent.locator().getByTestId(...)`). Selectors only need to be unique *within their parent component*, massively improving reusability. Instead of `data-testid="checkout-page-cart-item-remove-button"`, you just use `data-testid="Remove"`.
 - **Lazy over eager**: Locator chains rebuild dynamically only when accessed, ensuring resilience against dynamic DOM changes and re-renders.
@@ -53,6 +53,9 @@ npm install playwright-page-object
 When a class extends `PageObject`, it inherits a rich set of built-in methods for actions, waits, and assertions.
 
 ### Actions
+
+Like raw Playwright, these actions automatically wait for the element to become actionable (visible, enabled, stable).
+
 - `.click(options?)`: Clicks the element.
 - `.dblclick(options?)`: Double-clicks the element.
 - `.hover(options?)`: Hovers over the element.
@@ -75,7 +78,8 @@ When a class extends `PageObject`, it inherits a rich set of built-in methods fo
 - `.waitPropAbsence(name, value)`: Waits for a React/Vue prop (data attribute) to NOT equal the given value.
 
 ### Assertions
-Native Playwright assertions tied securely to the locator.
+
+Provides native Playwright assertions securely tied to the underlying locator.
 - `.expect()`: Returns a Playwright expect assertion for this locator (e.g., `await myControl.expect().toBeEnabled()`).
 - `.expect({ soft: true })`: Support for soft assertions that do not fail the test immediately.
 
@@ -104,6 +108,8 @@ Manage collections of elements effortlessly with `ListPageObject`.
 ## 🏷️ Decorators Cheat Sheet
 
 The library provides 1-to-1 mappings with Playwright's native locator methods. 
+*(Note: Decorators automatically wire up the parent locator and Playwright `page` instance to the controls behind the scenes, keeping your classes clean.)*
+
 Each strategy has a `@Selector...` variant for nested controls and a `@RootSelector...` variant for top-level pages.
 
 ### Root Locators (Top-level entry points)
@@ -182,7 +188,7 @@ export class CheckoutPage extends PageObject {
 ```
 
 ### Step 3: Register Fixtures
-You can seamlessly inject your root page objects into Playwright tests using the `createFixtures` helper.
+You can seamlessly inject your root page objects into Playwright tests using the `createFixtures` helper. This automatically instantiates your page objects and provides them with the Playwright `page` instance.
 
 ```typescript
 import { test as base } from "@playwright/test";
