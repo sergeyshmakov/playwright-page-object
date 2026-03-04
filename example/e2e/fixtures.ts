@@ -3,7 +3,7 @@ import { createFixtures } from "playwright-page-object";
 import { CheckoutPage } from "./page-objects/CheckoutPage";
 
 export const test = base.extend(
-  createFixtures({
-    checkoutPage: CheckoutPage,
-  }),
+	createFixtures({
+		checkoutPage: CheckoutPage,
+	}),
 );

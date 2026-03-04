@@ -5,8 +5,11 @@ import type { Page } from "@playwright/test";
  * Each constructor receives `page` as the first argument.
  */
 export type PageObjectConstructorsMap = Record<
-    string,
-    new (page: Page, ...args: any[]) => any
+	string,
+	new (
+		page: Page,
+		...args: any[]
+	) => any
 >;
 
 /**
@@ -14,7 +17,7 @@ export type PageObjectConstructorsMap = Record<
  * Maps each key to the instance type of its constructor.
  */
 export type FixturesFromMap<T extends PageObjectConstructorsMap> = {
-    [K in keyof T]: InstanceType<T[K]>;
+	[K in keyof T]: InstanceType<T[K]>;
 };
 
 /**
@@ -37,24 +40,24 @@ export type FixturesFromMap<T extends PageObjectConstructorsMap> = {
  * ```
  */
 export function createFixtures<T extends PageObjectConstructorsMap>(
-    pageObjects: T,
+	pageObjects: T,
 ) {
-    const fixtures: any = {};
+	const fixtures: any = {};
 
-    for (const [key, PageObjectClass] of Object.entries(pageObjects)) {
-        fixtures[key] = async (
-            { page }: { page: Page },
-            use: (r: InstanceType<typeof PageObjectClass>) => Promise<void>,
-        ) => {
-            const instance = new PageObjectClass(page);
-            await use(instance);
-        };
-    }
+	for (const [key, PageObjectClass] of Object.entries(pageObjects)) {
+		fixtures[key] = async (
+			{ page }: { page: Page },
+			use: (r: InstanceType<typeof PageObjectClass>) => Promise<void>,
+		) => {
+			const instance = new PageObjectClass(page);
+			await use(instance);
+		};
+	}
 
-    return fixtures as {
-        [K in keyof T]: (
-            args: { page: Page },
-            use: (r: InstanceType<T[K]>) => Promise<void>,
-        ) => Promise<void>;
-    };
+	return fixtures as {
+		[K in keyof T]: (
+			args: { page: Page },
+			use: (r: InstanceType<T[K]>) => Promise<void>,
+		) => Promise<void>;
+	};
 }
