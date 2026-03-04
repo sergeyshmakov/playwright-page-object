@@ -14,17 +14,30 @@ Every piece of UI becomes a class. Every selector becomes a typed accessor. Ever
 - **Playwright Best Practices Embedded**: Deep support for user-facing attributes (`getByRole`, `getByText`, etc.) natively via decorators, with web-first assertions built-in.
 
 ### The Control Graph
-Controls compose into a graph:
+Controls compose into a hierarchical structure mirroring the DOM:
 
-```mermaid
-graph TD
-    Root["CheckoutPage (@RootSelector)"]
-    Root -->|"@Selector"| Promo["PromoCode (PageObject)"]
-    Root -->|"@ListSelector"| Items["CartItems (ListPageObject)"]
-    Items -->|"items[0]"| Item1["CartItemControl"]
-    Items -->|"items[1]"| Item2["CartItemControl"]
-    Item1 -->|"@SelectorByRole"| Btn1["RemoveButton (ButtonControl)"]
-    Item2 -->|"@SelectorByRole"| Btn2["RemoveButton (ButtonControl)"]
+```typescript
+// Define your controls once
+class CartItemControl extends PageObject {
+    @SelectorByRole("button", { name: "Remove" }) 
+    accessor RemoveButton = new ButtonControl();
+}
+
+@RootSelector("CheckoutPage")
+class CheckoutPage extends PageObject {
+    @Selector("PromoCodeInput") 
+    accessor PromoCode = new PageObject();
+
+    @ListSelector("CartItem") 
+    accessor CartItems = new ListPageObject(CartItemControl);
+}
+
+// Write readable, typed tests without any raw locator strings
+test("remove first cart item", async ({ checkoutPage }) => {
+    // Locator chains are lazily evaluated:
+    // "page.getByTestId('CheckoutPage').getByTestId(/CartItem/).nth(0).getByRole('button', { name: 'Remove' })"
+    await checkoutPage.CartItems.items[0].RemoveButton.click();
+});
 ```
 
 ## 📦 Installation

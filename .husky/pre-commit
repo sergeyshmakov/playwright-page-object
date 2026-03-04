@@ -1,2 +1,2 @@
 npm test
-npx @biomejs/biome check --write --staged
+npx @biomejs/biome check --write --staged --no-errors-on-unmatched
