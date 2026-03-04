@@ -1,0 +1,9 @@
+node_modules
+.vscode
+.idea
+.DS_Store
+*.tgz
+dist
+playwright-report
+test-results
+tsconfig.tsbuildinfo

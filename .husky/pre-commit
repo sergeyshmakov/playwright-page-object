@@ -1,0 +1,2 @@
+npm test
+npx @biomejs/biome check --write --staged

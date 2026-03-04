@@ -1,2 +1,18 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Default behavior: Let Git automatically normalize line endings to LF on commit
+* text=auto eol=lf
+
+# Explicitly force LF for shell scripts and CLI entry points (CRITICAL for npx to work!)
+*.sh text eol=lf
+src/cli.ts text eol=lf
+
+# Ensure Windows batch files always use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Denote all files that are truly binary and should not be modified
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary

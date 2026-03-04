@@ -1,13 +1,70 @@
 {
   "name": "playwright-page-object",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
+  "description": "TypeScript-first Page Object Model framework for Playwright that replaces raw `page.locator()` chains with a typed, composable, decorator-driven control graph.",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "npm run build -- --watch",
+    "lint": "biome check src",
+    "lint:fix": "biome check --write src",
+    "prepare": "husky",
+    "typecheck": "tsc --noEmit && cd example && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:example": "npm run build && npm pack --pack-destination . && cd example && npm install ../playwright-page-object-1.0.0.tgz && npm run test:e2e"
+  },
+  "keywords": [
+    "playwright",
+    "page object",
+    "pom"
+  ],
+  "author": {
+    "name": "Sergei Shmakov",
+    "url": "https://github.com/sergeyshmakov"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sergeyshmakov/playwright-page-object.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sergeyshmakov/playwright-page-object/issues"
+  },
+  "homepage": "https://github.com/sergeyshmakov/playwright-page-object#readme",
+  "release": {
+    "branches": [
+      "main"
+    ]
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.5",
+    "@playwright/test": "^1.49.0",
+    "@commitlint/cli": "^20.4.3",
+    "@commitlint/config-conventional": "^20.4.3",
+    "@types/node": "^22.19.11",
+    "husky": "^9.1.7",
+    "semantic-release": "^25.0.3",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.35.0",
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
 }
