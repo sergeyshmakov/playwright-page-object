@@ -262,7 +262,7 @@ test("should apply promo code and remove first item", async ({ checkoutPage }) =
 
 ## 🤖 AI Ready
 
-This package is available in [Context7](https://context7.com) MCP, so AI assistants can load it directly into context when working with your Playwright tests. SKILL.md files and a custom MCP are planned for the future.
+This package is available in [Context7](https://context7.com) MCP, so AI assistants can load it directly into context when working with your Playwright tests.
 
 ## Contributing
 
