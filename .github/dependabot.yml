@@ -5,7 +5,7 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
-      day: "1"
+      day: "monday"
       time: "06:00"
       timezone: "UTC"
     open-pull-requests-limit: 5
@@ -16,6 +16,6 @@ updates:
         dependency-type: "production"
       npm-development:
         dependency-type: "development"
-ignore:
-  - dependency-name: "@types/node*"
-    versions: [ ">=24" ]
+    ignore:
+      - dependency-name: "@types/node*"
+        versions: [ ">=24" ]
