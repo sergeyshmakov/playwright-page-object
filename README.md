@@ -264,6 +264,14 @@ test("should apply promo code and remove first item", async ({ checkoutPage }) =
 
 This package is available in [Context7](https://context7.com) MCP, so AI assistants can load it directly into context when working with your Playwright tests.
 
+It also ships an [Agent Skills](https://agentskills.io) – compatible skill. Install it so your AI assistant loads playwright-page-object guidance:
+
+```bash
+npx ctx7 skills install /sergeyshmakov/playwright-page-object playwright-page-object
+```
+
+The skill lives in [skills/playwright-page-object/SKILL.md](skills/playwright-page-object/SKILL.md).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
