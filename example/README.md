@@ -53,8 +53,8 @@ Controls encapsulate common checks and actions:
 ```typescript
 // CheckoutPage
 async applyPromoCode(code: string) {
-  await this.PromoCode.fill(code);
-  await this.ApplyPromoButton.click();
+  await this.PromoCode.$.fill(code);
+  await this.ApplyPromoButton.$.click();
 }
 
 async expectCartEmpty() {

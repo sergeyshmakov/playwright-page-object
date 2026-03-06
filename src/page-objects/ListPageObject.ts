@@ -81,6 +81,15 @@ export class ListPageObject<
 	}
 
 	/**
+	 * Returns the item at the given index. Supports negative indices like Array.at().
+	 * @param index - Item index (0-based; -1 = last, -2 = second-to-last, etc.)
+	 * @returns PageObject for the item at that index
+	 */
+	at(index: number) {
+		return this.getItemByIndex(index);
+	}
+
+	/**
 	 * Returns items matching the given Playwright filter options.
 	 * @param options - Playwright locator filter (e.g. `{ hasText: 'foo' }`)
 	 * @returns PageObject for the filtered item(s)
@@ -126,12 +135,12 @@ export class ListPageObject<
 
 	/** Returns the first item (index 0). */
 	first() {
-		return this.getItemByIndex(0);
+		return this.at(0);
 	}
 
 	/** Returns the last item (index -1). */
 	last() {
-		return this.getItemByIndex(-1);
+		return this.at(-1);
 	}
 
 	/**
@@ -156,15 +165,21 @@ export class ListPageObject<
 	 * Proxy for indexed access and async iteration.
 	 *
 	 * - **Numeric index**: `list.items[0]` returns the item at index 0
+	 * - **at(index)**: `list.items.at(-1)` returns the last item (supports negative indices)
 	 * - **Async iteration**: `for await (const item of list.items)` yields each item
 	 *
 	 * Use `for await...of` or `await list.getAll()` — not synchronous `for...of`.
 	 */
-	get items(): Record<number, TItem> & AsyncIterable<TItem> {
+	get items(): Record<number, TItem> & AsyncIterable<TItem> & {
+		at(index: number): TItem;
+	} {
 		const self = this;
 
-		return new Proxy({} as Record<number, TItem> & AsyncIterable<TItem>, {
+		const proxy = new Proxy({} as Record<number, TItem> & AsyncIterable<TItem>, {
 			get: (target, prop) => {
+				if (prop === "at") {
+					return (index: number) => self.getItemByIndex(index);
+				}
 				if (prop === Symbol.asyncIterator) {
 					return async function* () {
 						const count = await self.count();
@@ -187,6 +202,9 @@ export class ListPageObject<
 				return Reflect.get(target, prop);
 			},
 		});
+		return proxy as Record<number, TItem> & AsyncIterable<TItem> & {
+			at(index: number): TItem;
+		};
 	}
 
 	/**

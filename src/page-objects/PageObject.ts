@@ -22,8 +22,8 @@ export type PageObjectConstructor<TPageObject extends PageObject = PageObject> =
  * Base class for the Page Object Model pattern with Playwright.
  *
  * Extend this class and use decorators (`RootSelector`, `Selector`, etc.) to define
- * the root locator and child elements. Provides actions (click, fill, etc.), wait helpers,
- * and assertions via `expect()`.
+ * the root locator and child elements. Provides wait helpers, assertions via `expect()`,
+ * and raw locator access via `$` for Playwright actions.
  *
  * @example
  * ```ts
@@ -77,6 +77,14 @@ export class PageObject {
 	}
 
 	/**
+	 * Raw Playwright locator. Use for actions: `control.$.click()`, `control.$.fill()`, etc.
+	 * Keeps the library version-agnostic—any Playwright API is available via `$`.
+	 */
+	get $(): Locator {
+		return this.locator;
+	}
+
+	/**
 	 * Type guard: checks if a value is a PageObject class (constructor).
 	 *
 	 * @param value - Value to check
@@ -111,74 +119,6 @@ export class PageObject {
 	cloneWithContext(root: Locator, selector: SelectorType): this {
 		const PageObjectClass = this.constructor as PageObjectConstructor<this>;
 		return new PageObjectClass(root.page(), root, selector);
-	}
-
-	/** ACTIONS */
-
-	/**
-	 * Clicks the element.
-	 * @param options - Playwright click options (e.g. `{ button: 'right' }`)
-	 */
-	async click(options?: Parameters<Locator["click"]>[0]) {
-		await this.locator.click(options);
-	}
-
-	/**
-	 * Double-clicks the element.
-	 * @param options - Playwright dblclick options
-	 */
-	async dblclick(options?: Parameters<Locator["dblclick"]>[0]) {
-		await this.locator.dblclick(options);
-	}
-
-	/**
-	 * Hovers over the element.
-	 * @param options - Playwright hover options
-	 */
-	async hover(options?: Parameters<Locator["hover"]>[0]) {
-		await this.locator.hover(options);
-	}
-
-	/**
-	 * Fills the input with the given value.
-	 * @param value - Text to fill
-	 * @param options - Playwright fill options (e.g. `{ force: true }`)
-	 */
-	async fill(value: string, options?: Parameters<Locator["fill"]>[1]) {
-		await this.locator.fill(value, options);
-	}
-
-	/**
-	 * Clears the input value.
-	 * @param options - Playwright clear options
-	 */
-	async clear(options?: Parameters<Locator["clear"]>[0]) {
-		await this.locator.clear(options);
-	}
-
-	/**
-	 * Checks a checkbox or radio button.
-	 * @param options - Playwright check options
-	 */
-	async check(options?: Parameters<Locator["check"]>[0]) {
-		await this.locator.check(options);
-	}
-
-	/**
-	 * Unchecks a checkbox.
-	 * @param options - Playwright uncheck options
-	 */
-	async uncheck(options?: Parameters<Locator["uncheck"]>[0]) {
-		await this.locator.uncheck(options);
-	}
-
-	/**
-	 * Presses a key on the element.
-	 * @param key - Key to press (e.g. `Enter`, `Tab`)
-	 * @param options - Playwright press options
-	 */
-	async press(key: string, options?: Parameters<Locator["press"]>[1]) {
-		await this.locator.press(key, options);
 	}
 
 	/** Waits for the element to become visible. */

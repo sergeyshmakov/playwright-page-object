@@ -221,6 +221,108 @@ describe("ListPageObject", () => {
 		});
 	});
 
+	describe("at()", () => {
+		it("at(n) delegates to getItemByIndex(n)", () => {
+			const list = new ListPageObject(
+				undefined,
+				mockPage as any,
+				mockRoot as any,
+				selector as any,
+			);
+			list.at(2);
+			expect(mockLocator.nth).toHaveBeenCalledWith(2);
+		});
+
+		it("at(-1) delegates to getItemByIndex(-1)", () => {
+			const list = new ListPageObject(
+				undefined,
+				mockPage as any,
+				mockRoot as any,
+				selector as any,
+			);
+			list.at(-1);
+			expect(mockLocator.nth).toHaveBeenCalledWith(-1);
+		});
+
+		it("at(-2) uses p.nth(-2)", () => {
+			const list = new ListPageObject(
+				undefined,
+				mockPage as any,
+				mockRoot as any,
+				selector as any,
+			);
+			list.at(-2);
+			expect(mockLocator.nth).toHaveBeenCalledWith(-2);
+		});
+
+		it("first() same as at(0)", () => {
+			const list = new ListPageObject(
+				undefined,
+				mockPage as any,
+				mockRoot as any,
+				selector as any,
+			);
+			list.first();
+			expect(mockLocator.nth).toHaveBeenCalledWith(0);
+		});
+
+		it("last() same as at(-1)", () => {
+			const list = new ListPageObject(
+				undefined,
+				mockPage as any,
+				mockRoot as any,
+				selector as any,
+			);
+			list.last();
+			expect(mockLocator.nth).toHaveBeenCalledWith(-1);
+		});
+
+		it("items.at(-1) returns same as getItemByIndex(-1)", () => {
+			class Item extends PageObject {}
+			const list = new ListPageObject(
+				Item,
+				mockPage as any,
+				mockRoot as any,
+				selector as any,
+			);
+
+			const viaAt = list.items.at(-1);
+			const viaGetItem = list.getItemByIndex(-1);
+
+			expect(viaAt).toBeInstanceOf(Item);
+			expect(viaGetItem).toBeInstanceOf(Item);
+			expect(viaAt.root).toBe(viaGetItem.root);
+		});
+
+		it("items.at(0) returns same as first()", () => {
+			class Item extends PageObject {}
+			const list = new ListPageObject(
+				Item,
+				mockPage as any,
+				mockRoot as any,
+				selector as any,
+			);
+
+			const viaAt = list.items.at(0);
+			const viaFirst = list.first();
+
+			expect(viaAt).toBeInstanceOf(Item);
+			expect(viaFirst).toBeInstanceOf(Item);
+			expect(viaAt.root).toBe(viaFirst.root);
+		});
+
+		it("items.at(-2) uses p.nth(-2)", () => {
+			const list = new ListPageObject(
+				undefined,
+				mockPage as any,
+				mockRoot as any,
+				selector as any,
+			);
+			list.items.at(-2);
+			expect(mockLocator.nth).toHaveBeenCalledWith(-2);
+		});
+	});
+
 	describe("items proxy", () => {
 		it("items[0] returns same as getItemByIndex(0)", () => {
 			class Item extends PageObject {}

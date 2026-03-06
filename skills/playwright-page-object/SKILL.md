@@ -24,7 +24,7 @@ description: >
 
 2. **Assertion placement**: Keep assertions (`expect()`) in test files, not inside `PageObject` classes. Assertions belong in tests so failures surface at the right level and page objects stay reusable across different expectations.
 
-3. **Encapsulation**: Do not expose the internal Playwright locator publicly. Exposing it breaks encapsulation and encourages tests to bypass the typed API. Use a custom getter only if explicitly integrating with legacy code.
+3. **Actions via `$`**: Use `control.$.click()`, `control.$.fill()`, etc. for Playwright actions. The `$` getter exposes the raw locator—any Playwright API is available without library updates.
 
 4. **Instantiation**: Use `createFixtures` to wire pages into tests. `createFixtures` wires the Playwright `page` into page objects and ensures proper lifecycle; manual `new MyPage(page)` bypasses that.
 
@@ -90,11 +90,11 @@ export const test = base.extend(createFixtures({
 import { test } from "./fixtures";
 
 test("apply promo and remove first item", async ({ checkoutPage }) => {
-    await checkoutPage.PromoCode.fill("SAVE20");
-    await checkoutPage.ApplyPromoButton.click();
+    await checkoutPage.PromoCode.$.fill("SAVE20");
+    await checkoutPage.ApplyPromoButton.$.click();
 
     // Array-like access via .items proxy
-    await checkoutPage.CartItems.items[0].RemoveButton.click();
+    await checkoutPage.CartItems.items[0].RemoveButton.$.click();
     await checkoutPage.CartItems.waitCount(0);
 });
 ```
@@ -134,7 +134,7 @@ test("apply promo and remove first item", async ({ checkoutPage }) => {
 ## API Reference
 
 ### `PageObject` Built-in API
-- **Actions** *(Auto-wait for actionability)*: `.click()`, `.dblclick()`, `.hover()`, `.fill(value)`, `.clear()`, `.check()`, `.uncheck()`, `.press(key)`
+- **Raw locator** `control.$` — use for Playwright actions: `control.$.click()`, `control.$.fill()`, etc.
 - **Waits**: `.waitVisible()`, `.waitHidden()`, `.waitText(text)`, `.waitValue(value)`, `.waitNoValue()`, `.waitCount(n)`, `.waitChecked()`, `.waitUnChecked()`, `.waitProp(name, value)`, `.waitPropAbsence(name, value)`
 - **Assertions**:
   ```typescript
@@ -151,4 +151,4 @@ test("apply promo and remove first item", async ({ checkoutPage }) => {
 - **Utility**: `.count()`
 
 ## Incremental Adoption (Brownfield)
-The internal locator is deliberately `protected`. If integrating with legacy code expecting raw `Locator` objects, expose it safely via a custom getter in your subclass. `createFixtures` can be safely mixed with existing Playwright fixtures without conflicts.
+Use `control.$` to pass the raw locator to legacy code expecting `Locator`. No subclassing needed. `createFixtures` can be safely mixed with existing Playwright fixtures without conflicts.

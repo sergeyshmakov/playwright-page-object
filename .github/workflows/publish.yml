@@ -32,6 +32,9 @@ jobs:
         
       - name: Run Tests
         run: npm run test
+
+      - name: Test Example
+        run: npm run test:example
         
       - name: Semantic Release
         env:

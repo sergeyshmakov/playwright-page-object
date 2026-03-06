@@ -21,8 +21,8 @@ export class CheckoutPage extends PageObject {
 	accessor CartItems = new ListPageObject(CartItemControl);
 
 	async applyPromoCode(code: string) {
-		await this.PromoCode.fill(code);
-		await this.ApplyPromoButton.click();
+		await this.PromoCode.$.fill(code);
+		await this.ApplyPromoButton.$.click();
 	}
 
 	async expectCartEmpty() {

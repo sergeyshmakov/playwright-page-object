@@ -11,7 +11,8 @@ Every piece of UI becomes a class. Every selector becomes a typed accessor. Ever
 - **Composable over flat**: Controls nest inside controls to mirror the actual DOM or component structure.
 - **Relative Locators & Reusability**: Because controls nest, locators are chained under the hood (`parent.locator().getByTestId(...)`). Selectors only need to be unique *within their parent component*, massively improving reusability. Instead of `data-testid="checkout-page-cart-item-remove-button"`, you just use `data-testid="Remove"`.
 - **Lazy over eager**: Locator chains rebuild dynamically only when accessed, ensuring resilience against dynamic DOM changes and re-renders.
-- **Playwright Best Practices Embedded**: Deep support for user-facing attributes (`getByRole`, `getByText`, etc.) natively via decorators, with web-first assertions built-in.
+- **Structure over mirroring**: We provide typed structure (selectors, composition) and convenience (waits, expect). Use `control.$` for actions — any Playwright API is available without library updates.
+- **Playwright best practices**: User-facing attributes (`getByRole`, `getByText`, etc.) via decorators, web-first assertions, and direct locator access via `$`.
 
 ### The Control Graph
 Controls compose into a hierarchical structure mirroring the DOM or your components structure:
@@ -41,7 +42,7 @@ class CheckoutPage extends PageObject {
 test("remove first cart item", async ({ checkoutPage }) => {
     // Locator chains are lazily evaluated:
     // "page.getByTestId('CheckoutPage').getByTestId(/CartItem/).nth(0).getByRole('button', { name: 'Remove' })"
-    await checkoutPage.CartItems.items[0].RemoveButton.click();
+    await checkoutPage.CartItems.items[0].RemoveButton.$.click();
 });
 ```
 
@@ -55,22 +56,18 @@ npm install -D playwright-page-object
 
 ## 📚 Comprehensive API Reference: `PageObject`
 
-When a class extends `PageObject`, it inherits a rich set of built-in methods for actions, waits, and assertions.
+When a class extends `PageObject`, it inherits wait helpers, assertions, and raw locator access.
 
-### Actions
+### Raw Locator (`$`)
 
-Like raw Playwright, these actions automatically wait for the element to become actionable (visible, enabled, stable).
+Use `control.$` for Playwright actions. Keeps the library version-agnostic—any Playwright API is available.
 
-| Method                   | Description                                          |
-| ------------------------ | ---------------------------------------------------- |
-| `.click(options?)`       | Clicks the element.                                  |
-| `.dblclick(options?)`    | Double-clicks the element.                           |
-| `.hover(options?)`       | Hovers over the element.                             |
-| `.fill(value, options?)` | Fills the input with the given value.                |
-| `.clear(options?)`       | Clears the input value.                              |
-| `.check(options?)`       | Checks a checkbox or radio button.                   |
-| `.uncheck(options?)`     | Unchecks a checkbox.                                 |
-| `.press(key, options?)`  | Presses a key (e.g., `Enter`, `Tab`) on the element. |
+| Usage | Example |
+|-------|---------|
+| Click | `await control.$.click()` |
+| Fill | `await control.$.fill("text")` |
+| Hover | `await control.$.hover()` |
+| ... | Any `Locator` method |
 
 ### Waits
 
@@ -104,7 +101,7 @@ Manage collections of elements effortlessly with `ListPageObject`.
 
 | Feature           | Description                                                                            |
 | ----------------- | -------------------------------------------------------------------------------------- |
-| Array-like access | Access specific items directly via index: `list.items[0]`                              |
+| Array-like access | Access specific items directly via index: `list.items[0]`, `list.items.at(-1)`        |
 | Async iteration   | Iterate over all matching items easily: `for await (const item of list.items) { ... }` |
 
 ### Retrieval & Filtering
@@ -113,6 +110,7 @@ Manage collections of elements effortlessly with `ListPageObject`.
 | -------------------------------- | ------------------------------------------------------------- |
 | `.first()`                       | Returns the first item (index 0).                             |
 | `.last()`                        | Returns the last item (index -1).                             |
+| `.at(index)`                     | Returns the item at index (supports negative: -1 = last, -2 = second-to-last). |
 | `.getItemByIndex(index)`         | Returns the item at the given index.                          |
 | `.filter(options)`               | Returns items matching the given Playwright filter options.   |
 | `.filterByText(text)`            | Returns items containing the given text.                      |
@@ -179,22 +177,7 @@ Migrating an entire test suite to a new Page Object Model is daunting. `playwrig
 
 1. **New Features Only**: Continue running your existing tests as-is. Build new pages and controls using the `playwright-page-object` model.
 2. **Mix & Match Fixtures**: You can register `playwright-page-object` fixtures using `createFixtures` alongside your existing Playwright fixtures without any conflicts.
-3. **Escape Hatch**: The internal Playwright locator is kept `protected` by design. If you need to integrate a newly created control with legacy functions that expect raw `Locator` objects, you can easily expose it via a getter in your subclass.
-
-**Locator accessor pattern** — For easier integration with legacy code, you can expose a raw `Locator` directly as an accessor:
-
-```typescript
-import type { Locator } from "@playwright/test";
-import { PageObject, RootSelector, Selector } from "playwright-page-object";
-
-@RootSelector("LegacyPage")
-class LegacyPage extends PageObject {
-    @Selector("SomeSelector")
-    accessor someElement: Locator;
-}
-```
-
-**⚠️ This is an escape hatch and is strongly not recommended.** Use it only when replacing existing controls that operate on locators instead of page objects — for example, when gradually migrating legacy codebases.
+3. **Easy integration**: Use `control.$` to pass the raw locator to legacy code expecting `Locator`. No subclassing or getters needed—just pass `myControl.$` wherever a `Locator` is required.
 
 ## 🚀 Step-by-Step Usage Guide
 
@@ -258,12 +241,12 @@ import { test } from "./fixtures";
 
 test("should apply promo code and remove first item", async ({ checkoutPage }) => {
     // Fill the promo code
-    await checkoutPage.PromoCode.fill("SAVE20");
-    await checkoutPage.ApplyPromoButton.click();
+    await checkoutPage.PromoCode.$.fill("SAVE20");
+    await checkoutPage.ApplyPromoButton.$.click();
 
     // The items proxy allows array-like access, fully typed!
     const firstItem = checkoutPage.CartItems.items[0];
-    await firstItem.RemoveButton.click();
+    await firstItem.RemoveButton.$.click();
     
     // Assertions are built-in
     await checkoutPage.CartItems.waitCount(0);

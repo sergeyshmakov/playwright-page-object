@@ -126,89 +126,14 @@ describe("PageObject", () => {
 			expect(cloned.page).toBe(mockPage);
 			expect(cloned.root).toBe(newRoot);
 		});
-	});
 
-	describe("actions", () => {
-		it("click calls locator.click(options)", async () => {
+		it("$ returns the locator for raw Playwright access", () => {
 			const pageObj = new PageObject(
 				mockPage as any,
 				mockRoot as any,
 				selector,
 			);
-			await pageObj.click({ force: true });
-			expect(mockLocator.click).toHaveBeenCalledWith({ force: true });
-		});
-
-		it("dblclick calls locator.dblclick", async () => {
-			const pageObj = new PageObject(
-				mockPage as any,
-				mockRoot as any,
-				selector,
-			);
-			await pageObj.dblclick();
-			expect(mockLocator.dblclick).toHaveBeenCalled();
-		});
-
-		it("hover calls locator.hover", async () => {
-			const pageObj = new PageObject(
-				mockPage as any,
-				mockRoot as any,
-				selector,
-			);
-			await pageObj.hover();
-			expect(mockLocator.hover).toHaveBeenCalled();
-		});
-
-		it("fill calls locator.fill(value, options)", async () => {
-			const pageObj = new PageObject(
-				mockPage as any,
-				mockRoot as any,
-				selector,
-			);
-			await pageObj.fill("text", { timeout: 1000 });
-			expect(mockLocator.fill).toHaveBeenCalledWith("text", {
-				timeout: 1000,
-			});
-		});
-
-		it("clear calls locator.clear", async () => {
-			const pageObj = new PageObject(
-				mockPage as any,
-				mockRoot as any,
-				selector,
-			);
-			await pageObj.clear();
-			expect(mockLocator.clear).toHaveBeenCalled();
-		});
-
-		it("check calls locator.check", async () => {
-			const pageObj = new PageObject(
-				mockPage as any,
-				mockRoot as any,
-				selector,
-			);
-			await pageObj.check();
-			expect(mockLocator.check).toHaveBeenCalled();
-		});
-
-		it("uncheck calls locator.uncheck", async () => {
-			const pageObj = new PageObject(
-				mockPage as any,
-				mockRoot as any,
-				selector,
-			);
-			await pageObj.uncheck();
-			expect(mockLocator.uncheck).toHaveBeenCalled();
-		});
-
-		it("press calls locator.press(key, options)", async () => {
-			const pageObj = new PageObject(
-				mockPage as any,
-				mockRoot as any,
-				selector,
-			);
-			await pageObj.press("Enter");
-			expect(mockLocator.press).toHaveBeenCalledWith("Enter", undefined);
+			expect(pageObj.$).toBe(mockLocator);
 		});
 	});
 

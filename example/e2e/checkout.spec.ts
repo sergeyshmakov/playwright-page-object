@@ -10,7 +10,7 @@ test("should apply promo code and remove first item", async ({
 	await checkoutPage.applyPromoCode("SAVE20");
 
 	const firstItem = checkoutPage.CartItems.items[0];
-	await firstItem.RemoveButton.click();
+	await firstItem.RemoveButton.$.click();
 
 	await checkoutPage.expectCartHasItemCount(2);
 });
@@ -19,7 +19,7 @@ test("should empty cart by removing all items", async ({ checkoutPage }) => {
 	const count = await checkoutPage.CartItems.count();
 	for (let i = 0; i < count; i++) {
 		const item = checkoutPage.CartItems.items[0];
-		await item.RemoveButton.click();
+		await item.RemoveButton.$.click();
 	}
 	await checkoutPage.expectCartEmpty();
 });
@@ -37,7 +37,7 @@ test("should find item by text using filterByText and remove it", async ({
 }) => {
 	const widgetB = checkoutPage.CartItems.filterByText("Widget B");
 	await widgetB.waitVisible();
-	await widgetB.RemoveButton.click();
+	await widgetB.RemoveButton.$.click();
 	await checkoutPage.expectCartHasItemCount(2);
 });
 
