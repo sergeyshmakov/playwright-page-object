@@ -3,9 +3,16 @@ import { createFixtures } from "../fixtures";
 import { PageObject } from "../page-objects/PageObject";
 import { createMockPage } from "./mocks/playwright";
 
-type FixtureFn = (args: { page: unknown }, use: (r: unknown) => Promise<void>) => Promise<void>;
+type FixtureFn = (
+	args: { page: unknown },
+	use: (r: unknown) => Promise<void>,
+) => Promise<void>;
 
-function invokeFixture(fixture: unknown, args: { page: unknown }, use: (r: unknown) => Promise<void>) {
+function invokeFixture(
+	fixture: unknown,
+	args: { page: unknown },
+	use: (r: unknown) => Promise<void>,
+) {
 	const fn = Array.isArray(fixture) ? fixture[0] : fixture;
 	return (fn as FixtureFn)(args, use);
 }

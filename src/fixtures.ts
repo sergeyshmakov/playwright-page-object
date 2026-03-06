@@ -4,10 +4,7 @@ import type { Fixtures, Page } from "@playwright/test";
  * Map of fixture names to PageObject constructors.
  * Each constructor receives `page` as the first argument.
  */
-type PageObjectConstructorsMap = Record<
-	string,
-	new (page: Page) => unknown
->;
+type PageObjectConstructorsMap = Record<string, new (page: Page) => unknown>;
 
 /** Maps constructor map to instance types for Fixtures. */
 type FixturesFromMap<T extends PageObjectConstructorsMap> = {
@@ -47,7 +44,9 @@ export function createFixtures<T extends PageObjectConstructorsMap>(
 			{ page }: { page: Page },
 			use: (r: unknown) => Promise<void>,
 		) => {
-			const instance = new (PageObjectClass as new (page: Page) => unknown)(page);
+			const instance = new (PageObjectClass as new (page: Page) => unknown)(
+				page,
+			);
 			await use(instance);
 		};
 	}
