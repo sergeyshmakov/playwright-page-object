@@ -1,0 +1,23 @@
+{
+  "skill_name": "playwright-page-object",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I'm adding Playwright e2e tests for a login form. The form has email and password inputs, a Submit button, and a 'Forgot password?' link. I want to use page objects. Can you set up the page object structure and a test that fills the form and clicks Submit?",
+      "expected_output": "PageObject classes using @RootSelector/@Selector or @SelectorByRole, accessor keyword, createFixtures, typed test using injected fixture",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Refactor this test to use playwright-page-object. [paste a test with raw page.locator() chains]",
+      "expected_output": "Extracted PageObject classes, createFixtures, test using typed accessors instead of locators",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I have a product list where each row has a name, price, and Add to Cart button. How do I model this with playwright-page-object so I can click Add to Cart on the second item?",
+      "expected_output": "ListPageObject with @ListSelector, item control with Selector/SelectorByRole, example using items[1] or getItemByIndex(1)",
+      "files": []
+    }
+  ]
+}
