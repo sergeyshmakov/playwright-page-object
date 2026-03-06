@@ -15,6 +15,16 @@ test("should apply promo code and remove first item", async ({
 	await checkoutPage.expectCartHasItemCount(2);
 });
 
+test("should apply promo using Locator-typed accessor (PromoCodeInput)", async ({
+	checkoutPage,
+}) => {
+	// Locator approach: use accessor directly without .$
+	await checkoutPage.PromoCodeInput.fill("SAVE20");
+	await checkoutPage.ApplyPromoButton.$.click();
+
+	await checkoutPage.expectCartHasItemCount(3);
+});
+
 test("should empty cart by removing all items", async ({ checkoutPage }) => {
 	const count = await checkoutPage.CartItems.count();
 	for (let i = 0; i < count; i++) {

@@ -1,3 +1,4 @@
+import type { Locator } from "@playwright/test";
 import {
 	ListPageObject,
 	ListStrictSelector,
@@ -11,8 +12,13 @@ import { ButtonControl } from "./controls/ButtonControl";
 
 @RootSelector("CheckoutPage")
 export class CheckoutPage extends PageObject {
+	/** PageObject approach: use PromoCode.$.fill() */
 	@Selector("PromoCodeInput")
 	accessor PromoCode = new PageObject();
+
+	/** Locator approach: use PromoCodeInput.fill() directly when you can't use PageObject yet */
+	@Selector("PromoCodeInput")
+	accessor PromoCodeInput!: Locator;
 
 	@SelectorByRole("button", { name: "Apply" })
 	accessor ApplyPromoButton = new ButtonControl();

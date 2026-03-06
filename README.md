@@ -179,6 +179,52 @@ Migrating an entire test suite to a new Page Object Model is daunting. `playwrig
 2. **Mix & Match Fixtures**: You can register `playwright-page-object` fixtures using `createFixtures` alongside your existing Playwright fixtures without any conflicts.
 3. **Easy integration**: Use `control.$` to pass the raw locator to legacy code expecting `Locator`. No subclassing or getters needed—just pass `myControl.$` wherever a `Locator` is required.
 
+### Two Ways to Adopt Page Object Controls
+
+When adding structure to existing tests, you can choose how to introduce child controls:
+
+**Approach 1: Locator-first (incremental)** — Use child accessors as `Locator` when you can't instantiate `PageObject` yet (e.g. the control class doesn't exist, or you're still exploring the DOM). Define the selector and use the locator directly in tests. Later, replace with a `PageObject` and migrate tests to use `.$`:
+
+```typescript
+import type { Locator } from "@playwright/test";
+import { PageObject, RootSelector, Selector } from "playwright-page-object";
+
+@RootSelector("CheckoutPage")
+class CheckoutPage extends PageObject {
+    @Selector("PromoCodeInput")
+    accessor PromoCode!: Locator;  // use as locator: checkoutPage.PromoCode.fill("SAVE20")
+
+    @Selector("CartItem")
+    accessor CartItem!: Locator;   // use as locator: checkoutPage.CartItem.nth(0).click()
+}
+
+// Later, promote to PageObject and add .$ in tests:
+// accessor PromoCode = new PageObject();
+// accessor CartItems = new ListPageObject(CartItemControl);
+// await checkoutPage.PromoCode.$.fill("SAVE20");
+```
+
+**Approach 2: Page-object-first (recommended)** — Start with `accessor ChildControl = new PageObject()` from day one. In tests, use `ChildControl.$` for actions. No migration step — you get typed structure and waits/assertions immediately:
+
+```typescript
+import { PageObject, RootSelector, Selector, ListSelector, ListPageObject } from "playwright-page-object";
+
+@RootSelector("CheckoutPage")
+class CheckoutPage extends PageObject {
+    @Selector("PromoCodeInput")
+    accessor PromoCode = new PageObject();
+
+    @ListSelector("CartItem")
+    accessor CartItems = new ListPageObject(CartItemControl);
+}
+
+// Tests use .$ from the start
+test("apply promo", async ({ checkoutPage }) => {
+    await checkoutPage.PromoCode.$.fill("SAVE20");
+    await checkoutPage.CartItems.items[0].RemoveButton.$.click();
+});
+```
+
 ## 🚀 Step-by-Step Usage Guide
 
 ### Step 1: Create Base Controls
@@ -228,9 +274,9 @@ import { createFixtures } from "playwright-page-object";
 import { CheckoutPage } from "./CheckoutPage";
 
 // Extend Playwright's test instance with your Root Page Objects
-export const test = base.extend(createFixtures({
-    checkoutPage: CheckoutPage,
-}));
+export const test = base.extend<{ checkoutPage: CheckoutPage }>(
+    createFixtures({ checkoutPage: CheckoutPage }),
+);
 ```
 
 ### Step 4: Write the Test

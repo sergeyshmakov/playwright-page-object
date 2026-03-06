@@ -3,6 +3,13 @@ import { createFixtures } from "../fixtures";
 import { PageObject } from "../page-objects/PageObject";
 import { createMockPage } from "./mocks/playwright";
 
+type FixtureFn = (args: { page: unknown }, use: (r: unknown) => Promise<void>) => Promise<void>;
+
+function invokeFixture(fixture: unknown, args: { page: unknown }, use: (r: unknown) => Promise<void>) {
+	const fn = Array.isArray(fixture) ? fixture[0] : fixture;
+	return (fn as FixtureFn)(args, use);
+}
+
 describe("createFixtures", () => {
 	it("creates fixture per key", () => {
 		class HomePage extends PageObject {}
@@ -25,7 +32,7 @@ describe("createFixtures", () => {
 		const mockPage = createMockPage();
 
 		const use = vi.fn().mockResolvedValue(undefined);
-		await fixtures.testPage({ page: mockPage as any }, use);
+		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
 
 		expect(use).toHaveBeenCalled();
 	});
@@ -37,7 +44,7 @@ describe("createFixtures", () => {
 		const mockPage = createMockPage();
 
 		const use = vi.fn().mockResolvedValue(undefined);
-		await fixtures.testPage({ page: mockPage as any }, use);
+		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
 
 		const instance = use.mock.calls[0][0];
 		expect(instance).toBeInstanceOf(TestPage);
@@ -55,7 +62,7 @@ describe("createFixtures", () => {
 			receivedInstance = instance;
 		});
 
-		await fixtures.testPage({ page: mockPage as any }, use);
+		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
 
 		expect(receivedInstance).toBeInstanceOf(TestPage);
 		expect(receivedInstance?.page).toBe(mockPage);
@@ -72,7 +79,7 @@ describe("createFixtures", () => {
 			useCompleted = true;
 		});
 
-		await fixtures.testPage({ page: mockPage as any }, use);
+		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
 
 		expect(useCompleted).toBe(true);
 		expect(use).toHaveBeenCalled();

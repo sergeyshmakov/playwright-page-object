@@ -1,22 +1,16 @@
-import type { Page } from "@playwright/test";
+import type { Fixtures, Page } from "@playwright/test";
 
 /**
  * Map of fixture names to PageObject constructors.
  * Each constructor receives `page` as the first argument.
  */
-export type PageObjectConstructorsMap = Record<
+type PageObjectConstructorsMap = Record<
 	string,
-	new (
-		page: Page,
-		...args: any[]
-	) => any
+	new (page: Page) => unknown
 >;
 
-/**
- * Fixture types derived from a constructors map.
- * Maps each key to the instance type of its constructor.
- */
-export type FixturesFromMap<T extends PageObjectConstructorsMap> = {
+/** Maps constructor map to instance types for Fixtures. */
+type FixturesFromMap<T extends PageObjectConstructorsMap> = {
 	[K in keyof T]: InstanceType<T[K]>;
 };
 
@@ -24,16 +18,17 @@ export type FixturesFromMap<T extends PageObjectConstructorsMap> = {
  * Creates Playwright fixtures from a map of PageObject classes.
  * Each fixture instantiates its PageObject with `page` and passes it to the test.
  *
+ * Returns Playwright's `Fixtures` type. Pass the generic to `extend` for typed fixtures:
+ * `base.extend<{ checkoutPage: CheckoutPage }>(createFixtures({ checkoutPage: CheckoutPage }))`
+ *
  * @param pageObjects - Record of fixture name → PageObject constructor
  * @returns Fixtures object for use with `test.extend()`
  *
  * @example
  * ```ts
- * const test = base.extend(createFixtures({
- *   homePage: HomePage,
- *   settingsPage: SettingsPage,
- * }));
- *
+ * const test = base.extend<{ homePage: HomePage; settingsPage: SettingsPage }>(
+ *   createFixtures({ homePage: HomePage, settingsPage: SettingsPage })
+ * );
  * test("check header", async ({ homePage }) => {
  *   await homePage.expect().toBeVisible();
  * });
@@ -41,23 +36,21 @@ export type FixturesFromMap<T extends PageObjectConstructorsMap> = {
  */
 export function createFixtures<T extends PageObjectConstructorsMap>(
 	pageObjects: T,
-) {
-	const fixtures: any = {};
+): Fixtures<FixturesFromMap<T>, {}, {}, {}> {
+	const fixtures: Record<
+		string,
+		(args: { page: Page }, use: (r: unknown) => Promise<void>) => Promise<void>
+	> = {};
 
 	for (const [key, PageObjectClass] of Object.entries(pageObjects)) {
 		fixtures[key] = async (
 			{ page }: { page: Page },
-			use: (r: InstanceType<typeof PageObjectClass>) => Promise<void>,
+			use: (r: unknown) => Promise<void>,
 		) => {
-			const instance = new PageObjectClass(page);
+			const instance = new (PageObjectClass as new (page: Page) => unknown)(page);
 			await use(instance);
 		};
 	}
 
-	return fixtures as {
-		[K in keyof T]: (
-			args: { page: Page },
-			use: (r: InstanceType<T[K]>) => Promise<void>,
-		) => Promise<void>;
-	};
+	return fixtures as Fixtures<FixturesFromMap<T>, {}, {}, {}>;
 }
