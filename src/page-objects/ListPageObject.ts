@@ -170,41 +170,46 @@ export class ListPageObject<
 	 *
 	 * Use `for await...of` or `await list.getAll()` — not synchronous `for...of`.
 	 */
-	get items(): Record<number, TItem> & AsyncIterable<TItem> & {
-		at(index: number): TItem;
-	} {
+	get items(): Record<number, TItem> &
+		AsyncIterable<TItem> & {
+			at(index: number): TItem;
+		} {
 		const self = this;
 
-		const proxy = new Proxy({} as Record<number, TItem> & AsyncIterable<TItem>, {
-			get: (target, prop) => {
-				if (prop === "at") {
-					return (index: number) => self.getItemByIndex(index);
-				}
-				if (prop === Symbol.asyncIterator) {
-					return async function* () {
-						const count = await self.count();
-						for (let i = 0; i < count; i++) {
-							yield self.getItemByIndex(i);
-						}
-					};
-				}
-				if (prop === Symbol.iterator) {
-					throw new Error(
-						"list.items is not synchronously iterable. Use `for await...of` or `await list.getAll()`.",
-					);
-				}
-				if (typeof prop === "string" || typeof prop === "number") {
-					const index = Number(prop);
-					if (!Number.isNaN(index)) {
-						return self.getItemByIndex(index);
+		const proxy = new Proxy(
+			{} as Record<number, TItem> & AsyncIterable<TItem>,
+			{
+				get: (target, prop) => {
+					if (prop === "at") {
+						return (index: number) => self.getItemByIndex(index);
 					}
-				}
-				return Reflect.get(target, prop);
+					if (prop === Symbol.asyncIterator) {
+						return async function* () {
+							const count = await self.count();
+							for (let i = 0; i < count; i++) {
+								yield self.getItemByIndex(i);
+							}
+						};
+					}
+					if (prop === Symbol.iterator) {
+						throw new Error(
+							"list.items is not synchronously iterable. Use `for await...of` or `await list.getAll()`.",
+						);
+					}
+					if (typeof prop === "string" || typeof prop === "number") {
+						const index = Number(prop);
+						if (!Number.isNaN(index)) {
+							return self.getItemByIndex(index);
+						}
+					}
+					return Reflect.get(target, prop);
+				},
 			},
-		});
-		return proxy as Record<number, TItem> & AsyncIterable<TItem> & {
-			at(index: number): TItem;
-		};
+		);
+		return proxy as Record<number, TItem> &
+			AsyncIterable<TItem> & {
+				at(index: number): TItem;
+			};
 	}
 
 	/**
