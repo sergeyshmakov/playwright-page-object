@@ -4,7 +4,12 @@ import type { Fixtures, Page } from "@playwright/test";
  * Map of fixture names to PageObject constructors.
  * Each constructor receives `page` as the first argument.
  */
-export type PageObjectConstructorsMap = Record<string, new (page: Page) => unknown>;
+export type PageObjectConstructorsMap = Record<
+	string,
+	new (
+		page: Page,
+	) => unknown
+>;
 
 /** Maps constructor map to instance types for Fixtures. */
 export type FixturesFromMap<T extends PageObjectConstructorsMap> = {
