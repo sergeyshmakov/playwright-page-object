@@ -23,3 +23,6 @@ export {
 export { createFixtures } from "./fixtures";
 export { ListPageObject } from "./page-objects/ListPageObject";
 export { PageObject } from "./page-objects/PageObject";
+
+export type { PageObjectConstructor, SelectorType } from "./page-objects/PageObject";
+export type { FixturesFromMap, PageObjectConstructorsMap } from "./fixtures";
