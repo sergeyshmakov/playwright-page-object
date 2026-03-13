@@ -37,9 +37,11 @@ describe("createFixtures", () => {
 
 		const fixtures = createFixtures({ testPage: TestPage });
 		const mockPage = createMockPage();
+		const testPageFixture = fixtures.testPage;
+		if (!testPageFixture) throw new Error("testPage fixture missing");
 
 		const use = vi.fn().mockResolvedValue(undefined);
-		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
+		await invokeFixture(testPageFixture, { page: mockPage }, use);
 
 		expect(use).toHaveBeenCalled();
 	});
@@ -49,9 +51,11 @@ describe("createFixtures", () => {
 
 		const fixtures = createFixtures({ testPage: TestPage });
 		const mockPage = createMockPage();
+		const testPageFixture = fixtures.testPage;
+		if (!testPageFixture) throw new Error("testPage fixture missing");
 
 		const use = vi.fn().mockResolvedValue(undefined);
-		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
+		await invokeFixture(testPageFixture, { page: mockPage }, use);
 
 		const instance = use.mock.calls[0][0];
 		expect(instance).toBeInstanceOf(TestPage);
@@ -63,13 +67,15 @@ describe("createFixtures", () => {
 
 		const fixtures = createFixtures({ testPage: TestPage });
 		const mockPage = createMockPage();
+		const testPageFixture = fixtures.testPage;
+		if (!testPageFixture) throw new Error("testPage fixture missing");
 
 		let receivedInstance: PageObject | undefined;
 		const use = vi.fn().mockImplementation(async (instance: PageObject) => {
 			receivedInstance = instance;
 		});
 
-		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
+		await invokeFixture(testPageFixture, { page: mockPage }, use);
 
 		expect(receivedInstance).toBeInstanceOf(TestPage);
 		expect(receivedInstance?.page).toBe(mockPage);
@@ -80,13 +86,15 @@ describe("createFixtures", () => {
 
 		const fixtures = createFixtures({ testPage: TestPage });
 		const mockPage = createMockPage();
+		const testPageFixture = fixtures.testPage;
+		if (!testPageFixture) throw new Error("testPage fixture missing");
 
 		let useCompleted = false;
 		const use = vi.fn().mockImplementation(async () => {
 			useCompleted = true;
 		});
 
-		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
+		await invokeFixture(testPageFixture, { page: mockPage }, use);
 
 		expect(useCompleted).toBe(true);
 		expect(use).toHaveBeenCalled();

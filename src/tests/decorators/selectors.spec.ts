@@ -1,4 +1,4 @@
-import type { Locator } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RootSelector } from "../../decorators/rootSelectors";
 import {
@@ -12,7 +12,7 @@ import {
 	SelectorByText,
 	SelectorByTitle,
 } from "../../decorators/selectors";
-import { PageObject } from "../../page-objects/PageObject";
+import { PageObject, type SelectorType } from "../../page-objects/PageObject";
 import { createMockLocator, createMockPage } from "../mocks/playwright";
 
 describe("selectors (ListSelector, Selector, etc.)", () => {
@@ -21,7 +21,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 
 	beforeEach(() => {
 		mockPage = createMockPage();
-		bodyLocator = createMockLocator(mockPage as any);
+		bodyLocator = createMockLocator(mockPage);
 		bodyLocator.page = vi.fn().mockReturnValue(mockPage);
 		mockPage.locator = vi.fn().mockReturnValue(bodyLocator);
 	});
@@ -34,7 +34,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor items = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.items;
 
 			expect(bodyLocator.getByTestId).toHaveBeenCalledWith(expect.any(RegExp));
@@ -47,9 +47,9 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 		it("for PageObject value calls cloneWithContext(root, selector)", () => {
 			class ItemPageObject extends PageObject {}
 			const itemInstance = new ItemPageObject(
-				mockPage as any,
-				bodyLocator as any,
-				vi.fn() as any,
+				mockPage as unknown as Page,
+				bodyLocator as unknown as Locator,
+				vi.fn() as unknown as SelectorType,
 			);
 			const cloneWithContextSpy = vi.spyOn(itemInstance, "cloneWithContext");
 
@@ -59,7 +59,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor items = itemInstance;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.items;
 
 			expect(cloneWithContextSpy).toHaveBeenCalledWith(
@@ -77,7 +77,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor items = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.items;
 
 			expect(bodyLocator.getByTestId).toHaveBeenCalledWith("exactItem");
@@ -92,7 +92,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor child = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.child;
 
 			expect(bodyLocator.getByTestId).toHaveBeenCalledWith("myChild");
@@ -105,7 +105,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor child = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			const result = instance.child;
 
 			expect(result).toBe(bodyLocator);
@@ -120,7 +120,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor child = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.child;
 
 			expect(bodyLocator.getByText).toHaveBeenCalledWith("Hello");
@@ -135,7 +135,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor child = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.child;
 
 			expect(bodyLocator.getByRole).toHaveBeenCalledWith("button", {
@@ -152,7 +152,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor child = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.child;
 
 			expect(bodyLocator.getByLabel).toHaveBeenCalledWith("Email");
@@ -167,7 +167,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor child = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.child;
 
 			expect(bodyLocator.getByPlaceholder).toHaveBeenCalledWith("placeholder");
@@ -182,7 +182,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor child = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.child;
 
 			expect(bodyLocator.getByAltText).toHaveBeenCalledWith("image");
@@ -197,7 +197,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				accessor child = bodyLocator as unknown as Locator;
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			instance.child;
 
 			expect(bodyLocator.getByTitle).toHaveBeenCalledWith("title");
@@ -212,24 +212,24 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			class TestPage extends PageObject {
 				@Selector("item1")
 				accessor item1 = new ItemPageObject(
-					mockPage as any,
-					bodyLocator as any,
-					vi.fn() as any,
+					mockPage as unknown as Page,
+					bodyLocator as unknown as Locator,
+					vi.fn() as unknown as SelectorType,
 				);
 				@Selector("item2")
 				accessor item2 = new ItemPageObject(
-					mockPage as any,
-					bodyLocator as any,
-					vi.fn() as any,
+					mockPage as unknown as Page,
+					bodyLocator as unknown as Locator,
+					vi.fn() as unknown as SelectorType,
 				);
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			const result1 = instance.item1;
 			const result2 = instance.item2;
 
-			(result1 as any).locator;
-			(result2 as any).locator;
+			(result1 as unknown as { locator: Locator }).locator;
+			(result2 as unknown as { locator: Locator }).locator;
 
 			expect(bodyLocator.getByTestId).toHaveBeenNthCalledWith(1, "item1");
 			expect(bodyLocator.getByTestId).toHaveBeenNthCalledWith(2, "item2");
@@ -242,19 +242,19 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			class TestPage extends PageObject {
 				@Selector("item1")
 				accessor item1 = new ItemPageObject(
-					mockPage as any,
-					bodyLocator as any,
-					vi.fn() as any,
+					mockPage as unknown as Page,
+					bodyLocator as unknown as Locator,
+					vi.fn() as unknown as SelectorType,
 				);
 				@Selector("item2")
 				accessor item2 = new ItemPageObject(
-					mockPage as any,
-					bodyLocator as any,
-					vi.fn() as any,
+					mockPage as unknown as Page,
+					bodyLocator as unknown as Locator,
+					vi.fn() as unknown as SelectorType,
 				);
 			}
 
-			const instance = new TestPage(mockPage as any);
+			const instance = new TestPage(mockPage as unknown as Page);
 			const result1 = instance.item1;
 			const result2 = instance.item2;
 
@@ -268,20 +268,26 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 		it("same accessor path with different parent roots yields different bound elements", () => {
 			class ChildPageObject extends PageObject {}
 
-			const root1 = createMockLocator(mockPage as any);
-			const root2 = createMockLocator(mockPage as any);
+			const root1 = createMockLocator(mockPage as unknown as Page);
+			const root2 = createMockLocator(mockPage as unknown as Page);
 			root1.page = vi.fn().mockReturnValue(mockPage);
 			root2.page = vi.fn().mockReturnValue(mockPage);
 
 			const child = new ChildPageObject(
-				mockPage as any,
-				root1 as any,
-				vi.fn() as any,
+				mockPage as unknown as Page,
+				root1 as unknown as Locator,
+				vi.fn() as unknown as SelectorType,
 			);
-			const childSelector = (p: any) => p.getByTestId("child");
+			const childSelector = (p: Locator) => p.getByTestId("child");
 
-			const child1 = child.cloneWithContext(root1 as any, childSelector);
-			const child2 = child.cloneWithContext(root2 as any, childSelector);
+			const child1 = child.cloneWithContext(
+				root1 as unknown as Locator,
+				childSelector,
+			);
+			const child2 = child.cloneWithContext(
+				root2 as unknown as Locator,
+				childSelector,
+			);
 
 			expect(child1.root).toBe(root1);
 			expect(child2.root).toBe(root2);
@@ -292,15 +298,15 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			class ItemPageObject extends PageObject {
 				@Selector("child")
 				accessor child = new PageObject(
-					mockPage as any,
-					bodyLocator as any,
-					vi.fn() as any,
+					mockPage as unknown as Page,
+					bodyLocator as unknown as Locator,
+					vi.fn() as unknown as SelectorType,
 				);
 			}
 
-			const listLocator = createMockLocator(mockPage as any);
-			const item0Locator = createMockLocator(mockPage as any);
-			const item1Locator = createMockLocator(mockPage as any);
+			const listLocator = createMockLocator(mockPage as unknown as Page);
+			const item0Locator = createMockLocator(mockPage as unknown as Page);
+			const item1Locator = createMockLocator(mockPage as unknown as Page);
 			listLocator.nth = vi
 				.fn()
 				.mockImplementation((n: number) =>
@@ -313,9 +319,9 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			);
 			const list = new ListPageObject(
 				ItemPageObject,
-				mockPage as any,
-				bodyLocator as any,
-				listSelector as any,
+				mockPage as unknown as Page,
+				bodyLocator as unknown as Locator,
+				listSelector as unknown as SelectorType,
 			);
 
 			const item0 = list.getItemByIndex(0);
@@ -332,17 +338,17 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 		it("accessor getter re-evaluates on each access", () => {
 			class ChildPageObject extends PageObject {}
 
-			const root1 = createMockLocator(mockPage as any);
-			const root2 = createMockLocator(mockPage as any);
+			const root1 = createMockLocator(mockPage as unknown as Page);
+			const root2 = createMockLocator(mockPage as unknown as Page);
 			root1.page = vi.fn().mockReturnValue(mockPage);
 			root2.page = vi.fn().mockReturnValue(mockPage);
 
 			class ParentPage extends PageObject {
 				@Selector("child")
 				accessor child = new ChildPageObject(
-					mockPage as any,
-					bodyLocator as any,
-					vi.fn() as any,
+					mockPage as unknown as Page,
+					bodyLocator as unknown as Locator,
+					vi.fn() as unknown as SelectorType,
 				);
 			}
 
@@ -350,14 +356,14 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			const selector2 = vi.fn().mockReturnValue(root2);
 
 			const parent1 = new ParentPage(
-				mockPage as any,
-				root1 as any,
-				selector1 as any,
+				mockPage as unknown as Page,
+				root1 as unknown as Locator,
+				selector1 as unknown as SelectorType,
 			);
 			const parent2 = new ParentPage(
-				mockPage as any,
-				root2 as any,
-				selector2 as any,
+				mockPage as unknown as Page,
+				root2 as unknown as Locator,
+				selector2 as unknown as SelectorType,
 			);
 
 			const child1 = parent1.child;

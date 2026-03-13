@@ -5,7 +5,7 @@ import type {
 	SelectorType,
 } from "../page-objects/PageObject";
 
-type GConstructor<T = {}> = new (...args: any[]) => T;
+type GConstructor<T = object> = new (...args: unknown[]) => T;
 
 function RootSelectorBy(selector: SelectorType) {
 	return function <TClass extends PageObjectConstructor>(
@@ -17,7 +17,7 @@ function RootSelectorBy(selector: SelectorType) {
 		if (kind === "class") {
 			const Base = target as unknown as GConstructor<PageObject>;
 			return class extends Base {
-				constructor(...args: any[]) {
+				constructor(...args: unknown[]) {
 					const page = args[0] as Page;
 					super(page, page.locator("body"), selector);
 				}

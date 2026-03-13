@@ -1,3 +1,4 @@
+import type { Locator, Page } from "@playwright/test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	ListRootSelector,
@@ -18,7 +19,7 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 
 	beforeEach(() => {
 		mockPage = createMockPage();
-		bodyLocator = createMockLocator(mockPage as any);
+		bodyLocator = createMockLocator(mockPage);
 		bodyLocator.page = vi.fn().mockReturnValue(mockPage);
 		mockPage.locator = vi.fn().mockReturnValue(bodyLocator);
 	});
@@ -27,7 +28,7 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@RootSelector("container")
 		class TestPage extends PageObject {}
 
-		new TestPage(mockPage as any);
+		new TestPage(mockPage as unknown as Page);
 
 		expect(mockPage.locator).toHaveBeenCalledWith("body");
 	});
@@ -45,17 +46,20 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 			private: false,
 		};
 
-		expect(() => decorator(target as any, context as any)).toThrow(
-			/can be used only with class.*method/,
-		);
+		expect(() =>
+			decorator(
+				target as unknown as Parameters<typeof decorator>[0],
+				context as unknown as Parameters<typeof decorator>[1],
+			),
+		).toThrow(/can be used only with class.*method/);
 	});
 
 	it("RootSelector(id) uses p.getByTestId(id)", () => {
 		@RootSelector("myId")
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		(instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		(instance as unknown as { locator: Locator }).locator;
 
 		expect(bodyLocator.getByTestId).toHaveBeenCalledWith("myId");
 	});
@@ -64,8 +68,8 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@RootSelector()
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		const loc = (instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		const loc = (instance as unknown as { locator: Locator }).locator;
 
 		expect(loc).toBe(bodyLocator);
 	});
@@ -74,8 +78,8 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@ListRootSelector("Item")
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		(instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		(instance as unknown as { locator: Locator }).locator;
 
 		expect(bodyLocator.getByTestId).toHaveBeenCalledWith(expect.any(RegExp));
 		expect(
@@ -88,8 +92,8 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@RootSelectorByText("Submit")
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		(instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		(instance as unknown as { locator: Locator }).locator;
 
 		expect(bodyLocator.getByText).toHaveBeenCalledWith("Submit");
 	});
@@ -98,8 +102,8 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@RootSelectorByRole("button", { name: "Submit" })
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		(instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		(instance as unknown as { locator: Locator }).locator;
 
 		expect(bodyLocator.getByRole).toHaveBeenCalledWith("button", {
 			name: "Submit",
@@ -110,8 +114,8 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@RootSelectorByLabel("Username")
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		(instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		(instance as unknown as { locator: Locator }).locator;
 
 		expect(bodyLocator.getByLabel).toHaveBeenCalledWith("Username");
 	});
@@ -120,8 +124,8 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@RootSelectorByPlaceholder("Enter text")
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		(instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		(instance as unknown as { locator: Locator }).locator;
 
 		expect(bodyLocator.getByPlaceholder).toHaveBeenCalledWith("Enter text");
 	});
@@ -130,8 +134,8 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@RootSelectorByAltText("Logo")
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		(instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		(instance as unknown as { locator: Locator }).locator;
 
 		expect(bodyLocator.getByAltText).toHaveBeenCalledWith("Logo");
 	});
@@ -140,8 +144,8 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		@RootSelectorByTitle("Tooltip")
 		class TestPage extends PageObject {}
 
-		const instance = new TestPage(mockPage as any);
-		(instance as any).locator;
+		const instance = new TestPage(mockPage as unknown as Page);
+		(instance as unknown as { locator: Locator }).locator;
 
 		expect(bodyLocator.getByTitle).toHaveBeenCalledWith("Tooltip");
 	});
