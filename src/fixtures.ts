@@ -33,12 +33,7 @@ type FixturesFromMap<T extends PageObjectConstructorsMap> = {
  */
 export function createFixtures<T extends PageObjectConstructorsMap>(
 	pageObjects: T,
-): Fixtures<
-	FixturesFromMap<T>,
-	Record<string, never>,
-	Record<string, never>,
-	Record<string, never>
-> {
+): Fixtures<FixturesFromMap<T>, {}, {}, {}> {
 	const fixtures: Record<
 		string,
 		(args: { page: Page }, use: (r: unknown) => Promise<void>) => Promise<void>
@@ -56,10 +51,5 @@ export function createFixtures<T extends PageObjectConstructorsMap>(
 		};
 	}
 
-	return fixtures as Fixtures<
-		FixturesFromMap<T>,
-		Record<string, never>,
-		Record<string, never>,
-		Record<string, never>
-	>;
+	return fixtures as Fixtures<FixturesFromMap<T>, {}, {}, {}>;
 }
