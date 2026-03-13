@@ -119,9 +119,8 @@ export class ListPageObject<
 				"[ListPageObject] filterByTestId requires page to be set",
 			);
 		}
-		return this.resolveItem((p) =>
-			p.filter({ has: this.page!.getByTestId(id) }),
-		);
+		const page = this.page;
+		return this.resolveItem((p) => p.filter({ has: page.getByTestId(id) }));
 	}
 
 	/**
