@@ -235,7 +235,7 @@ export class ListPageObject<
 
 	protected resolveItem(selector: SelectorType): TItem {
 		if (!this.itemType) {
-			return selector(this.locator) as unknown as TItem;
+			return new PageObject(this.page, this.locator, selector) as TItem;
 		}
 
 		if (PageObject.isInstance(this.itemType)) {

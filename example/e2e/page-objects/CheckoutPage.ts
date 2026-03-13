@@ -26,6 +26,10 @@ export class CheckoutPage extends PageObject {
 	@ListStrictSelector("CartItem")
 	accessor CartItems = new ListPageObject(CartItemControl);
 
+	/** List without custom item type — items are plain PageObject instances */
+	@ListStrictSelector("CartItem")
+	accessor CartItemsAsPlainList = new ListPageObject();
+
 	async applyPromoCode(code: string) {
 		await this.PromoCode.$.fill(code);
 		await this.ApplyPromoButton.$.click();

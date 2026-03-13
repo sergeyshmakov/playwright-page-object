@@ -57,3 +57,18 @@ test("should use filterByText to get matching items", async ({
 	const widgetItems = checkoutPage.CartItems.filterByText("Widget");
 	await widgetItems.expect().toHaveCount(2);
 });
+
+test("should use ListPageObject without itemType — items are PageObjects", async ({
+	checkoutPage,
+}) => {
+	const firstItem = checkoutPage.CartItemsAsPlainList.items[0];
+	await firstItem.expect().toBeVisible();
+});
+
+test("should iterate CartItemsAsPlainList with for await — items support PageObject API", async ({
+	checkoutPage,
+}) => {
+	for await (const item of checkoutPage.CartItemsAsPlainList.items) {
+		await item.expect({ soft: true }).toBeVisible();
+	}
+});
