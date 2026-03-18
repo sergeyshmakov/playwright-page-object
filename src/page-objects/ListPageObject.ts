@@ -4,18 +4,16 @@ import { PageObject, type SelectorType } from "./PageObject";
 /**
  * Page object for a list of items, each represented by a `TItem` page object.
  *
- * Use with `ListRootSelector` and `ListSelector` (or `ListStrictSelector`) to define
- * the list container and item pattern. Supports filtering, indexing, and async iteration.
+ * Use as a nested list control together with `Selector`, `ListSelector`, or
+ * `ListStrictSelector`. Supports filtering, indexing, and async iteration.
  *
  * @typeParam TItem - PageObject type for each list item (default: `PageObject`)
  *
  * @example
  * ```ts
- * @ListRootSelector("todo-list")
- * class TodoList extends ListPageObject<TodoItem> {
- *   constructor() {
- *     super(TodoItem);
- *   }
+ * class TodoPage extends RootPageObject {
+ *   @Selector("TodoList")
+ *   accessor items = new ListPageObject(TodoItem);
  * }
  * ```
  */
@@ -114,12 +112,12 @@ export class ListPageObject<
 	 * @returns PageObject for the matching item(s)
 	 */
 	filterByTestId(id: string | RegExp) {
-		if (!this.page) {
+		const page = this.page;
+		if (!page) {
 			throw new Error(
 				"[ListPageObject] filterByTestId requires page to be set",
 			);
 		}
-		const page = this.page;
 		return this.resolveItem((p) => p.filter({ has: page.getByTestId(id) }));
 	}
 

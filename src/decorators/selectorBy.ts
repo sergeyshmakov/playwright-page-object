@@ -1,5 +1,16 @@
 import type { Locator } from "@playwright/test";
-import type { PageObject } from "../page-objects/PageObject";
+import { LOCATOR_SYMBOL } from "../protocol";
+
+function resolveLocator(instance: object): Locator {
+	if (LOCATOR_SYMBOL in instance) {
+		return (instance as Record<typeof LOCATOR_SYMBOL, Locator>)[LOCATOR_SYMBOL];
+	}
+
+	throw new Error(
+		"[SelectorBy] Cannot resolve locator: the class does not implement the context protocol (LOCATOR_SYMBOL). " +
+			"Make sure to apply a @RootSelector decorator before using child selector decorators.",
+	);
+}
 
 /**
  * Accessor decorator for custom selector logic. Transforms the accessor value
@@ -21,7 +32,7 @@ import type { PageObject } from "../page-objects/PageObject";
 export function SelectorBy<TSelectorValue>(
 	selector: (root: Locator, value: TSelectorValue) => TSelectorValue,
 ) {
-	return function <TThis extends PageObject, TValue extends TSelectorValue>(
+	return function <TThis extends object, TValue extends TSelectorValue>(
 		target: ClassAccessorDecoratorTarget<TThis, TValue>,
 		context: ClassAccessorDecoratorContext<TThis, TValue>,
 	) {
@@ -32,7 +43,7 @@ export function SelectorBy<TSelectorValue>(
 			return {
 				get() {
 					const value = get.call(this);
-					const root = (this as unknown as { locator: Locator }).locator;
+					const root = resolveLocator(this as object);
 					return selector(root, value);
 				},
 			} as ClassAccessorDecoratorResult<TThis, TValue>;
