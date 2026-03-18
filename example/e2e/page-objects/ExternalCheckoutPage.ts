@@ -26,7 +26,7 @@ export class ExternalCheckoutPage {
 	 * `new ExternalInputControl(resolvedLocator)` is called at access time.
 	 */
 	@Selector("PromoCodeInput", ExternalInputControl)
-	accessor PromoCode = undefined as unknown as ExternalInputControl;
+	accessor PromoCode!: ExternalInputControl;
 
 	/**
 	 * Factory function signature.
@@ -37,13 +37,13 @@ export class ExternalCheckoutPage {
 		{ name: "Apply" },
 		(locator) => new ExternalButtonControl(locator),
 	)
-	accessor ApplyPromoButton = undefined as unknown as ExternalButtonControl;
+	accessor ApplyPromoButton!: ExternalButtonControl;
 
 	/**
 	 * Constructor signature again, with a different selector.
 	 */
 	@SelectorByRole("button", { name: "Remove" }, ExternalButtonControl)
-	accessor FirstRemoveButton = undefined as unknown as ExternalButtonControl;
+	accessor FirstRemoveButton!: ExternalButtonControl;
 
 	async applyPromoCode(code: string) {
 		await this.PromoCode.fill(code);

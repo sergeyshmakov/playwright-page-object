@@ -124,12 +124,12 @@ Patterns:
 
 ```ts
 @Selector("PromoCodeInput", ExternalInputControl)
-accessor PromoCode = undefined as unknown as ExternalInputControl;
+accessor PromoCode!: ExternalInputControl;
 ```
 
 ```ts
 @SelectorByRole("button", { name: "Apply" }, (locator) => new ExternalButtonControl(locator))
-accessor ApplyPromoButton = undefined as unknown as ExternalButtonControl;
+accessor ApplyPromoButton!: ExternalButtonControl;
 ```
 
 ## Recommended Examples
@@ -152,7 +152,7 @@ class CheckoutPage {
 	accessor PromoCodeInput!: Locator;
 
 	@SelectorByRole("button", { name: "Apply" }, ButtonControl)
-	accessor ApplyPromoButton = undefined as unknown as ButtonControl;
+	accessor ApplyPromoButton!: ButtonControl;
 }
 ```
 

@@ -36,7 +36,7 @@ describe("selectors with external controls (no PageObject base)", () => {
 			@RootSelector()
 			class TestPage extends RootPageObject {
 				@SelectorByRole("button", { name: "Remove" }, ExternalButton)
-				accessor removeBtn = undefined as unknown as ExternalButton;
+				accessor removeBtn!: ExternalButton;
 			}
 
 			const page = new TestPage(mockPage);
@@ -50,7 +50,7 @@ describe("selectors with external controls (no PageObject base)", () => {
 			@RootSelector()
 			class TestPage extends RootPageObject {
 				@Selector("btn", ExternalButton)
-				accessor btn = undefined as unknown as ExternalButton;
+				accessor btn!: ExternalButton;
 			}
 
 			const page = new TestPage(mockPage);
@@ -74,7 +74,7 @@ describe("selectors with external controls (no PageObject base)", () => {
 					"EmailInput",
 					(locator) => new ExternalInput(locator, "Enter email"),
 				)
-				accessor emailInput = undefined as unknown as ExternalInput;
+				accessor emailInput!: ExternalInput;
 			}
 
 			const page = new TestPage(mockPage);
@@ -91,7 +91,7 @@ describe("selectors with external controls (no PageObject base)", () => {
 			@RootSelector()
 			class TestPage extends RootPageObject {
 				@Selector("Input", (locator) => new ExternalInput(locator, label))
-				accessor input = undefined as unknown as ExternalInput;
+				accessor input!: ExternalInput;
 			}
 
 			const page = new TestPage(mockPage);
@@ -110,7 +110,7 @@ describe("selectors with external controls (no PageObject base)", () => {
 				constructor(readonly page: Page) {}
 
 				@Selector("MyControl", ExternalButton)
-				accessor myControl = undefined as unknown as ExternalButton;
+				accessor myControl!: ExternalButton;
 			}
 
 			const page = new ExternalRootPage(mockPage);
@@ -133,7 +133,7 @@ describe("selectors with external controls (no PageObject base)", () => {
 				) {}
 
 				@Selector("MyControl", ExternalButton)
-				accessor myControl = undefined as unknown as ExternalButton;
+				accessor myControl!: ExternalButton;
 			}
 
 			const page = new ExternalRootPage(mockPage, "checkout");

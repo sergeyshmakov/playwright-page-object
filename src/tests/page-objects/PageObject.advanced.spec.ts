@@ -138,7 +138,7 @@ describe("PageObject advanced behavior", () => {
 			}
 
 			@Selector("child")
-			accessor child = undefined as unknown as Locator;
+			accessor child!: Locator;
 		}
 
 		const page = new NamedRootPage(mockPage, "kept-label");

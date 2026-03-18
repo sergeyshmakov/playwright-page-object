@@ -57,7 +57,7 @@ class CheckoutPage {
 	accessor PromoCodeInput!: Locator;
 
 	@SelectorByRole("button", { name: "Apply" }, ButtonControl)
-	accessor ApplyPromoButton = undefined as unknown as ButtonControl;
+	accessor ApplyPromoButton!: ButtonControl;
 
 	async applyPromoCode(code: string) {
 		await this.PromoCodeInput.fill(code);
@@ -165,10 +165,10 @@ class ExternalCheckoutPage {
 	constructor(readonly page: Page) {}
 
 	@Selector("PromoCodeInput", ExternalInputControl)
-	accessor PromoCode = undefined as unknown as ExternalInputControl;
+	accessor PromoCode!: ExternalInputControl;
 
 	@SelectorByRole("button", { name: "Apply" }, ExternalButtonControl)
-	accessor ApplyPromoButton = undefined as unknown as ExternalButtonControl;
+	accessor ApplyPromoButton!: ExternalButtonControl;
 }
 ```
 
@@ -325,7 +325,7 @@ When the same locator patterns or UI behavior appear in multiple places, move th
 
 ```ts
 @Selector("PromoCodeInput", ExternalInputControl)
-accessor PromoCode = undefined as unknown as ExternalInputControl;
+accessor PromoCode!: ExternalInputControl;
 ```
 
 ### 3. Adopt the built-in POM layer where it helps
