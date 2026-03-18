@@ -8,7 +8,7 @@
 		"build": "tsc -b && vite build",
 		"preview": "vite preview",
 		"test:e2e": "playwright test",
-		"preinstall": "cd .. && npm run build && npm pack --pack-destination ."
+		"preinstall": "cd .. && npm run pack:example"
 	},
 	"dependencies": {
 		"react": "^18.3.1",
@@ -19,7 +19,7 @@
 		"@types/react": "^18.3.12",
 		"@types/react-dom": "^18.3.1",
 		"@vitejs/plugin-react": "^4.3.4",
-		"playwright-page-object": "file:../playwright-page-object-1.0.0.tgz",
+		"playwright-page-object": "file:../playwright-page-object.tgz",
 		"typescript": "^5.9.3",
 		"vite": "^6.0.3"
 	}
