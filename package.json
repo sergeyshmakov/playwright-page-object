@@ -45,16 +45,20 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.5",
-		"concurrently": "^9.1.2",
-		"@playwright/test": "^1.49.0",
 		"@commitlint/cli": "^20.4.3",
 		"@commitlint/config-conventional": "^20.4.3",
+		"@playwright/test": "^1.49.0",
 		"@types/node": "^22.19.11",
+		"concurrently": "^9.1.2",
 		"husky": "^9.1.7",
+		"lint-staged": "^16.4.0",
 		"semantic-release": "^25.0.3",
 		"tsup": "^8.5.1",
 		"typescript": "^5.9.3",
 		"vitest": "^4.0.18"
+	},
+	"lint-staged": {
+		"*.{js,jsx,ts,tsx,cjs,mjs,cts,mts,json,jsonc,md}": "biome check --write --no-errors-on-unmatched"
 	},
 	"peerDependencies": {
 		"@playwright/test": ">=1.35.0",
