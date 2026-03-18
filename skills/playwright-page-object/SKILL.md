@@ -2,153 +2,248 @@
 name: playwright-page-object
 version: 1.0.0
 description: >
-  TypeScript-first, decorator-driven Page Object Model for Playwright. Replaces
-  raw page.locator() chains with composable, typed PageObject classes. Use this
-  skill whenever the user is writing Playwright tests, refactoring existing tests
-  to use page objects, setting up test fixtures, or working with Playwright
-  locators—even if they don't mention "page object" or "POM". Also trigger for:
-  createFixtures, @RootSelector, @Selector, @ListSelector, ListPageObject,
-  control graph, decorator POM, typed locators, nested components in tests.
+  Decorator-driven Playwright selector composition for plain classes, external
+  controls, and optional built-in RootPageObject/PageObject/ListPageObject
+  classes. Use when the user mentions @RootSelector, @Selector,
+  createFixtures, Playwright page objects, typed locators, nested controls,
+  external controls, incremental adoption, or refactoring existing Playwright
+  tests to use decorator-based selectors.
 ---
 
-## Core Philosophy & Architecture
+# playwright-page-object
 
-- **Everything is a `PageObject`**: No artificial hierarchy between "pages" and "components". A modal, a button, and a page are all constructed the exact same way.
-- **Strongly Typed over Stringly-Typed**: Eliminate raw locator strings in tests completely. Tests only use typed accessors.
-- **Composable & Relative**: Controls nest inside controls to mirror the DOM. Selectors only need to be unique *within their parent component*, massively improving reusability.
-- **Lazy Evaluation**: Locator chains rebuild dynamically only when accessed, ensuring resilience against dynamic DOM changes and re-renders.
+## Core Model
 
-## Critical Rules for AI Agents
+Treat this library as a decorator-driven locator composition layer, not as a mandatory inheritance framework.
 
-1. **Accessor keyword**: Use the `accessor` keyword with every child property decorator (e.g., `@Selector("id") accessor MyControl = new PageObject();`). TC39 decorators require `accessor` for class fields; without it, decorators fail or behave incorrectly.
+- Root decorators establish locator context for a top-level class.
+- Child decorators resolve relative selectors from that context.
+- The accessor shape determines the result:
+  - raw `Locator`
+  - external control created from a constructor or factory
+  - built-in `PageObject`
+  - built-in `ListPageObject`
 
-2. **Assertion placement**: Keep assertions (`expect()`) in test files, not inside `PageObject` classes. Assertions belong in tests so failures surface at the right level and page objects stay reusable across different expectations.
+Both of these are valid root styles:
 
-3. **Actions via `$`**: Use `control.$.click()`, `control.$.fill()`, etc. for Playwright actions. The `$` getter exposes the raw locator—any Playwright API is available without library updates.
+- plain class with constructor `(page: Page, ...rest)`
+- class extending `RootPageObject`
 
-4. **Instantiation**: Use `createFixtures` to wire pages into tests. `createFixtures` wires the Playwright `page` into page objects and ensures proper lifecycle; manual `new MyPage(page)` bypasses that.
+`PageObject` is for nested controls, not for root classes decorated with `@RootSelector(...)`.
 
-## Setup & Requirements
+## Agent Detection Checklist
 
-- **Install**: `npm install -D playwright-page-object`
-- **TypeScript Configuration**: Requires TypeScript 5.0+. Because this framework uses modern TC39 standard decorators, you must configure `tsconfig.json` appropriately:
-  ```json
-  {
-    "compilerOptions": {
-      "target": "ES2022",
-      "experimentalDecorators": false
-    }
-  }
-  ```
-  *(Note: `experimentalDecorators` must be `false` or omitted to ensure the standard TC39 implementation is used.)*
+When entering a codebase, detect these first:
 
-## Step-by-Step Implementation Pattern
+1. Root style:
+   - plain decorated class with `page: Page` first
+   - built-in root extending `RootPageObject`
+2. Child output style:
+   - `Locator`
+   - external control via trailing constructor or factory
+   - `PageObject`
+   - `ListPageObject`
+3. Instantiation style:
+   - `createFixtures(...)`
+   - manual `new MyPage(page)`
+4. Custom nested `PageObject` constructors:
+   - if a nested `PageObject` subclass does not use the default constructor shape, it must implement `cloneWithContext()`
 
-### 1. Define Controls (Leaf Nodes)
-```typescript
-import { PageObject, SelectorByRole } from "playwright-page-object";
+Preserve the user's current style. Do not force a migration to the built-in POM if the codebase already uses plain classes or external controls successfully.
 
-export class ButtonControl extends PageObject {}
+## Universal Rules
 
-export class CartItemControl extends PageObject {
-    @SelectorByRole("button", { name: "Remove" })
-    accessor RemoveButton = new ButtonControl();
+These rules apply to both plain-class and built-in-POM usage:
+
+1. Use `accessor` on every child decorator target.
+2. Use a root decorator before child decorators. Child decorators need root context.
+3. `@RootSelector()` means root is `page.locator("body")`.
+4. `@Selector()` means identity selector from the current root.
+5. `createFixtures()` is optional convenience, not a requirement.
+6. Decorated accessors are lazy and resolve on access.
+7. Keep child selectors relative to the nearest component root.
+
+Hard constraints:
+
+- Never put `@RootSelector(...)` on a class that extends `PageObject` directly.
+- Use `RootPageObject` only for top-level root classes.
+- Use `PageObject` for nested controls.
+- For plain decorated root classes, the first constructor argument must be `page: Page`.
+
+## Decision Rules
+
+### Choose a plain decorated root class when
+
+- the user already has standard Playwright classes
+- the user wants typed selectors without adopting library inheritance
+- the user has their own control classes that accept `Locator`
+- incremental adoption matters more than framework consistency
+
+Pattern:
+
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+	constructor(readonly page: Page) {}
 }
 ```
 
-### 2. Compose the Root Page
-```typescript
-import { PageObject, RootSelector, Selector, ListSelector, ListPageObject } from "playwright-page-object";
-import { ButtonControl, CartItemControl } from "./controls";
+### Choose `RootPageObject` when
 
-@RootSelector("CheckoutPage") // Matches data-testid="CheckoutPage"
-export class CheckoutPage extends PageObject {
-    @Selector("PromoCodeInput")
-    accessor PromoCode = new PageObject();
+- the user wants an out-of-the-box root base class
+- the codebase already uses built-in `PageObject` helpers consistently
+- the agent is creating a new built-in POM from scratch
 
-    @Selector("ApplyPromoButton")
-    accessor ApplyPromoButton = new ButtonControl();
+Pattern:
 
-    @ListSelector("CartItem") // Matches data-testid(/CartItem/)
-    accessor CartItems = new ListPageObject(CartItemControl);
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage extends RootPageObject {}
+```
+
+### Choose `PageObject` when
+
+- a nested control should expose `$`
+- the user wants built-in waits or `.expect()`
+- the control is reused compositionally under selector decorators
+
+If a nested `PageObject` subclass adds a custom constructor, either keep the default constructor shape or implement `cloneWithContext()` explicitly.
+
+### Choose `ListPageObject` when
+
+- a selector resolves to repeated child controls
+- the user needs `items[0]`, async iteration, filtering, or count helpers
+
+### Choose external controls when
+
+- the codebase already has classes that accept a `Locator`
+- the user wants typed controls without extending `PageObject`
+- constructor or factory output is clearer than a built-in page-object wrapper
+
+Patterns:
+
+```ts
+@Selector("PromoCodeInput", ExternalInputControl)
+accessor PromoCode = undefined as unknown as ExternalInputControl;
+```
+
+```ts
+@SelectorByRole("button", { name: "Apply" }, (locator) => new ExternalButtonControl(locator))
+accessor ApplyPromoButton = undefined as unknown as ExternalButtonControl;
+```
+
+## Recommended Examples
+
+### Plain root + locator/external control
+
+```ts
+import type { Locator, Page } from "@playwright/test";
+import { RootSelector, Selector, SelectorByRole } from "playwright-page-object";
+
+class ButtonControl {
+	constructor(readonly locator: Locator) {}
+}
+
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+	constructor(readonly page: Page) {}
+
+	@Selector("PromoCodeInput")
+	accessor PromoCodeInput!: Locator;
+
+	@SelectorByRole("button", { name: "Apply" }, ButtonControl)
+	accessor ApplyPromoButton = undefined as unknown as ButtonControl;
 }
 ```
 
-### 3. Register Fixtures
-```typescript
-import { test as base } from "@playwright/test";
-import { createFixtures } from "playwright-page-object";
-import { CheckoutPage } from "./CheckoutPage";
+### Built-in root + built-in nested controls
 
-export const test = base.extend(createFixtures({
-    checkoutPage: CheckoutPage,
-}));
+```ts
+import {
+	ListPageObject,
+	ListStrictSelector,
+	PageObject,
+	RootPageObject,
+	RootSelector,
+	Selector,
+	SelectorByRole,
+} from "playwright-page-object";
+
+class ButtonControl extends PageObject {}
+
+class CartItemControl extends PageObject {
+	@SelectorByRole("button", { name: "Remove" })
+	accessor RemoveButton = new ButtonControl();
+}
+
+@RootSelector("CheckoutPage")
+class CheckoutPage extends RootPageObject {
+	@Selector("PromoCodeInput")
+	accessor PromoCode = new PageObject();
+
+	@ListStrictSelector("CartItem")
+	accessor CartItems = new ListPageObject(CartItemControl);
+}
 ```
 
-### 4. Write Typed Tests
-```typescript
-import { test } from "./fixtures";
+## Built-In POM Rules
 
-test("apply promo and remove first item", async ({ checkoutPage }) => {
-    await checkoutPage.PromoCode.$.fill("SAVE20");
-    await checkoutPage.ApplyPromoButton.$.click();
+When using the built-in classes:
 
-    // Array-like access via .items proxy
-    await checkoutPage.CartItems.items[0].RemoveButton.$.click();
-    await checkoutPage.CartItems.waitCount(0);
-});
+- actions go through `control.$`
+- waits and assertions come from `PageObject`
+- `ListPageObject` handles repeated child components
+- `RootPageObject` is the correct root base class
+
+Examples:
+
+```ts
+await control.$.click();
+await control.expect().toBeVisible();
+await items.waitCount(0);
 ```
 
-## Decorator Reference
+## Fixtures
 
-### Root Selectors (Class-level, Top-level Pages)
-| Decorator | Playwright Equivalent |
-|-----------|-----------------------|
-| `@RootSelector(id)` | `getByTestId(id)` |
-| `@RootSelectorByRole(role, opts?)` | `getByRole(role, opts)` |
-| `@RootSelectorByText(text, opts?)` | `getByText(text, opts)` |
-| `@RootSelectorByLabel(label, opts?)` | `getByLabel(label, opts)` |
-| `@RootSelectorByPlaceholder(ph, opts?)`| `getByPlaceholder(ph, opts)` |
-| `@RootSelectorByAltText(alt, opts?)` | `getByAltText(alt, opts)` |
-| `@RootSelectorByTitle(title, opts?)` | `getByTitle(title, opts)` |
+Prefer `createFixtures(...)` when the user wants Playwright fixture wiring, but do not require it.
 
-### Child Selectors (Accessor-level, Nested Elements)
-| Decorator | Playwright Equivalent |
-|-----------|-----------------------|
-| `@Selector(id)` | `parent.getByTestId(id)` |
-| `@SelectorByRole(role, opts?)` | `parent.getByRole(role, opts)` |
-| `@SelectorByText(text, opts?)` | `parent.getByText(text, opts)` |
-| `@SelectorByLabel(label, opts?)` | `parent.getByLabel(label, opts)` |
-| `@SelectorByPlaceholder(ph, opts?)`| `parent.getByPlaceholder(ph, opts)` |
-| `@SelectorByAltText(alt, opts?)` | `parent.getByAltText(alt, opts)` |
-| `@SelectorByTitle(title, opts?)` | `parent.getByTitle(title, opts)` |
-| `@SelectorBy(fn)` | Custom locator function |
+Both of these are valid:
 
-### List Selectors
-| Decorator | Playwright Equivalent / Behavior |
-|-----------|----------------------------------|
-| `@ListSelector(id)` | `getByTestId(new RegExp(id))` — fuzzy match pattern |
-| `@ListStrictSelector(id)`| `getByTestId(id)` — exact match |
-| `@ListRootSelector(id)` | Root-level list lookup |
+```ts
+const checkout = new CheckoutPage(page);
+```
 
-## API Reference
+```ts
+export const test = base.extend(
+	createFixtures({
+		checkoutPage: CheckoutPage,
+	}),
+);
+```
 
-### `PageObject` Built-in API
-- **Raw locator** `control.$` — use for Playwright actions: `control.$.click()`, `control.$.fill()`, etc.
-- **Waits**: `.waitVisible()`, `.waitHidden()`, `.waitText(text)`, `.waitValue(value)`, `.waitNoValue()`, `.waitCount(n)`, `.waitChecked()`, `.waitUnChecked()`, `.waitProp(name, value)`, `.waitPropAbsence(name, value)`
-- **Assertions**:
-  ```typescript
-  await myControl.expect().toBeEnabled();
-  await myControl.expect({ soft: true }).toBeVisible();
-  ```
+`createFixtures()` works with any root constructor whose first argument is `page: Page`.
 
-### `ListPageObject` API
-- **Access & Iteration**:
-  - `list.items[n]` (Array-like access proxy)
-  - `for await (const item of list.items)` (Async iteration)
-- **Retrieval**: `.first()`, `.last()`, `.getItemByIndex(n)`, `.getItemByText("foo")`, `.getItemByRole("button", { name: "foo" })`, `.getAll()`
-- **Filtering**: `.filter({ hasText: "foo" })`, `.filterByText("foo")`, `.filterByTestId("bar")`
-- **Utility**: `.count()`
+## Incremental Adoption
 
-## Incremental Adoption (Brownfield)
-Use `control.$` to pass the raw locator to legacy code expecting `Locator`. No subclassing needed. `createFixtures` can be safely mixed with existing Playwright fixtures without conflicts.
+Recommend this ladder unless the user asks for a full built-in POM:
+
+1. Locator-first:
+   - decorate existing classes
+   - return raw `Locator` from child accessors
+2. External controls:
+   - replace repeated locator patterns with user-owned control classes
+3. Built-in POM where helpful:
+   - adopt `RootPageObject`, `PageObject`, and `ListPageObject` only in areas that benefit from `$`, waits, assertions, and list helpers
+
+These styles can coexist in one codebase, one fixture map, and even one root class.
+
+## References
+
+Reuse these project examples instead of inventing a new pattern:
+
+- [README.md](README.md)
+- [example/e2e/page-objects/ExternalCheckoutPage.ts](example/e2e/page-objects/ExternalCheckoutPage.ts)
+- [example/e2e/page-objects/CheckoutPage.ts](example/e2e/page-objects/CheckoutPage.ts)
+- [example/e2e/fixtures.ts](example/e2e/fixtures.ts)
+- [src/tests/decorators/selectors-external.spec.ts](src/tests/decorators/selectors-external.spec.ts)
+- [src/tests/page-objects/PageObject.advanced.spec.ts](src/tests/page-objects/PageObject.advanced.spec.ts)
