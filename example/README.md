@@ -100,7 +100,12 @@ for await (const item of checkoutPage.CartItems.items) {
 ```typescript
 const widgetItems = checkoutPage.CartItems.filterByText("Widget");
 await widgetItems.expect().toHaveCount(2);
+
+const widgetB = checkoutPage.CartItems.filterByText("Widget B").first();
+await widgetB.RemoveButton.$.click();
 ```
+
+`filterByText()` returns a narrowed `ListPageObject`. Call `.first()`, `.second()`, or `.at(...)` when you need a single matched item.
 
 ## Full API
 

@@ -277,8 +277,12 @@ Useful APIs:
 - `list.items.at(-1)`
 - `for await (const item of list.items) { ... }`
 - `await list.count()`
-- `await list.first()`
-- `await list.filterByText("Apple")`
+- `list.first()`
+- `list.second()`
+- `list.filterByText("Apple")`
+- `list.filterByText("Apple").first()`
+
+Indexing and search helpers such as `first()`, `second()`, `at()`, `getItemByText()`, and `getItemByRole()` return a single item page object. Filter helpers such as `filter()`, `filterByText()`, and `filterByTestId()` return a narrower `ListPageObject`, so chain `.first()` or `.at(...)` when you need one matched item.
 
 ## Fixtures
 

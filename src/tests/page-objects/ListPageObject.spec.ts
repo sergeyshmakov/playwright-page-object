@@ -110,6 +110,27 @@ describe("ListPageObject", () => {
 			expect(result.root).toBe(mockLocator);
 		});
 
+		it("filterByText returns a narrowed list and preserves itemType", () => {
+			class Item extends PageObject {}
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
+			const list = new ListPageObject(
+				Item,
+				mockPage as unknown as Page,
+				mockRoot as unknown as Locator,
+				selector,
+			);
+
+			const result = list.filterByText("bar");
+
+			expect(result).toBeInstanceOf(ListPageObject);
+			expect((result as unknown as { itemType: unknown }).itemType).toBe(Item);
+			expect(result.page).toBe(mockPage);
+			expect(result.root).toBe(mockLocator);
+			expect(result.$).toBe(filteredLocator);
+			expect(mockLocator.filter).toHaveBeenCalledWith({ hasText: "bar" });
+		});
+
 		it("no itemType: items[0] and items.at(0) return PageObject", () => {
 			const list = new ListPageObject(
 				undefined,
@@ -212,43 +233,63 @@ describe("ListPageObject", () => {
 			expect(mockLocator.nth).toHaveBeenCalledWith(-1);
 		});
 
-		it("filter(options) uses p => p.filter(options)", () => {
+		it("filter(options) returns a narrowed list", () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
 			const list = new ListPageObject(
 				undefined,
 				mockPage as unknown as Page,
 				mockRoot as unknown as Locator,
 				selector,
 			);
-			void list.filter({ hasText: "foo" }).$;
+
+			const result = list.filter({ hasText: "foo" });
+
+			expect(result).toBeInstanceOf(ListPageObject);
+			expect(result.$).toBe(filteredLocator);
 			expect(mockLocator.filter).toHaveBeenCalledWith({ hasText: "foo" });
 		});
 
-		it("filterByText(text) uses p => p.filter({ hasText })", () => {
+		it("filterByText(text) returns a narrowed list", () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
 			const list = new ListPageObject(
 				undefined,
 				mockPage as unknown as Page,
 				mockRoot as unknown as Locator,
 				selector,
 			);
-			void list.filterByText("bar").$;
+
+			const result = list.filterByText("bar");
+
+			expect(result).toBeInstanceOf(ListPageObject);
+			expect(result.$).toBe(filteredLocator);
 			expect(mockLocator.filter).toHaveBeenCalledWith({ hasText: "bar" });
 		});
 
-		it("filterByTestId(id) uses p => p.filter({ has: page.getByTestId(id) })", () => {
+		it("filterByTestId(id) returns a narrowed list", () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
 			const list = new ListPageObject(
 				undefined,
 				mockPage as unknown as Page,
 				mockRoot as unknown as Locator,
 				selector,
 			);
-			void list.filterByTestId("myId").$;
+
+			const result = list.filterByTestId("myId");
+
+			expect(result).toBeInstanceOf(ListPageObject);
+			expect(result.$).toBe(filteredLocator);
 			expect(mockLocator.filter).toHaveBeenCalledWith({
 				has: expect.anything(),
 			});
 			expect(mockPage.getByTestId).toHaveBeenCalledWith("myId");
 		});
 
-		it("getItemByIdMask(mask) uses p => p.getByTestId(new RegExp(mask))", () => {
+		it("getItemByIdMask(mask) returns the first matched item from the filtered list", () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
 			const list = new ListPageObject(
 				undefined,
 				mockPage as unknown as Page,
@@ -256,10 +297,16 @@ describe("ListPageObject", () => {
 				selector,
 			);
 			void list.getItemByIdMask("Item-").$;
-			expect(mockLocator.getByTestId).toHaveBeenCalledWith(expect.any(RegExp));
+			expect(mockPage.getByTestId).toHaveBeenCalledWith(expect.any(RegExp));
+			expect(mockLocator.filter).toHaveBeenCalledWith({
+				has: expect.anything(),
+			});
+			expect(filteredLocator.nth).toHaveBeenCalledWith(0);
 		});
 
-		it("getItemByText(text) uses p => p.getByText(text)", () => {
+		it("getItemByText(text) returns the first matched item from the filtered list", () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
 			const list = new ListPageObject(
 				undefined,
 				mockPage as unknown as Page,
@@ -267,10 +314,13 @@ describe("ListPageObject", () => {
 				selector,
 			);
 			void list.getItemByText("hello").$;
-			expect(mockLocator.getByText).toHaveBeenCalledWith("hello");
+			expect(mockLocator.filter).toHaveBeenCalledWith({ hasText: "hello" });
+			expect(filteredLocator.nth).toHaveBeenCalledWith(0);
 		});
 
-		it("getItemByRole(...args) uses p => p.getByRole(...args)", () => {
+		it("getItemByRole(...args) returns the first matched item from the filtered list", () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
 			const list = new ListPageObject(
 				undefined,
 				mockPage as unknown as Page,
@@ -281,6 +331,21 @@ describe("ListPageObject", () => {
 			expect(mockLocator.getByRole).toHaveBeenCalledWith("button", {
 				name: "Submit",
 			});
+			expect(mockLocator.filter).toHaveBeenCalledWith({
+				has: expect.anything(),
+			});
+			expect(filteredLocator.nth).toHaveBeenCalledWith(0);
+		});
+
+		it("second() returns item at index 1", () => {
+			const list = new ListPageObject(
+				undefined,
+				mockPage as unknown as Page,
+				mockRoot as unknown as Locator,
+				selector,
+			);
+			void list.second().$;
+			expect(mockLocator.nth).toHaveBeenCalledWith(1);
 		});
 	});
 
@@ -338,6 +403,17 @@ describe("ListPageObject", () => {
 			);
 			void list.last().$;
 			expect(mockLocator.nth).toHaveBeenCalledWith(-1);
+		});
+
+		it("second() same as at(1)", () => {
+			const list = new ListPageObject(
+				undefined,
+				mockPage as unknown as Page,
+				mockRoot as unknown as Locator,
+				selector,
+			);
+			void list.second().$;
+			expect(mockLocator.nth).toHaveBeenCalledWith(1);
 		});
 
 		it("items.at(-1) returns same as getItemByIndex(-1)", () => {
@@ -441,6 +517,30 @@ describe("ListPageObject", () => {
 			expect(items[1]).toBeInstanceOf(PageObject);
 		});
 
+		it("filtered list async iteration yields items from the narrowed list", async () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
+			filteredLocator.count = vi.fn().mockResolvedValue(2);
+			class Item extends PageObject {}
+			const list = new ListPageObject(
+				Item,
+				mockPage as unknown as Page,
+				mockRoot as unknown as Locator,
+				selector,
+			);
+
+			const items: PageObject[] = [];
+			for await (const item of list.filterByText("Widget").items) {
+				items.push(item);
+			}
+
+			expect(items).toHaveLength(2);
+			expect(items[0]).toBeInstanceOf(Item);
+			expect(items[1]).toBeInstanceOf(Item);
+			expect(items[0].root).toBe(filteredLocator);
+			expect(items[1].root).toBe(filteredLocator);
+		});
+
 		it("items[Symbol.iterator] throws", () => {
 			const list = new ListPageObject(
 				undefined,
@@ -517,6 +617,27 @@ describe("ListPageObject", () => {
 			expect(items).toHaveLength(2);
 			expect(items[0]).toBeInstanceOf(PageObject);
 			expect(items[1]).toBeInstanceOf(PageObject);
+		});
+
+		it("getAll() on a filtered list returns items from the narrowed list", async () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
+			filteredLocator.count = vi.fn().mockResolvedValue(2);
+			class Item extends PageObject {}
+			const list = new ListPageObject(
+				Item,
+				mockPage as unknown as Page,
+				mockRoot as unknown as Locator,
+				selector,
+			);
+
+			const items = await list.filterByText("Widget").getAll();
+
+			expect(items).toHaveLength(2);
+			expect(items[0]).toBeInstanceOf(Item);
+			expect(items[1]).toBeInstanceOf(Item);
+			expect(items[0].root).toBe(filteredLocator);
+			expect(items[1].root).toBe(filteredLocator);
 		});
 	});
 });

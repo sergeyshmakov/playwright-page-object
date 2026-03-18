@@ -193,6 +193,8 @@ When using the built-in classes:
 - actions go through `control.$`
 - waits and assertions come from `PageObject`
 - `ListPageObject` handles repeated child components
+- `ListPageObject` indexing/search helpers such as `first()`, `second()`, `at()`, and `getItemByText()` return one item page object
+- `ListPageObject` filter helpers such as `filter()`, `filterByText()`, and `filterByTestId()` return a narrower `ListPageObject`, so chain `.first()` or `.at(...)` when one item is needed
 - `RootPageObject` is the correct root base class
 
 Examples:
@@ -201,6 +203,7 @@ Examples:
 await control.$.click();
 await control.expect().toBeVisible();
 await items.waitCount(0);
+await items.filterByText("Apple").first().expect().toBeVisible();
 ```
 
 ## Fixtures
