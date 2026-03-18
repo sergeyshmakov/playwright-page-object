@@ -19,7 +19,7 @@
 		"typecheck": "tsc --noEmit && cd example && tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"test:example": "npm run build && npm pack --pack-destination . && concurrently \"cd example && npm install ../playwright-page-object-1.0.0.tgz\" \"npx playwright install --with-deps chromium\" && cd example && npm run test:e2e"
+		"test:example": "npm run build && npm pack --pack-destination . && concurrently \"cd example && npm install --force ../playwright-page-object-1.0.0.tgz\" \"npx playwright install --with-deps chromium\" && cd example && npm run test:e2e"
 	},
 	"keywords": [
 		"playwright",
@@ -56,9 +56,6 @@
 		"tsup": "^8.5.1",
 		"typescript": "^5.9.3",
 		"vitest": "^4.0.18"
-	},
-	"lint-staged": {
-		"*.{js,jsx,ts,tsx,cjs,mjs,cts,mts,json,jsonc,md}": "biome check --write --no-errors-on-unmatched"
 	},
 	"peerDependencies": {
 		"@playwright/test": ">=1.35.0",
