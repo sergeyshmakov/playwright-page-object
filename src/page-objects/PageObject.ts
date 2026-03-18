@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { LOCATOR_SYMBOL } from "../protocol";
 import { prop } from "../utils/helpers";
 
 /**
@@ -9,7 +10,8 @@ export type SelectorType = (p: Locator) => Locator;
 
 /**
  * Constructor signature for PageObject subclasses.
- * Accepts `page`, `root`, and `selector` for composition and nesting.
+ * Used by `cloneWithContext()` for nested child composition.
+ * Custom constructors that do not match this shape must override `cloneWithContext()`.
  */
 export type PageObjectConstructor<TPageObject extends PageObject = PageObject> =
 	new (
@@ -21,15 +23,15 @@ export type PageObjectConstructor<TPageObject extends PageObject = PageObject> =
 /**
  * Base class for the Page Object Model pattern with Playwright.
  *
- * Extend this class and use decorators (`RootSelector`, `Selector`, etc.) to define
- * the root locator and child elements. Provides wait helpers, assertions via `expect()`,
- * and raw locator access via `$` for Playwright actions.
+ * Extend this class for nested child controls created by selector decorators.
+ * Top-level root-decorated page objects should extend `RootPageObject`.
+ * Provides wait helpers, assertions via `expect()`, and raw locator access via `$`.
  *
  * @example
  * ```ts
- * @RootSelector("app-header")
- * class HeaderPageObject extends PageObject {
- *   @SelectorByText("Sign in") signInButton = this.locator;
+ * class HeaderSection extends PageObject {
+ *   @SelectorByText("Sign in")
+ *   accessor signInButton = this.locator;
  * }
  * ```
  */
@@ -56,6 +58,10 @@ export class PageObject {
 
 	protected set selector(selector: SelectorType | undefined) {
 		this._selector = selector;
+	}
+
+	get [LOCATOR_SYMBOL](): Locator {
+		return this.locator;
 	}
 
 	/**

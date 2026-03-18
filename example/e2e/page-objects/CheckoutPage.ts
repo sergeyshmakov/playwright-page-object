@@ -4,6 +4,7 @@ import {
 	ListStrictSelector,
 	PageObject,
 	RootSelector,
+	RootPageObject,
 	Selector,
 	SelectorByRole,
 } from "playwright-page-object";
@@ -11,7 +12,7 @@ import { CartItemControl } from "./CartItemControl";
 import { ButtonControl } from "./controls/ButtonControl";
 
 @RootSelector("CheckoutPage")
-export class CheckoutPage extends PageObject {
+export class CheckoutPage extends RootPageObject {
 	/** PageObject approach: use PromoCode.$.fill() */
 	@Selector("PromoCodeInput")
 	accessor PromoCode = new PageObject();

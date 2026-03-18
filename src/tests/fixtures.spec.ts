@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createFixtures } from "../fixtures";
-import { PageObject } from "../page-objects/PageObject";
+import { RootPageObject } from "../page-objects/RootPageObject";
 import { createMockPage } from "./mocks/playwright";
 
 type FixtureFn = (
@@ -18,9 +18,16 @@ function invokeFixture(
 }
 
 describe("createFixtures", () => {
+	function getFixture(fixture: unknown) {
+		if (!fixture) {
+			throw new Error("Expected fixture to be defined");
+		}
+		return fixture;
+	}
+
 	it("creates fixture per key", () => {
-		class HomePage extends PageObject {}
-		class LoginPage extends PageObject {}
+		class HomePage extends RootPageObject {}
+		class LoginPage extends RootPageObject {}
 
 		const fixtures = createFixtures({
 			homePage: HomePage,
@@ -33,25 +40,25 @@ describe("createFixtures", () => {
 	});
 
 	it("fixture receives page and use", async () => {
-		class TestPage extends PageObject {}
+		class TestPage extends RootPageObject {}
 
 		const fixtures = createFixtures({ testPage: TestPage });
 		const mockPage = createMockPage();
 
 		const use = vi.fn().mockResolvedValue(undefined);
-		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
+		await invokeFixture(getFixture(fixtures.testPage), { page: mockPage }, use);
 
 		expect(use).toHaveBeenCalled();
 	});
 
 	it("fixture instantiates with page", async () => {
-		class TestPage extends PageObject {}
+		class TestPage extends RootPageObject {}
 
 		const fixtures = createFixtures({ testPage: TestPage });
 		const mockPage = createMockPage();
 
 		const use = vi.fn().mockResolvedValue(undefined);
-		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
+		await invokeFixture(getFixture(fixtures.testPage), { page: mockPage }, use);
 
 		const instance = use.mock.calls[0][0];
 		expect(instance).toBeInstanceOf(TestPage);
@@ -59,24 +66,24 @@ describe("createFixtures", () => {
 	});
 
 	it("use() receives instance", async () => {
-		class TestPage extends PageObject {}
+		class TestPage extends RootPageObject {}
 
 		const fixtures = createFixtures({ testPage: TestPage });
 		const mockPage = createMockPage();
 
-		let receivedInstance: PageObject | undefined;
-		const use = vi.fn().mockImplementation(async (instance: PageObject) => {
+		let receivedInstance: RootPageObject | undefined;
+		const use = vi.fn().mockImplementation(async (instance: RootPageObject) => {
 			receivedInstance = instance;
 		});
 
-		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
+		await invokeFixture(getFixture(fixtures.testPage), { page: mockPage }, use);
 
 		expect(receivedInstance).toBeInstanceOf(TestPage);
 		expect(receivedInstance?.page).toBe(mockPage);
 	});
 
 	it("use() is awaited", async () => {
-		class TestPage extends PageObject {}
+		class TestPage extends RootPageObject {}
 
 		const fixtures = createFixtures({ testPage: TestPage });
 		const mockPage = createMockPage();
@@ -86,7 +93,7 @@ describe("createFixtures", () => {
 			useCompleted = true;
 		});
 
-		await invokeFixture(fixtures.testPage!, { page: mockPage }, use);
+		await invokeFixture(getFixture(fixtures.testPage), { page: mockPage }, use);
 
 		expect(useCompleted).toBe(true);
 		expect(use).toHaveBeenCalled();

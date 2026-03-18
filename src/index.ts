@@ -23,9 +23,10 @@ export {
 export type { FixturesFromMap, PageObjectConstructorsMap } from "./fixtures";
 export { createFixtures } from "./fixtures";
 export { ListPageObject } from "./page-objects/ListPageObject";
-
 export type {
 	PageObjectConstructor,
 	SelectorType,
 } from "./page-objects/PageObject";
 export { PageObject } from "./page-objects/PageObject";
+export type { RootPageObjectConstructor } from "./page-objects/RootPageObject";
+export { RootPageObject } from "./page-objects/RootPageObject";
