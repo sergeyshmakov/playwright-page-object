@@ -1,6 +1,6 @@
 {
 	"name": "playwright-page-object",
-	"version": "1.3.1",
+	"version": "1.3.2",
 	"description": "TypeScript-first Page Object Model framework for Playwright that replaces raw `page.locator()` chains with a typed, composable, decorator-driven control graph.",
 	"license": "ISC",
 	"type": "commonjs",
