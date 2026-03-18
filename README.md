@@ -384,6 +384,8 @@ Child decorators can return:
 
 This package is available in [Context7](https://context7.com/) MCP, so AI assistants can load it directly into context when working with your Playwright tests.
 
+A [Cubic wiki](https://www.cubic.dev/wikis/sergeyshmakov/playwright-page-object) provides AI-ready documentation for this project.
+
 It also ships an [Agent Skills](https://agentskills.io/) compatible skill:
 
 ```bash
