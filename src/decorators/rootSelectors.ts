@@ -12,12 +12,24 @@ type PageFirstArgs<TClass extends AnyConstructor> =
 		? [page: Page, ...rest: TRest]
 		: never;
 
+function isLocatorLike(
+	value: object,
+): value is Pick<Locator, "locator" | "page"> {
+	return (
+		"locator" in value &&
+		typeof (value as { locator?: unknown }).locator === "function" &&
+		"page" in value &&
+		typeof (value as { page?: unknown }).page === "function"
+	);
+}
+
 function resolvePage(value: unknown, className: string): Page {
 	if (
 		typeof value === "object" &&
 		value !== null &&
 		"locator" in value &&
-		typeof (value as { locator?: unknown }).locator === "function"
+		typeof (value as { locator?: unknown }).locator === "function" &&
+		!isLocatorLike(value)
 	) {
 		return value as Page;
 	}

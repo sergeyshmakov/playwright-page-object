@@ -72,6 +72,20 @@ describe("RootSelectorBy (via exported wrappers)", () => {
 		);
 	});
 
+	it("rejects Locator values passed as the first constructor arg", () => {
+		@RootSelector()
+		class ExternalRootPage {
+			constructor(readonly page: Page) {}
+		}
+
+		const locator = createMockLocator(mockPage);
+
+		expect(() => new ExternalRootPage(locator as unknown as Page)).toThrow(
+			/ExternalRootPage.*must receive Playwright Page as the first constructor argument/,
+		);
+		expect(locator.locator).not.toHaveBeenCalledWith("body");
+	});
+
 	it("RootSelector(id) uses p.getByTestId(id)", () => {
 		@RootSelector("myId")
 		class TestPage extends RootPageObject {}
