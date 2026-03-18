@@ -3,8 +3,8 @@ import {
 	ListPageObject,
 	ListStrictSelector,
 	PageObject,
-	RootSelector,
 	RootPageObject,
+	RootSelector,
 	Selector,
 	SelectorByRole,
 } from "playwright-page-object";

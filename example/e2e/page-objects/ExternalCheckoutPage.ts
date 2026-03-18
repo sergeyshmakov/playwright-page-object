@@ -1,9 +1,5 @@
 import type { Page } from "@playwright/test";
-import {
-	RootSelector,
-	Selector,
-	SelectorByRole,
-} from "playwright-page-object";
+import { RootSelector, Selector, SelectorByRole } from "playwright-page-object";
 import { ExternalButtonControl } from "./controls/ExternalButtonControl";
 import { ExternalInputControl } from "./controls/ExternalInputControl";
 
@@ -36,7 +32,11 @@ export class ExternalCheckoutPage {
 	 * Factory function signature.
 	 * Useful when the construction logic should stay inline with the selector.
 	 */
-	@SelectorByRole("button", { name: "Apply" }, (locator) => new ExternalButtonControl(locator))
+	@SelectorByRole(
+		"button",
+		{ name: "Apply" },
+		(locator) => new ExternalButtonControl(locator),
+	)
 	accessor ApplyPromoButton = undefined as unknown as ExternalButtonControl;
 
 	/**

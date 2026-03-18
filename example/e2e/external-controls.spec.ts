@@ -23,7 +23,9 @@ test("constructor metadata — ExternalButtonControl is constructed with the res
 	externalCheckoutPage,
 }) => {
 	// We use .first() since there are multiple Remove buttons on the page.
-	await externalCheckoutPage.FirstRemoveButton.locator.first().waitFor({ state: "visible" });
+	await externalCheckoutPage.FirstRemoveButton.locator
+		.first()
+		.waitFor({ state: "visible" });
 	await externalCheckoutPage.FirstRemoveButton.locator.first().click();
 });
 
