@@ -15,7 +15,6 @@ export type SelectorType = (p: Locator) => Locator;
  */
 export type PageObjectConstructor<TPageObject extends PageObject = PageObject> =
 	new (
-		page?: Page,
 		root?: Locator,
 		selector?: SelectorType,
 	) => TPageObject;
@@ -36,16 +35,13 @@ export type PageObjectConstructor<TPageObject extends PageObject = PageObject> =
  * ```
  */
 export class PageObject {
-	page?: Page;
 	root?: Locator;
 
 	/**
-	 * @param page - Playwright page (optional when nested)
 	 * @param root - Root locator (set by decorators)
 	 * @param selector - Selector function (set by decorators)
 	 */
-	constructor(page?: Page, root?: Locator, selector?: SelectorType) {
-		this.page = page;
+	constructor(root?: Locator, selector?: SelectorType) {
 		this.root = root;
 		this._selector = selector;
 	}
@@ -62,6 +58,16 @@ export class PageObject {
 
 	get [LOCATOR_SYMBOL](): Locator {
 		return this.locator;
+	}
+
+	get page(): Page {
+		if (!this.root) {
+			throw new Error(
+				`[PageObject] Empty root in ${this.constructor.name}. Cannot resolve page. Maybe "RootSelector" or "Selector" was skipped?`,
+			);
+		}
+
+		return this.root.page();
 	}
 
 	/**
@@ -124,7 +130,7 @@ export class PageObject {
 	 */
 	cloneWithContext(root: Locator, selector: SelectorType): this {
 		const PageObjectClass = this.constructor as PageObjectConstructor<this>;
-		return new PageObjectClass(root.page(), root, selector);
+		return new PageObjectClass(root, selector);
 	}
 
 	/** Waits for the element to become visible. */

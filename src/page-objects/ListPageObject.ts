@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import { PageObject, type SelectorType } from "./PageObject";
 
 /**
@@ -23,7 +23,6 @@ export class ListPageObject<
 	protected itemType?:
 		| TItem
 		| (new (
-				page?: Page,
 				root?: Locator,
 				selector?: SelectorType,
 		  ) => TItem);
@@ -32,23 +31,15 @@ export class ListPageObject<
 	 * @param itemType - PageObject class or instance for each list item.
 	 *   - **Class**: Use when items use the default constructor.
 	 *   - **Instance**: Use when items need a custom constructor with specific arguments.
-	 * @param page - Playwright page (optional when nested)
 	 * @param root - Root locator (set by decorators)
 	 * @param selector - Selector function (set by decorators)
 	 */
 	constructor(
-		itemType?:
-			| TItem
-			| (new (
-					page?: Page,
-					root?: Locator,
-					selector?: SelectorType,
-			  ) => TItem),
-		page?: Page,
+		itemType?: TItem | (new (root?: Locator, selector?: SelectorType) => TItem),
 		root?: Locator,
 		selector?: SelectorType,
 	) {
-		super(page, root, selector);
+		super(root, selector);
 		this.itemType = itemType;
 	}
 
@@ -57,16 +48,14 @@ export class ListPageObject<
 			itemType?:
 				| TItem
 				| (new (
-						page?: Page,
 						root?: Locator,
 						selector?: SelectorType,
 				  ) => TItem),
-			page?: Page,
 			root?: Locator,
 			selector?: SelectorType,
 		) => this;
 
-		return new ListPageObjectClass(this.itemType, root.page(), root, selector);
+		return new ListPageObjectClass(this.itemType, root, selector);
 	}
 
 	/**
@@ -107,18 +96,11 @@ export class ListPageObject<
 
 	/**
 	 * Returns items that contain an element with the given test id.
-	 * Requires `page` to be set.
 	 * @param id - Test id (string or regex)
 	 * @returns Narrowed list page object containing the matching item(s)
 	 */
 	filterByTestId(id: string | RegExp): this {
-		const page = this.page;
-		if (!page) {
-			throw new Error(
-				"[ListPageObject] filterByTestId requires page to be set",
-			);
-		}
-		return this.filter({ has: page.getByTestId(id) });
+		return this.filter({ has: this.page.getByTestId(id) });
 	}
 
 	/**
@@ -243,7 +225,7 @@ export class ListPageObject<
 
 	protected resolveItem(selector: SelectorType): TItem {
 		if (!this.itemType) {
-			return new PageObject(this.page, this.locator, selector) as TItem;
+			return new PageObject(this.locator, selector) as TItem;
 		}
 
 		if (PageObject.isInstance(this.itemType)) {
@@ -251,7 +233,7 @@ export class ListPageObject<
 		}
 
 		if (PageObject.isClass(this.itemType)) {
-			return new this.itemType(this.page, this.locator, selector);
+			return new this.itemType(this.locator, selector);
 		}
 
 		return selector(this.locator) as unknown as TItem;

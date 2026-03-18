@@ -53,7 +53,6 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 		it("for PageObject value calls cloneWithContext(root, selector)", () => {
 			class ItemPageObject extends PageObject {}
 			const itemInstance = new ItemPageObject(
-				mockPage,
 				bodyLocator,
 				vi.fn().mockReturnValue(bodyLocator) as SelectorType,
 			);
@@ -218,13 +217,11 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			class TestPage extends RootPageObject {
 				@Selector("item1")
 				accessor item1 = new ItemPageObject(
-					mockPage,
 					bodyLocator,
 					vi.fn().mockReturnValue(bodyLocator) as SelectorType,
 				);
 				@Selector("item2")
 				accessor item2 = new ItemPageObject(
-					mockPage,
 					bodyLocator,
 					vi.fn().mockReturnValue(bodyLocator) as SelectorType,
 				);
@@ -248,13 +245,11 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			class TestPage extends RootPageObject {
 				@Selector("item1")
 				accessor item1 = new ItemPageObject(
-					mockPage,
 					bodyLocator,
 					vi.fn().mockReturnValue(bodyLocator) as SelectorType,
 				);
 				@Selector("item2")
 				accessor item2 = new ItemPageObject(
-					mockPage,
 					bodyLocator,
 					vi.fn().mockReturnValue(bodyLocator) as SelectorType,
 				);
@@ -280,7 +275,6 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			root2.page = vi.fn().mockReturnValue(mockPage);
 
 			const child = new ChildPageObject(
-				mockPage,
 				root1,
 				vi.fn().mockReturnValue(root1) as SelectorType,
 			);
@@ -299,7 +293,6 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			class ItemPageObject extends PageObject {
 				@Selector("child")
 				accessor child = new PageObject(
-					mockPage,
 					bodyLocator,
 					vi.fn().mockReturnValue(bodyLocator) as SelectorType,
 				);
@@ -320,7 +313,6 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			);
 			const list = new ListPageObject(
 				ItemPageObject,
-				mockPage,
 				bodyLocator,
 				listSelector,
 			);
@@ -347,7 +339,6 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			class ParentPage extends PageObject {
 				@Selector("child")
 				accessor child = new ChildPageObject(
-					mockPage,
 					bodyLocator,
 					vi.fn().mockReturnValue(bodyLocator) as SelectorType,
 				);
@@ -356,8 +347,8 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			const selector1: SelectorType = vi.fn().mockReturnValue(root1);
 			const selector2: SelectorType = vi.fn().mockReturnValue(root2);
 
-			const parent1 = new ParentPage(mockPage, root1, selector1);
-			const parent2 = new ParentPage(mockPage, root2, selector2);
+			const parent1 = new ParentPage(root1, selector1);
+			const parent2 = new ParentPage(root2, selector2);
 
 			const child1 = parent1.child;
 			const child2 = parent2.child;

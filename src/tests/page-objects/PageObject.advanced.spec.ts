@@ -93,15 +93,14 @@ describe("PageObject advanced behavior", () => {
 		class NamedChild extends PageObject {
 			constructor(
 				readonly label: string,
-				page?: Page,
 				root?: Locator,
 				selector?: SelectorType,
 			) {
-				super(page, root, selector);
+				super(root, selector);
 			}
 
 			override cloneWithContext(root: Locator, selector: SelectorType): this {
-				return new NamedChild(this.label, root.page(), root, selector) as this;
+				return new NamedChild(this.label, root, selector) as this;
 			}
 		}
 

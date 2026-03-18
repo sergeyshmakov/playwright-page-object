@@ -57,7 +57,6 @@ function RootSelectorBy(selector: SelectorType) {
 					constructor(...args: TArgs) {
 						const page = resolvePage(args[0], target.name);
 						super(...args);
-						this.page = page;
 						this.root = page.locator("body");
 						this.selector = selector;
 					}

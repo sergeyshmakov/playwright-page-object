@@ -47,7 +47,8 @@ When entering a codebase, detect these first:
    - `createFixtures(...)`
    - manual `new MyPage(page)`
 4. Custom nested `PageObject` constructors:
-   - if a nested `PageObject` subclass does not use the default constructor shape, it must implement `cloneWithContext()`
+   - the default nested `PageObject` constructor shape is `(root?: Locator, selector?: SelectorType)`
+   - if a nested `PageObject` subclass does not use that shape, it must implement `cloneWithContext()`
 
 Preserve the user's current style. Do not force a migration to the built-in POM if the codebase already uses plain classes or external controls successfully.
 
@@ -107,7 +108,7 @@ class CheckoutPage extends RootPageObject {}
 - the user wants built-in waits or `.expect()`
 - the control is reused compositionally under selector decorators
 
-If a nested `PageObject` subclass adds a custom constructor, either keep the default constructor shape or implement `cloneWithContext()` explicitly.
+Nested `PageObject` instances derive `page` from their current root context. If a nested `PageObject` subclass adds a custom constructor, either keep the default `(root?: Locator, selector?: SelectorType)` shape or implement `cloneWithContext()` explicitly.
 
 ### Choose `ListPageObject` when
 
@@ -191,6 +192,7 @@ class CheckoutPage extends RootPageObject {
 When using the built-in classes:
 
 - actions go through `control.$`
+- nested `PageObject` instances derive `page` from `root.page()`
 - waits and assertions come from `PageObject`
 - `ListPageObject` handles repeated child components
 - `ListPageObject` indexing/search helpers such as `first()`, `second()`, `at()`, and `getItemByText()` return one item page object

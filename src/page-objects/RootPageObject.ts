@@ -17,11 +17,9 @@ export type RootPageObjectConstructor<
  * Use `PageObject` for nested child controls created by selector decorators.
  */
 export class RootPageObject extends PageObject {
-	declare page: Page;
-
-	// biome-ignore lint/complexity/noUselessConstructor: constructor enforces the public Page-first root contract
 	constructor(page: Page) {
-		super(page);
+		void page;
+		super();
 	}
 
 	static isRootClass<TArgs extends [Page, ...unknown[]]>(
