@@ -42,10 +42,10 @@ test("should iterate over cart items with for await", async ({
 	}
 });
 
-test("should find item by text using filterByText and remove it", async ({
+test("should narrow the list by text and remove the first matched item", async ({
 	checkoutPage,
 }) => {
-	const widgetB = checkoutPage.CartItems.filterByText("Widget B");
+	const widgetB = checkoutPage.CartItems.filterByText("Widget B").first();
 	await widgetB.waitVisible();
 	await widgetB.RemoveButton.$.click();
 	await checkoutPage.expectCartHasItemCount(2);

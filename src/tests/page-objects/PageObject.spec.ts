@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PageObject, type SelectorType } from "../../page-objects/PageObject";
 import { createMockLocator, createMockPage } from "../mocks/playwright";
@@ -52,33 +52,26 @@ describe("PageObject", () => {
 	});
 
 	describe("constructor and core", () => {
-		it("stores page, root, selector correctly", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+		it("stores root and derives page correctly", () => {
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			expect(pageObj.page).toBe(mockPage);
 			expect(pageObj.root).toBe(mockRoot);
 		});
 
+		it("page getter throws when root is empty", () => {
+			const pageObj = new PageObject(undefined, selector);
+			expect(() => pageObj.page).toThrow(/Empty root.*Cannot resolve page/);
+		});
+
 		it("locator getter returns selector(root) when selector is set", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			const loc = (pageObj as unknown as { locator: Locator }).locator;
 			expect(selector).toHaveBeenCalledWith(mockRoot);
 			expect(loc).toBe(mockLocator);
 		});
 
 		it("locator getter throws when selector is empty with message containing class name", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				undefined,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, undefined);
 			expect(
 				() => (pageObj as unknown as { locator: Locator }).locator,
 			).toThrow(/Empty selector.*PageObject/);
@@ -97,11 +90,7 @@ describe("PageObject", () => {
 		});
 
 		it("isInstance returns true for PageObject instance", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			expect(PageObject.isInstance(pageObj)).toBe(true);
 		});
 
@@ -111,12 +100,8 @@ describe("PageObject", () => {
 			expect(PageObject.isInstance(undefined)).toBe(false);
 		});
 
-		it("cloneWithContext creates new instance with root.page(), root, selector", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+		it("cloneWithContext creates new instance with root and selector", () => {
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			const newRoot = createMockLocator(mockPage);
 			newRoot.page = vi.fn().mockReturnValue(mockPage);
 			const newSelector = vi.fn().mockReturnValue(createMockLocator());
@@ -132,22 +117,14 @@ describe("PageObject", () => {
 		});
 
 		it("$ returns the locator for raw Playwright access", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			expect(pageObj.$).toBe(mockLocator);
 		});
 	});
 
 	describe("wait methods", () => {
 		it("waitVisible calls expect(locator).toBeVisible()", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitVisible();
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -156,11 +133,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitHidden calls expect(locator).toBeHidden()", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitHidden();
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -169,11 +142,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitText calls expect(locator).toHaveText(text)", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitText("hello");
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -182,11 +151,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitValue calls expect(locator).toHaveValue", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitValue(42);
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -195,11 +160,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitNoValue calls expect(locator).not.toHaveAttribute", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitNoValue();
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -208,11 +169,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitCount calls expect(locator).toHaveCount", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitCount(3);
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -221,11 +178,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitChecked calls expect(locator).toBeChecked", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitChecked();
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -234,11 +187,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitUnChecked calls expect(locator).not.toBeChecked", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitUnChecked();
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -247,11 +196,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitProp calls expect with message", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitProp("name", "value");
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -262,11 +207,7 @@ describe("PageObject", () => {
 		});
 
 		it("waitPropAbsence calls expect with message", async () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitPropAbsence("name", "value");
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -279,11 +220,7 @@ describe("PageObject", () => {
 
 	describe("assertions", () => {
 		it("expect() returns expect(locator)", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			const result = pageObj.expect();
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
@@ -293,11 +230,7 @@ describe("PageObject", () => {
 		});
 
 		it("expect({ soft: true }) returns expect.soft(locator)", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			pageObj.expect({ soft: true });
 			expect(mockPlaywrightExpectSoft).toHaveBeenCalledWith(
 				mockLocator,
@@ -306,11 +239,7 @@ describe("PageObject", () => {
 		});
 
 		it("expect({ message: 'x' }) passes message to expect", () => {
-			const pageObj = new PageObject(
-				mockPage as unknown as Page,
-				mockRoot as unknown as Locator,
-				selector,
-			);
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			pageObj.expect({ message: "custom" });
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,

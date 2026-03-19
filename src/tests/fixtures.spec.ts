@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { RootSelector } from "../decorators/rootSelectors";
 import { createFixtures } from "../fixtures";
 import { RootPageObject } from "../page-objects/RootPageObject";
 import { createMockPage } from "./mocks/playwright";
@@ -40,6 +41,7 @@ describe("createFixtures", () => {
 	});
 
 	it("fixture receives page and use", async () => {
+		@RootSelector()
 		class TestPage extends RootPageObject {}
 
 		const fixtures = createFixtures({ testPage: TestPage });
@@ -52,6 +54,7 @@ describe("createFixtures", () => {
 	});
 
 	it("fixture instantiates with page", async () => {
+		@RootSelector()
 		class TestPage extends RootPageObject {}
 
 		const fixtures = createFixtures({ testPage: TestPage });
@@ -66,6 +69,7 @@ describe("createFixtures", () => {
 	});
 
 	it("use() receives instance", async () => {
+		@RootSelector()
 		class TestPage extends RootPageObject {}
 
 		const fixtures = createFixtures({ testPage: TestPage });
@@ -83,6 +87,7 @@ describe("createFixtures", () => {
 	});
 
 	it("use() is awaited", async () => {
+		@RootSelector()
 		class TestPage extends RootPageObject {}
 
 		const fixtures = createFixtures({ testPage: TestPage });

@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import { PageObject, type SelectorType } from "./PageObject";
 
 /**
@@ -23,7 +23,6 @@ export class ListPageObject<
 	protected itemType?:
 		| TItem
 		| (new (
-				page?: Page,
 				root?: Locator,
 				selector?: SelectorType,
 		  ) => TItem);
@@ -32,23 +31,15 @@ export class ListPageObject<
 	 * @param itemType - PageObject class or instance for each list item.
 	 *   - **Class**: Use when items use the default constructor.
 	 *   - **Instance**: Use when items need a custom constructor with specific arguments.
-	 * @param page - Playwright page (optional when nested)
 	 * @param root - Root locator (set by decorators)
 	 * @param selector - Selector function (set by decorators)
 	 */
 	constructor(
-		itemType?:
-			| TItem
-			| (new (
-					page?: Page,
-					root?: Locator,
-					selector?: SelectorType,
-			  ) => TItem),
-		page?: Page,
+		itemType?: TItem | (new (root?: Locator, selector?: SelectorType) => TItem),
 		root?: Locator,
 		selector?: SelectorType,
 	) {
-		super(page, root, selector);
+		super(root, selector);
 		this.itemType = itemType;
 	}
 
@@ -57,16 +48,14 @@ export class ListPageObject<
 			itemType?:
 				| TItem
 				| (new (
-						page?: Page,
 						root?: Locator,
 						selector?: SelectorType,
 				  ) => TItem),
-			page?: Page,
 			root?: Locator,
 			selector?: SelectorType,
 		) => this;
 
-		return new ListPageObjectClass(this.itemType, root.page(), root, selector);
+		return new ListPageObjectClass(this.itemType, root, selector);
 	}
 
 	/**
@@ -74,7 +63,7 @@ export class ListPageObject<
 	 * @param index - Item index
 	 * @returns PageObject for the item at that index
 	 */
-	getItemByIndex(index: number) {
+	getItemByIndex(index: number): TItem {
 		return this.resolveItem((p) => p.nth(index));
 	}
 
@@ -83,42 +72,35 @@ export class ListPageObject<
 	 * @param index - Item index (0-based; -1 = last, -2 = second-to-last, etc.)
 	 * @returns PageObject for the item at that index
 	 */
-	at(index: number) {
+	at(index: number): TItem {
 		return this.getItemByIndex(index);
 	}
 
 	/**
 	 * Returns items matching the given Playwright filter options.
 	 * @param options - Playwright locator filter (e.g. `{ hasText: 'foo' }`)
-	 * @returns PageObject for the filtered item(s)
+	 * @returns Narrowed list page object containing the filtered item(s)
 	 */
-	filter(options: Parameters<Locator["filter"]>[0]) {
-		return this.resolveItem((p) => p.filter(options));
+	filter(options: Parameters<Locator["filter"]>[0]): this {
+		return this.resolveList((p) => p.filter(options));
 	}
 
 	/**
 	 * Returns items containing the given text.
 	 * @param text - Text to match (string or regex)
-	 * @returns PageObject for the matching item(s)
+	 * @returns Narrowed list page object containing the matching item(s)
 	 */
-	filterByText(text: string) {
-		return this.resolveItem((p) => p.filter({ hasText: text }));
+	filterByText(text: string | RegExp): this {
+		return this.filter({ hasText: text });
 	}
 
 	/**
 	 * Returns items that contain an element with the given test id.
-	 * Requires `page` to be set.
 	 * @param id - Test id (string or regex)
-	 * @returns PageObject for the matching item(s)
+	 * @returns Narrowed list page object containing the matching item(s)
 	 */
-	filterByTestId(id: string | RegExp) {
-		const page = this.page;
-		if (!page) {
-			throw new Error(
-				"[ListPageObject] filterByTestId requires page to be set",
-			);
-		}
-		return this.resolveItem((p) => p.filter({ has: page.getByTestId(id) }));
+	filterByTestId(id: string | RegExp): this {
+		return this.filter({ has: this.page.getByTestId(id) });
 	}
 
 	/**
@@ -126,17 +108,22 @@ export class ListPageObject<
 	 * @param mask - Regex pattern string for test id
 	 * @returns PageObject for the matching item
 	 */
-	getItemByIdMask(mask: string) {
-		return this.resolveItem((p) => p.getByTestId(new RegExp(mask)));
+	getItemByIdMask(mask: string): TItem {
+		return this.filterByTestId(new RegExp(mask)).first();
 	}
 
 	/** Returns the first item (index 0). */
-	first() {
+	first(): TItem {
 		return this.at(0);
 	}
 
+	/** Returns the second item (index 1). */
+	second(): TItem {
+		return this.at(1);
+	}
+
 	/** Returns the last item (index -1). */
-	last() {
+	last(): TItem {
 		return this.at(-1);
 	}
 
@@ -145,8 +132,8 @@ export class ListPageObject<
 	 * @param text - Text to match (string or regex)
 	 * @returns PageObject for the matching item
 	 */
-	getItemByText(text: string) {
-		return this.resolveItem((p) => p.getByText(text));
+	getItemByText(text: string | RegExp): TItem {
+		return this.filterByText(text).first();
 	}
 
 	/**
@@ -154,8 +141,10 @@ export class ListPageObject<
 	 * @param args - Same as {@link Locator.getByRole}
 	 * @returns PageObject for the matching item
 	 */
-	getItemByRole(...args: Parameters<Locator["getByRole"]>) {
-		return this.resolveItem((p) => p.getByRole(...args));
+	getItemByRole(...args: Parameters<Locator["getByRole"]>): TItem {
+		return this.resolveList((p) =>
+			p.filter({ has: p.getByRole(...args) }),
+		).first();
 	}
 
 	/**
@@ -230,9 +219,13 @@ export class ListPageObject<
 		return items;
 	}
 
+	protected resolveList(selector: SelectorType): this {
+		return this.cloneWithContext(this.locator, selector);
+	}
+
 	protected resolveItem(selector: SelectorType): TItem {
 		if (!this.itemType) {
-			return new PageObject(this.page, this.locator, selector) as TItem;
+			return new PageObject(this.locator, selector) as TItem;
 		}
 
 		if (PageObject.isInstance(this.itemType)) {
@@ -240,7 +233,7 @@ export class ListPageObject<
 		}
 
 		if (PageObject.isClass(this.itemType)) {
-			return new this.itemType(this.page, this.locator, selector);
+			return new this.itemType(this.locator, selector);
 		}
 
 		return selector(this.locator) as unknown as TItem;

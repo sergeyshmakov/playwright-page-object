@@ -227,11 +227,14 @@ Use `RootPageObject` for root-decorated classes that are created directly from P
 class CheckoutPage extends RootPageObject {}
 ```
 
+Root page objects remain page-first: construct them with `new CheckoutPage(page)`.
+
 ### `PageObject`
 
 Use `PageObject` for nested controls. It provides:
 
 - raw locator access via `$`
+- `page` derived from the current root context via `root.page()`
 - Playwright assertions via `.expect()`
 - wait helpers such as `.waitVisible()` and `.waitCount()`
 - nested control composition through selector decorators
@@ -243,6 +246,8 @@ await control.$.click();
 await control.expect().toBeVisible();
 await cartItems.waitCount(0);
 ```
+
+Nested `PageObject` subclasses use the default constructor shape `(root?: Locator, selector?: SelectorType)`. If a nested subclass needs custom constructor arguments, implement `cloneWithContext()` so it can rebuild itself with the new `root` and `selector`.
 
 Wait helpers:
 
@@ -277,8 +282,12 @@ Useful APIs:
 - `list.items.at(-1)`
 - `for await (const item of list.items) { ... }`
 - `await list.count()`
-- `await list.first()`
-- `await list.filterByText("Apple")`
+- `list.first()`
+- `list.second()`
+- `list.filterByText("Apple")`
+- `list.filterByText("Apple").first()`
+
+Indexing and search helpers such as `first()`, `second()`, `at()`, `getItemByText()`, and `getItemByRole()` return a single item page object. Filter helpers such as `filter()`, `filterByText()`, and `filterByTestId()` return a narrower `ListPageObject`, so chain `.first()` or `.at(...)` when you need one matched item.
 
 ## Fixtures
 

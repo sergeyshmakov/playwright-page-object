@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SelectorBy } from "../../decorators/selectorBy";
 import { PageObject, type SelectorType } from "../../page-objects/PageObject";
@@ -31,7 +31,6 @@ describe("SelectorBy", () => {
 
 		const rootSelector = vi.fn().mockReturnValue(mockLocator);
 		const instance = new TestPageObject(
-			mockPage as unknown as Page,
 			mockRoot as unknown as Locator,
 			rootSelector as unknown as SelectorType,
 		);
@@ -55,7 +54,6 @@ describe("SelectorBy", () => {
 
 		const rootSelector = vi.fn().mockReturnValue(parentLocator);
 		const instance = new TestPageObject(
-			mockPage as unknown as Page,
 			mockRoot as unknown as Locator,
 			rootSelector as unknown as SelectorType,
 		);
@@ -102,7 +100,6 @@ describe("SelectorBy", () => {
 
 		const rootSelector = vi.fn().mockReturnValue(mockLocator);
 		const instance = new TestPageObject(
-			mockPage as unknown as Page,
 			mockRoot as unknown as Locator,
 			rootSelector as unknown as SelectorType,
 		);
@@ -115,12 +112,10 @@ describe("SelectorBy", () => {
 	it("preserves selector return type for PageObject value", () => {
 		class ChildPageObject extends PageObject {}
 		const childInstance = new ChildPageObject(
-			mockPage as unknown as Page,
 			mockRoot as unknown as Locator,
 			vi.fn() as unknown as SelectorType,
 		);
 		const clonedChild = new ChildPageObject(
-			mockPage as unknown as Page,
 			mockRoot as unknown as Locator,
 			vi.fn() as unknown as SelectorType,
 		);
@@ -134,7 +129,6 @@ describe("SelectorBy", () => {
 
 		const rootSelector = vi.fn().mockReturnValue(mockLocator);
 		const instance = new TestPageObject(
-			mockPage as unknown as Page,
 			mockRoot as unknown as Locator,
 			rootSelector as unknown as SelectorType,
 		);
