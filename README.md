@@ -5,29 +5,25 @@ Typed, decorator-driven selector composition for Playwright. Keep selectors clos
 [![npm version](https://badge.fury.io/js/playwright-page-object.svg)](https://badge.fury.io/js/playwright-page-object)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
 
-## Why This Exists
+## Problem
 
-Playwright locators are powerful, but selector logic often drifts into tests and one-off helpers:
+Playwright locators are powerful, but selector logic often leaks into tests:
 
-- Selector strings get duplicated.
-- Long locator chains hide the UI structure.
-- Reusable UI parts turn into ad hoc helpers.
-- Moving to a stronger POM often feels like an all-or-nothing rewrite.
+- Selector strings get duplicated across files
+- Long locator chains obscure the actual UI structure
+- Reusable UI parts become scattered ad-hoc helpers
+- Adopting a structured Page Object Model feels like an all-or-nothing rewrite
 
-`playwright-page-object` gives you a more incremental path:
+## Solution
 
-- Root decorators scope a class to a top-level locator.
-- Child decorators resolve relative to that current scope.
-- A top-level class can skip root decorators and rely on Playwright **`page`** when body-level scope is enough.
-- A **fragment** created from `@Selector("…", Factory)` with `constructor(readonly locator: Locator)` can host its own nested `@Selector*` accessors under **`this.locator`**.
-- Accessors can return a raw `Locator`, your own control class, or the built-in `PageObject` classes.
-- Selector chains stay lazy and are rebuilt only when accessed.
+`playwright-page-object` provides an incremental path forward:
 
-Use it with the class style you already have:
+- **Root decorators** scope a class to a top-level locator
+- **Child decorators** resolve selectors relative to that scope
+- **Lazy chains** rebuild only when accessed
+- **Multiple output styles** support your existing patterns
 
-- plain classes that follow the normal Playwright constructor shape `(page: Page, ...rest)`
-- your own controls that accept a `Locator`
-- the built-in `RootPageObject`, `PageObject`, and `ListPageObject` classes when you want an out-of-the-box POM layer
+Use it with plain classes, custom controls, or built-in `PageObject` helpers—no breaking changes required.
 
 ## Installation
 
@@ -35,19 +31,16 @@ Use it with the class style you already have:
 npm install -D playwright-page-object
 ```
 
-Or use `yarn add -D`, `pnpm add -D`, or `bun add -D`.
-
-Requirements:
-
+**Requirements:**
 - Node `>=20`
 - `@playwright/test >=1.35.0`
-- TypeScript `>=5.0` when you use decorator + `accessor` syntax
+- TypeScript `>=5.0` (when using decorators + accessors)
 
-This library relies on the ECMAScript `accessor` keyword. Make sure your `tsconfig.json` targets a compatible environment such as `"target": "ES2015"` or higher.
+Ensure your `tsconfig.json` targets `"ES2015"` or higher for ECMAScript accessor support.
 
 ## Quick Start
 
-You do not need to extend the built-in `PageObject` classes to start using the decorators.
+No need to extend built-in classes—start with plain classes:
 
 ```ts
 import type { Locator, Page } from "@playwright/test";
@@ -83,11 +76,9 @@ test("apply promo code", async ({ page }) => {
 });
 ```
 
-This stays a plain class. The decorators only teach the accessors how to resolve locators.
+### Using page-only hosts (no root decorator)
 
-### Same idea without `@RootSelector`
-
-Skip the root decorator when body-level scope is enough and your `data-testid` values are globally unique. Child decorators still work as long as the instance exposes Playwright **`page`**:
+Skip `@RootSelector` when your `data-testid` values are globally unique:
 
 ```ts
 import type { Locator, Page } from "@playwright/test";
@@ -108,11 +99,11 @@ class CheckoutPage {
 }
 ```
 
-A fuller version with `PageObject` and lists lives in [example/e2e/page-objects/PlainHostCheckoutPage.ts](example/e2e/page-objects/PlainHostCheckoutPage.ts). That example also wires [PromoSectionFragment](example/e2e/page-objects/PromoSectionFragment.ts) (`readonly locator` + nested `@Selector`) via `@Selector("PromoSection", PromoSectionFragment)`.
+See [PlainHostCheckoutPage.ts](example/e2e/page-objects/PlainHostCheckoutPage.ts) and [PromoSectionFragment.ts](example/e2e/page-objects/PromoSectionFragment.ts) for a fuller example.
 
-### Nested `@Selector*` under `this.locator` (fragment)
+### Composing fragments with `@Selector` + `this.locator`
 
-When you pass a **class** as the last argument to `@Selector(...)`, the library constructs it with the resolved parent locator. If that class exposes a **Locator-like** **`locator`** property (typical pattern: `constructor(readonly locator: Locator)`), its nested child decorators continue **under that element** instead of falling back to `page`:
+Pass a class to `@Selector(...)` to create reusable fragments. If that class exposes a `locator` property, nested decorators chain under that element:
 
 ```ts
 import type { Locator, Page } from "@playwright/test";
@@ -133,28 +124,11 @@ class CheckoutPage {
 }
 ```
 
-## Core Mental Model
+## How It Works
 
-### 1. Root decorators establish locator context (optional if you have `page`)
+### Root decorators set locator scope
 
-Use `@RootSelector(...)` and its variants on top-level classes when you want a **scoped** container root (for example a section `data-testid`). For plain classes, the first constructor argument must be `page: Page`. If you want the built-in base class for top-level objects, extend `RootPageObject`.
-
-**Without** a root decorator, the same plain class shape still works as long as the instance exposes Playwright **`page`**. In that case child decorators resolve from **`page.locator("body")`** — equivalent to **`@RootSelector()`** (body root), **not** equivalent to **`@RootSelector("SomeTid")`** (narrowed root).
-
-Use `PageObject` for nested controls only. Top-level root-decorated classes should extend `RootPageObject`, not `PageObject`.
-
-### 2. Child decorators resolve relative selectors
-
-Decorators such as `@Selector(...)` and `@SelectorByRole(...)` resolve from the **current context**, in order:
-
-1. If the instance already has a decorator-managed locator context (including `PageObject`, `RootPageObject`, and plain classes decorated with `@RootSelector(...)`), selectors chain from that locator.
-2. Otherwise, if the instance has a **Locator-like** **`locator`** property (typical: `constructor(readonly locator: Locator)` on a fragment from a selector factory), selectors chain from **`this.locator`**.
-3. Otherwise, if the instance has a Playwright **`page`** property, selectors chain from **`page.locator("body")`**.
-4. Otherwise resolution throws (see [Decorator reference](#decorator-reference)).
-
-If both **`locator`** and **`page`** are present, **`locator`** wins (fragment / element scope over body).
-
-Scoped root versus body-only host:
+**Scoped root** — establishes a container-level context:
 
 ```ts
 @RootSelector("CheckoutPage")
@@ -164,40 +138,47 @@ class CheckoutPage {
 	@Selector("PromoCodeInput")
 	accessor PromoCodeInput!: Locator;
 }
+
+// Resolves to: page.locator("body").getByTestId("CheckoutPage").getByTestId("PromoCodeInput")
 ```
 
-behaves like:
+**Page-only host** — chains from body without a scoped container:
 
 ```ts
-page.locator("body").getByTestId("CheckoutPage").getByTestId("PromoCodeInput");
+class CheckoutPage {
+	constructor(readonly page: Page) {}
+
+	@Selector("PromoCodeInput")
+	accessor PromoCodeInput!: Locator;
+}
+
+// Resolves to: page.locator("body").getByTestId("PromoCodeInput")
 ```
 
-A host with **only** `page` and **no** `@RootSelector` behaves like **`@RootSelector()`** + child: for the same accessor, the chain is:
+Use a scoped root when relying on a container test id; use page-only when globally unique ids suffice.
+
+### Child decorators resolve from context
+
+Child decorators resolve in this order:
+
+1. Decorator-managed locator context (from `@RootSelector`, `PageObject`, etc.)
+2. `Locator`-like `locator` property (fragments)
+3. Playwright `page` property → `page.locator("body")`
+4. Error if none match
+
+If both `locator` and `page` exist, `locator` wins (element scope > page scope).
+
+### Accessor type determines output shape
+
+- `Locator` — raw Playwright locator
+- **Custom class** — decorator passes resolved locator to that constructor
+- `PageObject` / `ListPageObject` — use built-in helpers
+
+## Output Styles
+
+### 1. Raw Locator (minimal abstraction)
 
 ```ts
-page.locator("body").getByTestId("PromoCodeInput");
-```
-
-Use a **scoped** `@RootSelector("…")` when you rely on a container test id; use a **`page`-only** host when body-level chaining and globally unique ids are enough.
-
-### 3. The accessor value chooses the result shape
-
-The same selector decorators can produce different result shapes:
-
-- `Locator`: declare the accessor as `Locator`
-- external control: pass a constructor or factory as the last decorator argument
-- built-in `PageObject` or `ListPageObject`: initialize the accessor with those classes
-
-## Choose Your Output Style
-
-### Locator-first
-
-Use this when you want decorators now without adopting another base class or abstraction layer yet.
-
-```ts
-import type { Locator, Page } from "@playwright/test";
-import { RootSelector, Selector } from "playwright-page-object";
-
 @RootSelector("CheckoutPage")
 class CheckoutPage {
 	constructor(readonly page: Page) {}
@@ -205,54 +186,36 @@ class CheckoutPage {
 	@Selector("PromoCodeInput")
 	accessor PromoCodeInput!: Locator;
 }
-```
 
-Usage:
-
-```ts
 await checkoutPage.PromoCodeInput.fill("SAVE20");
 ```
 
-You can drop `@RootSelector("CheckoutPage")` here when body scope and globally unique test ids are enough: same accessors, but the class only declares `constructor(readonly page: Page) {}` and imports `Selector` (no root decorator).
+Drop `@RootSelector` if body scope suffices.
 
-### External controls
-
-Use this when you already have your own controls or want reusable abstractions without inheriting from the built-in `PageObject` classes.
+### 2. Custom Controls (reusable abstractions)
 
 ```ts
-import type { Locator, Page } from "@playwright/test";
-import { RootSelector, Selector, SelectorByRole } from "playwright-page-object";
-
 class ExternalInputControl {
 	constructor(readonly locator: Locator) {}
-
 	fill(value: string) {
 		return this.locator.fill(value);
 	}
 }
 
-class ExternalButtonControl {
-	constructor(readonly locator: Locator) {}
-}
-
 @RootSelector("CheckoutPage")
-class ExternalCheckoutPage {
+class CheckoutPage {
 	constructor(readonly page: Page) {}
 
 	@Selector("PromoCodeInput", ExternalInputControl)
 	accessor PromoCode!: ExternalInputControl;
-
-	@SelectorByRole("button", { name: "Apply" }, ExternalButtonControl)
-	accessor ApplyPromoButton!: ExternalButtonControl;
 }
+
+await checkoutPage.PromoCode.fill("SAVE20");
 ```
 
-### Built-in POM layer
-
-Use this when you want batteries-included helpers like `$`, waits, assertions, and list composition.
+### 3. Built-in POM Layer (batteries included)
 
 ```ts
-import type { Locator } from "@playwright/test";
 import {
 	ListPageObject,
 	ListSelector,
@@ -263,11 +226,9 @@ import {
 	SelectorByRole,
 } from "playwright-page-object";
 
-class ButtonControl extends PageObject {}
-
 class CartItemControl extends PageObject {
 	@SelectorByRole("button", { name: "Remove" })
-	accessor RemoveButton = new ButtonControl();
+	accessor RemoveButton = new PageObject();
 }
 
 @RootSelector("CheckoutPage")
@@ -276,149 +237,152 @@ class CheckoutPage extends RootPageObject {
 	accessor PromoCode = new PageObject();
 
 	@SelectorByRole("button", { name: "Apply" })
-	accessor ApplyPromoButton = new ButtonControl();
+	accessor ApplyPromoButton = new PageObject();
 
 	@ListSelector("CartItem_")
 	accessor CartItems = new ListPageObject(CartItemControl);
-
-	@ListSelector("CartItem_")
-	accessor CartItemRows!: Locator;
 }
+
+await checkoutPage.PromoCode.$.fill("SAVE20");
+await checkoutPage.expect().toBeVisible();
+await checkoutPage.CartItems.waitCount(3);
 ```
 
-Give each repeated row a stable prefixed test id in markup (for example `CartItem_${id}`) and use `@ListSelector("CartItem_")` so the regex targets row roots only—not sibling ids such as `CartItemName` or `CartItemPrice`.
+Styles coexist in the same class—mix as needed.
 
-These styles can coexist in the same class. The example app includes a root class that mixes all of them:
-
-- `PageObject` accessors for built-in helpers
-- raw `Locator` accessors for minimal abstraction (including multi-element lists from `@ListSelector` / `@ListStrictSelector`)
-- typed controls for reusable UI elements
-- `ListPageObject` for collections
-
-## Built-In `PageObject` Layer
-
-The built-in base classes are optional convenience layers on top of the same decorator system.
+## Built-In Classes
 
 ### `RootPageObject`
 
-Use `RootPageObject` for root-decorated classes that are created directly from Playwright `Page`.
+Use for root-decorated classes instantiated directly from `page`:
 
 ```ts
 @RootSelector("CheckoutPage")
 class CheckoutPage extends RootPageObject {}
-```
 
-Root page objects remain page-first: construct them with `new CheckoutPage(page)`. They are top-level objects only and cannot be nested under another selector.
+const checkout = new CheckoutPage(page);
+```
 
 ### `PageObject`
 
-Use `PageObject` for nested controls. It provides:
+Use for nested controls. Provides:
 
-- raw locator access via `$`
-- `page` derived from the current root context via `root.page()`
-- Playwright assertions via `.expect()`
-- wait helpers such as `.waitVisible()` and `.waitCount()`
-- nested control composition through selector decorators
+| Feature | Example |
+|---------|---------|
+| Raw locator | `await control.$.click()` |
+| Assertions | `await control.expect().toBeVisible()` |
+| Wait helpers | `await control.waitVisible()` |
+| Page access | `control.page()` |
 
-Examples:
+**Wait methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `.waitVisible()` / `.waitHidden()` | Wait for visibility |
+| `.waitText(text)` | Wait for exact text |
+| `.waitValue(value)` / `.waitNoValue()` | Wait for input value |
+| `.waitCount(count)` | Wait for element count |
+| `.waitChecked()` / `.waitUnChecked()` | Wait for checkbox state |
+| `.waitProp(name, value)` | Wait for React/Vue data prop |
+| `.waitPropAbsence(name)` | Wait for data prop absence |
+
+**Assertion methods:**
 
 ```ts
-await control.$.click();
 await control.expect().toBeVisible();
-await cartItems.waitCount(0);
+await control.expect({ soft: true }).toHaveText("Click me");
+await control.expect({ message: "Button is enabled" }).toBeEnabled();
 ```
-
-Nested `PageObject` subclasses use the default constructor shape `(root?: Locator, selector?: SelectorType)`. If a nested subclass needs custom constructor arguments, implement `cloneWithContext()` so it can rebuild itself with the new `root` and `selector`.
-
-Wait helpers:
-
-| Method | Description |
-| --- | --- |
-| `.waitVisible()` / `.waitHidden()` | Wait for visibility changes. |
-| `.waitText(text)` | Wait for exact text. |
-| `.waitValue(value)` / `.waitNoValue()` | Wait for input value changes. |
-| `.waitCount(count)` | Wait for the resolved count. |
-| `.waitChecked()` / `.waitUnChecked()` | Wait for checkbox or radio state. |
-| `.waitProp(name, value)` | Wait for a React or Vue data prop. |
-| `.waitPropAbsence(name, value)` | Wait for a React or Vue data prop to stop matching a value. |
-
-Assertions:
-
-| Method | Description |
-| --- | --- |
-| `.expect()` | Returns a Playwright `expect(locator)` assertion API. |
-| `.expect({ soft: true })` | Returns the soft-assertion variant. |
-| `.expect({ message: "..." })` | Adds a custom assertion message. |
 
 ### `ListPageObject`
 
-Use `ListPageObject` for repeated child controls and collections.
+Use for repeated child controls:
 
 ```ts
 @ListSelector("CartItem_")
 accessor CartItems = new ListPageObject(CartItemControl);
 ```
 
-Useful APIs:
+**Common APIs:**
 
-- `list.items[0]`
-- `list.items.at(-1)`
-- `for await (const item of list.items) { ... }`
-- `await list.count()`
-- `await list.getAll()`
-- `list.first()`
-- `list.second()`
-- `list.last()`
-- `list.filterByText("Apple")`
-- `list.filterByTestId("CartItem_2")`
-- `list.filterByText("Apple").first()`
-- `list.getItemByText("Apple")`
-- `list.getItemByRole("button", { name: "Remove" })`
-- `list.getItemByIdMask("CartItem_")`
+```ts
+list.items[0]                          // First item
+list.items.at(-1)                      // Last item
+for await (const item of list.items) {} // Iterate
+await list.count()                     // Item count
+list.first()                           // First item (PageObject)
+list.last()                            // Last item (PageObject)
+list.filterByText("Apple")             // Narrow by text
+list.getItemByText("Apple")            // Get one item by text
+list.getItemByRole("button", { name: "Remove" })
+```
 
-Helpers such as `first()`, `second()`, `last()`, `at()`, `getItemByText()`, `getItemByRole()`, and `getItemByIdMask()` return a single item page object. Helpers such as `filter()`, `filterByText()`, and `filterByTestId()` return a narrower `ListPageObject`, so chain `.first()` or `.at(...)` when you need one matched item.
-
-### List rows without `ListPageObject`
-
-You can type the accessor as `Locator` with the same list decorator. That yields Playwright’s multi-element locator (use `.nth()`, `.count()`, `expect(locator).toHaveCount()`, etc.):
+**For Locator-based lists** (multi-element without helpers):
 
 ```ts
 @ListSelector("CartItem_")
 accessor CartItemRows!: Locator;
+
+// Use: cartPage.CartItemRows.nth(0), expect().toHaveCount()
 ```
 
-Prefer row test ids with a **declarative prefix** (`CartItem_1`, `CartItem_2`, …) so `@ListSelector("CartItem_")` stays readable and avoids accidental matches on related ids.
+Prefer declarative row ids (`CartItem_1`, `CartItem_2`) to keep selectors readable.
 
 ## Fixtures
 
-`createFixtures()` works with classes that can be constructed with only `page: Page`. That includes built-in `RootPageObject` classes, plain classes with `@RootSelector`, and plain classes that rely only on a **`page`** property for child decorators (no root class decorator).
-
-If your page object needs additional constructor arguments, create it in your own fixture instead of passing it directly to `createFixtures()`.
+`createFixtures()` works with classes constructible via `new Class(page)`:
 
 ```ts
 import { test as base } from "@playwright/test";
 import { createFixtures } from "playwright-page-object";
 import { CheckoutPage } from "./page-objects/CheckoutPage";
-import { ExternalCheckoutPage } from "./page-objects/ExternalCheckoutPage";
 
-export const test = base.extend<{
-	checkoutPage: CheckoutPage;
-	externalCheckoutPage: ExternalCheckoutPage;
-}>(
+export const test = base.extend<{ checkoutPage: CheckoutPage }>(
 	createFixtures({
 		checkoutPage: CheckoutPage,
-		externalCheckoutPage: ExternalCheckoutPage,
 	}),
 );
 ```
 
+For classes with custom constructor arguments, create them in your own fixture.
+
+## Decorator Reference
+
+### Root Decorators
+
+| Decorator | Playwright API |
+|-----------|----------------|
+| `@RootSelector(id)` | `getByTestId(id)` |
+| `@RootSelector()` | `page.locator("body")` |
+| `@ListRootSelector(id)` | `getByTestId(new RegExp(id))` |
+| `@RootSelectorByRole(...)` | `getByRole(...)` |
+| `@RootSelectorByText(text)` | `getByText(text)` |
+| `@RootSelectorByLabel(...)` | `getByLabel(...)` |
+| `@RootSelectorByPlaceholder(...)` | `getByPlaceholder(...)` |
+| `@RootSelectorByAltText(...)` | `getByAltText(...)` |
+| `@RootSelectorByTitle(...)` | `getByTitle(...)` |
+
+### Child Decorators
+
+| Decorator | Playwright API |
+|-----------|----------------|
+| `@Selector(id)` | `getByTestId(id)` |
+| `@Selector()` | Identity (no chaining) |
+| `@ListSelector(id)` | `getByTestId(new RegExp(id))` |
+| `@ListStrictSelector(id)` | `getByTestId(id)` (strict) |
+| `@SelectorByRole(...)` | `getByRole(...)` |
+| `@SelectorByText(text)` | `getByText(text)` |
+| `@SelectorByLabel(...)` | `getByLabel(...)` |
+| `@SelectorByPlaceholder(...)` | `getByPlaceholder(...)` |
+| `@SelectorByAltText(...)` | `getByAltText(...)` |
+| `@SelectorByTitle(...)` | `getByTitle(...)` |
+| `@SelectorBy(fn)` | Custom locator logic |
+
+Each can return raw `Locator`, custom controls, `PageObject`, or `ListPageObject`.
+
 ## Incremental Adoption
 
-You do not need to migrate your whole suite to a new inheritance model in one go.
-
-### 1. Start locator-first
-
-Decorate existing page classes and keep accessors as raw `Locator`.
+### Step 1: Add decorators, keep Locator output
 
 ```ts
 @RootSelector("CheckoutPage")
@@ -430,81 +394,42 @@ class CheckoutPage {
 }
 ```
 
-When you do not need a container test id, you can omit `@RootSelector("…")` and keep `constructor(readonly page: Page)` only. Tradeoff: selectors are not automatically narrowed to one section; prefer unique `data-testid` values (or add `@RootSelector("…")` later).
-
-### 2. Introduce external controls where repetition appears
-
-When the same locator patterns or UI behavior appear in multiple places, move them into your own control classes that accept a `Locator`.
+### Step 2: Extract reusable controls
 
 ```ts
 @Selector("PromoCodeInput", ExternalInputControl)
 accessor PromoCode!: ExternalInputControl;
 ```
 
-### 3. Adopt the built-in POM layer where it helps
-
-Switch specific areas to `RootPageObject`, `PageObject`, and `ListPageObject` when you want built-in assertions, waits, `$`, or list helpers.
+### Step 3: Adopt PageObject where helpful
 
 ```ts
-@RootSelector("CheckoutPage")
 class CheckoutPage extends RootPageObject {
 	@Selector("PromoCodeInput")
 	accessor PromoCode = new PageObject();
 }
 ```
 
-You can mix all three approaches in the same codebase, fixture setup, and even the same root class.
+Mix all three approaches in the same suite.
 
-## Decorator Reference
+## AI & Assistant Support
 
-### Root decorators
+This package is available in [Context7](https://context7.com/) MCP, so AI assistants can load it directly into context when working with your object property paths.
 
-| Decorator | Playwright mapping |
-| --- | --- |
-| `@RootSelector(id)` | `getByTestId(id)` |
-| `@RootSelector()` | root is `page.locator("body")` |
-| `@ListRootSelector(id)` | `getByTestId(new RegExp(id))` |
-| `@RootSelectorByRole(...)` | `getByRole(...)` |
-| `@RootSelectorByText(text)` | `getByText(text)` |
-| `@RootSelectorByLabel(...)` | `getByLabel(...)` |
-| `@RootSelectorByPlaceholder(...)` | `getByPlaceholder(...)` |
-| `@RootSelectorByAltText(...)` | `getByAltText(...)` |
-| `@RootSelectorByTitle(...)` | `getByTitle(...)` |
+A [Cubic wiki](https://www.cubic.dev/wikis/sergeyshmakov/playwright-page-object) provides AI-ready documentation for this project.
 
-### Child decorators
+It also ships an [Agent Skills](https://agentskills.io/) – compatible skill. Install it so your AI assistant loads data-path guidance:
 
-| Decorator | Playwright mapping |
-| --- | --- |
-| `@Selector(id)` | `getByTestId(id)` |
-| `@Selector()` | identity selector |
-| `@ListSelector(id)` | `getByTestId(new RegExp(id))` |
-| `@ListStrictSelector(id)` | `getByTestId(id)` |
-| `@SelectorByRole(...)` | `getByRole(...)` |
-| `@SelectorByText(text)` | `getByText(text)` |
-| `@SelectorByLabel(...)` | `getByLabel(...)` |
-| `@SelectorByPlaceholder(...)` | `getByPlaceholder(...)` |
-| `@SelectorByAltText(...)` | `getByAltText(...)` |
-| `@SelectorByTitle(...)` | `getByTitle(...)` |
-| `@SelectorBy(fn)` | custom locator logic |
+```bash
+npx ctx7 skills install /sergeyshmakov/playwright-page-object playwright-page-object
+```
 
-**Context resolution for child decorators:** first use the locator context created by decorators / built-in page objects; otherwise a Locator-like **`locator`** property; otherwise Playwright **`page`** → **`page.locator("body")`**; otherwise an error is thrown when the accessor is read.
-
-Child decorators can return:
-
-- raw `Locator` (including list locators from `@ListSelector` / `@ListStrictSelector`)
-- external controls via constructor or factory
-- built-in `PageObject` or `ListPageObject`
-
-## AI Ready
-
-This repo ships an [Agent Skills](https://agentskills.io/) compatible skill for assistants that support project-specific guidance.
-
-The skill lives in [skills/playwright-page-object/SKILL.md](skills/playwright-page-object/SKILL.md). It documents the optional **`page`-only** host pattern, **fragment** controls with **`this.locator`**, scoped roots, and the built-in POM types.
+The skill lives in [skills/playwright-page-object/SKILL.md](skills/playwright-page-object/SKILL.md).
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 ## License
 
-This project is licensed under the [ISC License](LICENSE).
+[ISC License](LICENSE)
