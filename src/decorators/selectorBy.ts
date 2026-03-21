@@ -1,27 +1,24 @@
 import type { Locator, Page } from "@playwright/test";
-import { LOCATOR_SYMBOL } from "../protocol";
-
-/** Mirrors rootSelectors `isLocatorLike` — Locator has both `locator()` and `page()`. */
-function isLocatorLike(
-	value: object,
-): value is Pick<Locator, "locator" | "page"> {
-	return (
-		"locator" in value &&
-		typeof (value as { locator?: unknown }).locator === "function" &&
-		"page" in value &&
-		typeof (value as { page?: unknown }).page === "function"
-	);
-}
+import { isLocatorLike, LOCATOR_SYMBOL } from "../protocol";
 
 /**
  * Fragment / factory controls often use `constructor(readonly locator: Locator)`.
  * When there is no LOCATOR_SYMBOL, that Locator becomes the parent for nested `@Selector*`.
  */
-function tryHostLocatorRoot(instance: object): Locator | undefined {
-	if (!("locator" in instance)) {
-		return undefined;
+function getDataPropertyValue(instance: object, key: PropertyKey): unknown {
+	let current: object | null = instance;
+	while (current !== null) {
+		const descriptor = Object.getOwnPropertyDescriptor(current, key);
+		if (descriptor !== undefined) {
+			return "value" in descriptor ? descriptor.value : undefined;
+		}
+		current = Object.getPrototypeOf(current);
 	}
-	const loc = (instance as { locator?: unknown }).locator;
+	return undefined;
+}
+
+function tryHostLocatorRoot(instance: object): Locator | undefined {
+	const loc = getDataPropertyValue(instance, "locator");
 	if (typeof loc === "object" && loc !== null && isLocatorLike(loc)) {
 		return loc as Locator;
 	}
@@ -33,10 +30,7 @@ function tryHostLocatorRoot(instance: object): Locator | undefined {
  * use `page.locator("body")` as the chain root (same default scope as `@RootSelector()`).
  */
 function tryHostPageBodyRoot(instance: object): Locator | undefined {
-	if (!("page" in instance)) {
-		return undefined;
-	}
-	const page = (instance as { page?: unknown }).page;
+	const page = getDataPropertyValue(instance, "page");
 	if (
 		typeof page === "object" &&
 		page !== null &&

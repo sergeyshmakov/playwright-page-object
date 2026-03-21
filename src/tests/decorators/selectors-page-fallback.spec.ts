@@ -116,6 +116,26 @@ describe("selectors with optional host `page` or `locator` (no @RootSelector)", 
 		expect(mockPage.locator).not.toHaveBeenCalled();
 	});
 
+	it("ignores accessor `locator` and falls back to `page`", () => {
+		class TestHost {
+			constructor(readonly page: Page) {}
+
+			@Selector()
+			accessor locator = bodyLocator as unknown as Locator;
+
+			@Selector("child")
+			accessor child = bodyLocator as unknown as Locator;
+		}
+
+		const instance = new TestHost(mockPage);
+
+		expect(instance.locator).toBe(bodyLocator);
+		instance.child;
+
+		expect(mockPage.locator).toHaveBeenCalledWith("body");
+		expect(bodyLocator.getByTestId).toHaveBeenCalledWith("child");
+	});
+
 	it("throws when host has no LOCATOR_SYMBOL, Locator-like locator, nor Playwright page", () => {
 		class BadHost {
 			@Selector("x")
