@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { PageObject, type SelectorType } from "../page-objects/PageObject";
 import { RootPageObject } from "../page-objects/RootPageObject";
-import { LOCATOR_SYMBOL } from "../protocol";
+import { isLocatorLike, LOCATOR_SYMBOL } from "../protocol";
 
 // biome-ignore lint/suspicious/noExplicitAny: broad constructor helper is required for decorator typing
 type AnyConstructor = new (...args: any[]) => object;
@@ -11,17 +11,6 @@ type PageFirstArgs<TClass extends AnyConstructor> =
 	ConstructorParameters<TClass> extends [Page, ...infer TRest]
 		? [page: Page, ...rest: TRest]
 		: never;
-
-function isLocatorLike(
-	value: object,
-): value is Pick<Locator, "locator" | "page"> {
-	return (
-		"locator" in value &&
-		typeof (value as { locator?: unknown }).locator === "function" &&
-		"page" in value &&
-		typeof (value as { page?: unknown }).page === "function"
-	);
-}
 
 function resolvePage(value: unknown, className: string): Page {
 	if (
