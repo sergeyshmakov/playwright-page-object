@@ -25,6 +25,14 @@ test("should apply promo using Locator-typed accessor (PromoCodeInput)", async (
 	await checkoutPage.expectCartHasItemCount(3);
 });
 
+test("should remove first cart row using @ListSelector Locator (no ListPageObject)", async ({
+	checkoutPage,
+}) => {
+	await checkoutPage.applyPromoCode("SAVE20");
+	await checkoutPage.CartItemRows.nth(0).getByTestId("Remove").click();
+	await checkoutPage.expectCartHasItemCount(2);
+});
+
 test("should empty cart by removing all items", async ({ checkoutPage }) => {
 	const count = await checkoutPage.CartItems.count();
 	for (let i = 0; i < count; i++) {

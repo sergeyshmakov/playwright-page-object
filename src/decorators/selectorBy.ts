@@ -1,14 +1,73 @@
-import type { Locator } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { LOCATOR_SYMBOL } from "../protocol";
+
+/** Mirrors rootSelectors `isLocatorLike` — Locator has both `locator()` and `page()`. */
+function isLocatorLike(
+	value: object,
+): value is Pick<Locator, "locator" | "page"> {
+	return (
+		"locator" in value &&
+		typeof (value as { locator?: unknown }).locator === "function" &&
+		"page" in value &&
+		typeof (value as { page?: unknown }).page === "function"
+	);
+}
+
+/**
+ * Fragment / factory controls often use `constructor(readonly locator: Locator)`.
+ * When there is no LOCATOR_SYMBOL, that Locator becomes the parent for nested `@Selector*`.
+ */
+function tryHostLocatorRoot(instance: object): Locator | undefined {
+	if (!("locator" in instance)) {
+		return undefined;
+	}
+	const loc = (instance as { locator?: unknown }).locator;
+	if (typeof loc === "object" && loc !== null && isLocatorLike(loc)) {
+		return loc as Locator;
+	}
+	return undefined;
+}
+
+/**
+ * When the host has no LOCATOR_SYMBOL but exposes Playwright `Page` as `page`,
+ * use `page.locator("body")` as the chain root (same default scope as `@RootSelector()`).
+ */
+function tryHostPageBodyRoot(instance: object): Locator | undefined {
+	if (!("page" in instance)) {
+		return undefined;
+	}
+	const page = (instance as { page?: unknown }).page;
+	if (
+		typeof page === "object" &&
+		page !== null &&
+		"locator" in page &&
+		typeof (page as { locator?: unknown }).locator === "function" &&
+		!isLocatorLike(page)
+	) {
+		return (page as Page).locator("body");
+	}
+	return undefined;
+}
 
 function resolveLocator(instance: object): Locator {
 	if (LOCATOR_SYMBOL in instance) {
 		return (instance as Record<typeof LOCATOR_SYMBOL, Locator>)[LOCATOR_SYMBOL];
 	}
 
+	const locatorRoot = tryHostLocatorRoot(instance);
+	if (locatorRoot !== undefined) {
+		return locatorRoot;
+	}
+
+	const bodyRoot = tryHostPageBodyRoot(instance);
+	if (bodyRoot !== undefined) {
+		return bodyRoot;
+	}
+
 	throw new Error(
-		"[SelectorBy] Cannot resolve locator: the class does not implement the context protocol (LOCATOR_SYMBOL). " +
-			"Make sure to apply a @RootSelector decorator before using child selector decorators.",
+		"[SelectorBy] Cannot resolve locator: the class does not implement the context protocol (LOCATOR_SYMBOL), " +
+			"and has no Locator-like `locator` property, and has no Playwright `page` property. Use @RootSelector / " +
+			"RootPageObject, add `readonly locator: Locator` (fragment from @Selector factory), or `readonly page: Page`.",
 	);
 }
 
@@ -20,12 +79,30 @@ function resolveLocator(instance: object): Locator {
  *
  * @param selector - Function `(root, value) => value` that returns a locator or PageObject
  *
- * @example
+ * @example RootPageObject + @RootSelector
  * ```ts
  * @RootSelector("sidebar")
  * class Sidebar extends PageObject {
  *   @SelectorBy((root, id) => root.getByTestId(id))
  *   accessor link = "nav-link" as string;
+ * }
+ * ```
+ *
+ * @example Plain host with `page` (no @RootSelector)
+ * ```ts
+ * class Checkout {
+ *   constructor(readonly page: Page) {}
+ *   @Selector("promo")
+ *   accessor promo!: Locator;
+ * }
+ * ```
+ *
+ * @example Fragment with `locator` (from `@Selector(..., Factory)`)
+ * ```ts
+ * class Section {
+ *   constructor(readonly locator: Locator) {}
+ *   @Selector("field")
+ *   accessor field!: Locator;
  * }
  * ```
  */

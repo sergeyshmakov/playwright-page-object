@@ -41,10 +41,13 @@ Page objects compose into a typed graph:
 CheckoutPage (@RootSelector)
 ├── PromoCodeInput (@Selector)
 ├── ApplyPromoButton (@SelectorByRole)
-└── CartItems (@ListStrictSelector)
-    └── CartItemControl
-        └── RemoveButton (@SelectorByRole)
+├── CartItems (@ListSelector CartItem_*)
+│   └── CartItemControl
+│       └── RemoveButton (@SelectorByRole)
+└── CartItemRows (@ListSelector CartItem_*) — raw Locator, no ListPageObject
 ```
+
+Cart line rows use `data-testid` values `CartItem_${id}` in `CartItem.tsx`, so `@ListSelector("CartItem_")` matches every row without colliding with `CartItemName` / `CartItemPrice`.
 
 ### Custom Methods (Repeatable Logic)
 
