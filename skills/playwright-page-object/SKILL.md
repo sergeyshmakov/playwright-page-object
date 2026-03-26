@@ -153,9 +153,13 @@ Use when you need iteration, filtering, or item lookup:
 accessor Items = new ListPageObject(CartItemControl);
 
 await list.waitCount(3);
-const item = list.getItemByText("Apple");
+const filtered = list.filterByText("Apple");
+const item = list.getItemByTestId("CartItem_2");
+await filtered.count();
 for await (const row of list.items) { /* ... */ }
 ```
+
+`filter...` methods return a narrowed `ListPageObject` for chaining (`.first()`, `.count()`, `.getAll()`, async iteration). `getItemBy...` methods return a single item. `filterByTestId()` matches the row item's own test id; use `filterByHasTestId()` when you need Playwright `has`-style matching for rows containing a child with that test id.
 
 ### Raw Locator (pure Playwright)
 Use when you want `.nth()`, `.count()`, and basic element operations:

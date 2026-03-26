@@ -312,10 +312,14 @@ for await (const item of list.items) {} // Iterate
 await list.count()                     // Item count
 list.first()                           // First item (PageObject)
 list.last()                            // Last item (PageObject)
-list.filterByText("Apple")             // Narrow by text
-list.getItemByText("Apple")            // Get one item by text
-list.getItemByRole("button", { name: "Remove" })
+list.filterByText("Apple")             // Narrowed ListPageObject
+list.filterByTestId("CartItem_2")      // Narrow by item test id
+list.getItemByText("Apple")            // First matching item
+list.getItemByTestId("CartItem_2")     // First item by item test id
+list.getItemByRole("button", { name: "Remove" }) // First item containing that role
 ```
+
+`filter...` methods return a narrowed `ListPageObject`, so you can continue with `.first()`, `.count()`, `.getAll()`, or `for await...of`. `getItemBy...` methods return a single item. Use `filterByHasTestId()` when you want Playwright `has`-style matching for rows containing a child with a given test id instead of matching the row's own test id.
 
 **For Locator-based lists** (multi-element without helpers):
 
