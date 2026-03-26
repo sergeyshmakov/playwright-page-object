@@ -77,7 +77,7 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns items matching the given Playwright filter options.
+	 * Returns a narrowed list matching the given Playwright filter options.
 	 * @param options - Playwright locator filter (e.g. `{ hasText: 'foo' }`)
 	 * @returns Narrowed list page object containing the filtered item(s)
 	 */
@@ -86,7 +86,7 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns items containing the given text.
+	 * Returns a narrowed list of items containing the given text.
 	 * @param text - Text to match (string or regex)
 	 * @returns Narrowed list page object containing the matching item(s)
 	 */
@@ -95,21 +95,39 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns items that contain an element with the given test id.
+	 * Returns a narrowed list of items whose own test id matches the given value.
 	 * @param id - Test id (string or regex)
 	 * @returns Narrowed list page object containing the matching item(s)
 	 */
 	filterByTestId(id: string | RegExp): this {
-		return this.filter({ has: this.page.getByTestId(id) });
+		return this.resolveList((p) => p.and(this.page.getByTestId(id)));
 	}
 
 	/**
-	 * Returns the item whose test id matches the given regex pattern.
-	 * @param mask - Regex pattern string for test id
+	 * Returns a narrowed list of items whose locator matches Playwright's `has` filter for the given test id.
+	 * @param id - Test id (string or regex)
+	 * @returns Narrowed list page object containing the matching item(s)
+	 */
+	filterByHasTestId(id: string | RegExp): this {
+		return this.resolveList((p) => p.filter({ has: p.getByTestId(id) }));
+	}
+
+	/**
+	 * Returns the item whose own test id matches the given value.
+	 * @param id - Test id (string or regex)
+	 * @returns PageObject for the matching item
+	 */
+	getItemByTestId(id: string | RegExp): TItem {
+		return this.filterByTestId(id).first();
+	}
+
+	/**
+	 * Returns the item whose own test id matches the given regex pattern.
+	 * @param mask - Regex pattern string for the item test id
 	 * @returns PageObject for the matching item
 	 */
 	getItemByIdMask(mask: string): TItem {
-		return this.filterByTestId(new RegExp(mask)).first();
+		return this.getItemByTestId(new RegExp(mask));
 	}
 
 	/** Returns the first item (index 0). */
@@ -137,7 +155,7 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns the item matching the given ARIA role and options.
+	 * Returns the first item containing an element matching the given ARIA role and options.
 	 * @param args - Same as {@link Locator.getByRole}
 	 * @returns PageObject for the matching item
 	 */

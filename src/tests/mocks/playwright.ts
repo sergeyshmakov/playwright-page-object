@@ -11,6 +11,7 @@ export type MockLocator = Locator & {
 	getByTitle: ReturnType<typeof vi.fn>;
 	nth: ReturnType<typeof vi.fn>;
 	filter: ReturnType<typeof vi.fn>;
+	and: ReturnType<typeof vi.fn>;
 	locator: ReturnType<typeof vi.fn>;
 	first: ReturnType<typeof vi.fn>;
 	click: ReturnType<typeof vi.fn>;
@@ -43,6 +44,7 @@ export function createMockLocator(page?: Page): MockLocator {
 		first: vi.fn().mockImplementation(() => createMockLocator(page)),
 		nth: vi.fn().mockImplementation(() => createMockLocator(page)),
 		filter: vi.fn().mockImplementation(() => createMockLocator(page)),
+		and: vi.fn().mockImplementation(() => createMockLocator(page)),
 		click: vi.fn().mockResolvedValue(undefined),
 		dblclick: vi.fn().mockResolvedValue(undefined),
 		hover: vi.fn().mockResolvedValue(undefined),
