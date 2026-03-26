@@ -215,9 +215,9 @@ describe("ListPageObject", () => {
 		});
 
 		it("filterByHasTestId(id) returns a narrowed list matching Playwright has test ids", () => {
-			const descendantLocator = createMockLocator(mockPage);
+			const pageTestIdLocator = createMockLocator(mockPage);
 			const filteredLocator = createMockLocator(mockPage);
-			mockLocator.getByTestId = vi.fn().mockReturnValue(descendantLocator);
+			mockPage.getByTestId = vi.fn().mockReturnValue(pageTestIdLocator);
 			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
 			const list = createList();
 
@@ -225,9 +225,10 @@ describe("ListPageObject", () => {
 
 			expect(result).toBeInstanceOf(ListPageObject);
 			expect(result.$).toBe(filteredLocator);
-			expect(mockLocator.getByTestId).toHaveBeenCalledWith("myChildId");
+			expect(mockPage.getByTestId).toHaveBeenCalledWith("myChildId");
+			expect(mockLocator.getByTestId).not.toHaveBeenCalled();
 			expect(mockLocator.filter).toHaveBeenCalledWith({
-				has: descendantLocator,
+				has: pageTestIdLocator,
 			});
 		});
 

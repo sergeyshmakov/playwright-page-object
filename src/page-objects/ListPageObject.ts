@@ -104,12 +104,14 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns a narrowed list of items whose locator matches Playwright's `has` filter for the given test id.
+	 * Returns a narrowed list of items that contain a descendant with the given test id using Playwright's `has` filter.
 	 * @param id - Test id (string or regex)
 	 * @returns Narrowed list page object containing the matching item(s)
 	 */
 	filterByHasTestId(id: string | RegExp): this {
-		return this.resolveList((p) => p.filter({ has: p.getByTestId(id) }));
+		return this.resolveList((p) =>
+			p.filter({ has: this.page.getByTestId(id) }),
+		);
 	}
 
 	/**
