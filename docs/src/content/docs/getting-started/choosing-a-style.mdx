@@ -52,8 +52,8 @@ class CheckoutPage extends RootPageObject {
 The decorator decides what shape to produce based on how you declare the accessor:
 
 - `accessor X!: Locator` → raw `Locator`
-- `@Selector("Id", MyClass)` → instance of `MyClass`, constructed with the resolved locator
-- `accessor X = new PageObject()` → `PageObject` (or subclass), bound to the parent's scope
+- `@Selector("Id", MyClass)` → instance of a plain control class `MyClass`, constructed with the resolved locator. `MyClass` must not extend `PageObject` — use the initializer form below for that case.
+- `accessor X = new PageObject()` → `PageObject` (or subclass), cloned and bound to the parent's scope on each access
 
 ## Adoption path
 
