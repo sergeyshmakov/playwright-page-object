@@ -4,7 +4,6 @@ Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator
 
 [![npm version](https://img.shields.io/npm/v/playwright-page-object.svg)](https://www.npmjs.com/package/playwright-page-object)
 [![CI](https://github.com/sergeyshmakov/playwright-page-object/actions/workflows/pr.yml/badge.svg)](https://github.com/sergeyshmakov/playwright-page-object/actions/workflows/pr.yml)
-[![Bundle size](https://img.shields.io/bundlephobia/minzip/playwright-page-object)](https://bundlephobia.com/package/playwright-page-object)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
