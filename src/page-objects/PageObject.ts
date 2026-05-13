@@ -106,7 +106,10 @@ export class PageObject {
 	): value is new (
 		...args: TArgs
 	) => PageObject {
-		return typeof value === "function" && value.prototype instanceof PageObject;
+		return (
+			typeof value === "function" &&
+			(value === PageObject || value.prototype instanceof PageObject)
+		);
 	}
 
 	/**

@@ -127,6 +127,17 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				void TestPage;
 			}).toThrow(/ButtonControl.*extends PageObject.*accessor initializer/);
 		});
+
+		it("throws when the base PageObject class itself is passed as factory arg", () => {
+			expect(() => {
+				@RootSelector()
+				class TestPage extends RootPageObject {
+					@Selector("Btn", PageObject)
+					accessor btn!: PageObject;
+				}
+				void TestPage;
+			}).toThrow(/PageObject.*extends PageObject.*accessor initializer/);
+		});
 	});
 
 	describe("SelectorByText", () => {
