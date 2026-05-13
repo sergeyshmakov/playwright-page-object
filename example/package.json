@@ -21,6 +21,6 @@
 		"@vitejs/plugin-react": "^4.3.4",
 		"playwright-page-object": "file:../playwright-page-object.tgz",
 		"typescript": "^5.9.3",
-		"vite": "^6.0.3"
+		"vite": "^6.4.2"
 	}
 }
