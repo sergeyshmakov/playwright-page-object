@@ -1,6 +1,6 @@
 {
 	"name": "playwright-page-object",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator chains in plain TypeScript classes.",
 	"license": "MIT",
 	"type": "commonjs",

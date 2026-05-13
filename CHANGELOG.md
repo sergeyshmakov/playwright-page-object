@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.0.0...v2.0.1) (2026-05-13)
+
+
+### Bug Fixes
+
+* remove boundlesize from readme ([ef8960d](https://github.com/sergeyshmakov/playwright-page-object/commit/ef8960d1300949fba08b22904d85de2aa46df636))
+
 # [2.0.0](https://github.com/sergeyshmakov/playwright-page-object/compare/v1.4.2...v2.0.0) (2026-05-13)
 
 
