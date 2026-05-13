@@ -1,14 +1,12 @@
-import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 
 const REPO_URL = "https://github.com/sergeyshmakov/playwright-page-object";
 
 export default defineConfig({
-	site: "https://sergeyshmakov.github.io",
+	site: "https://sergeyshmakov.github.io/playwright-page-object",
 	base: "/playwright-page-object",
 	integrations: [
-		sitemap(),
 		starlight({
 			title: "playwright-page-object",
 			description:
