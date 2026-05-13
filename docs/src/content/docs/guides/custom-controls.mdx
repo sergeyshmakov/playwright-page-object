@@ -10,8 +10,9 @@ This is the recommended way to integrate an existing control library without com
 ## Minimal example
 
 ```ts
-import type { Locator } from "@playwright/test";
-import { Selector } from "playwright-page-object";
+import type { Locator, Page } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { RootSelector, Selector } from "playwright-page-object";
 
 class InputControl {
   constructor(readonly locator: Locator) {}
