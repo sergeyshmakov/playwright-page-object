@@ -6,7 +6,7 @@ Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator
 [![CI](https://github.com/sergeyshmakov/playwright-page-object/actions/workflows/pr.yml/badge.svg)](https://github.com/sergeyshmakov/playwright-page-object/actions/workflows/pr.yml)
 [![Bundle size](https://img.shields.io/bundlephobia/minzip/playwright-page-object)](https://bundlephobia.com/package/playwright-page-object)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Documentation:** [https://sergeyshmakov.github.io/playwright-page-object/](https://sergeyshmakov.github.io/playwright-page-object/)
 
@@ -161,4 +161,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[ISC License](LICENSE)
+[MIT License](LICENSE)
