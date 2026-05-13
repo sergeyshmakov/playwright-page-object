@@ -1,51 +1,57 @@
 # Contributing to `playwright-page-object`
 
-First off, thank you for being here! 🎉 
+Thanks for taking the time to contribute.
 
-I'm a solo maintainer working on this project in my free time, and I am thrilled that you want to help make it better. To keep things moving smoothly and respect everyone's time, I just have a few simple guidelines.
+This project is maintained by a single person in their free time. The guidelines below keep things moving smoothly and respect everyone's time.
 
-## 💡 The Golden Rule: Let's talk first!
+## Code of Conduct
 
-**Bugs & Typos:** Did you find a bug, a typo, or something broken? Feel free to open a Pull Request directly! No need to ask.
+By participating in this project, you agree to abide by the [Code of Conduct](.github/CODE_OF_CONDUCT.md).
 
-**New Features & Big Changes:** Before you spend your valuable time writing code for a new feature, **please open an Issue first to discuss it.** 
-Why? Because I want to make sure your idea fits the vision of the project, doesn't duplicate ongoing work, and uses an architecture we agree on. I would hate to reject a massive PR that you spent hours on just because we didn't chat first!
+## Talk first for non-trivial work
 
-## 🛠️ Local Development
+- **Bugs and typos:** open a pull request directly. No need to ask.
+- **New features and breaking changes:** open an issue first so we can agree on scope and design before you invest time in a PR.
 
-Setting up the project is super simple. We don't have a massive web of tools—just install and build!
+This prevents the painful case of a large PR being rejected because of a direction we could have settled in a five-minute discussion.
 
-1. **Fork & Clone** the repository.
-2. **Install dependencies:**
-   ```bash
-   npm ci
-   ```
-3. **Run the dev watcher:**
-   ```bash
-   npm run dev
-   ```
-   *This uses `tsup` to instantly rebuild the MCP server whenever you save a file.*
+## Local development
 
-## 🎨 Code Style (Zero Config!)
+```bash
+npm ci
+npm run dev      # tsup watch mode
+npm test         # vitest
+npm run lint     # biome check
+```
 
-You don't need to configure your editor, set up ESLint, or worry about formatting rules. We use **Biome**.
+## Code style
 
-Just write your code naturally. When you are ready to commit, our Husky pre-commit hook will automatically format your files and fix any basic linting errors in milliseconds. 
+Formatting and linting are handled by [Biome](https://biomejs.dev/). A Husky pre-commit hook formats staged files automatically. To run it manually:
 
-If you want to run it manually before committing:
 ```bash
 npm run lint:fix
 ```
 
-## 📦 Committing & Publishing
+No editor configuration is required.
 
-We use automated releases, which means your commit messages dictate the version numbers and the changelog. 
+## Commits and releases
 
-When you run `git commit`, you must use **Conventional Commits**:
-* `feat: added a new tool` (Triggers a Minor release, e.g., 1.1.0)
-* `fix: resolved crash on startup` (Triggers a Patch release, e.g., 1.0.1)
-* `docs: updated readme` (No release triggered)
+Commits must follow [Conventional Commits](https://www.conventionalcommits.org/):
 
-*(Don't worry, if you format it wrong, the terminal will kindly reject the commit and ask you to fix it!)*
+- `feat: ...` — minor version bump
+- `fix: ...` — patch version bump
+- `docs: ...`, `chore: ...`, `refactor: ...` — no release
 
-Once your PR is merged into `main`, GitHub Actions will automatically compile the code, write the release notes, and publish the new version to NPM. You don't need to bump any version numbers in `package.json`.
+Releases are automated via `semantic-release` on merge to `main`. Do not bump the version in `package.json` manually.
+
+## Docs
+
+The documentation site lives in [`docs/`](./docs) and is built with Astro Starlight. To preview locally:
+
+```bash
+cd docs
+npm install
+npm run dev
+```
+
+Public-API changes should be reflected in the relevant guide and API reference pages.
