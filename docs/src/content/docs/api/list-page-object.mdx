@@ -1,0 +1,160 @@
+---
+title: ListPageObject
+description: Typed iteration, filtering, and item lookup for repeated children.
+---
+
+`ListPageObject` is the base for accessors that resolve to multiple matching elements. Pair with `@ListSelector(...)` or `@ListRootSelector(...)`.
+
+```ts
+import {
+  ListPageObject,
+  ListSelector,
+  PageObject,
+  RootPageObject,
+  RootSelector,
+} from "playwright-page-object";
+
+class CartItemControl extends PageObject {
+  @Selector("Name")
+  accessor Name = new PageObject();
+}
+
+@RootSelector("CartPage")
+class CartPage extends RootPageObject {
+  @ListSelector("CartItem_")
+  accessor Items = new ListPageObject(CartItemControl);
+}
+```
+
+## Constructor
+
+```ts
+new ListPageObject(itemType?)
+```
+
+`itemType` is either:
+- a `PageObject` subclass constructor — items are `new ItemType()` then bound via `cloneWithContext`,
+- a `PageObject` *instance* — items are cloned via `cloneWithContext`,
+- `undefined` — items are typed as `PageObject` (no custom helpers).
+
+Invalid `itemType` throws at construction time:
+
+```ts
+new ListPageObject("not a class");  // throws
+new ListPageObject(42);              // throws
+```
+
+## Inherited from `PageObject`
+
+- `.$` — raw `Locator` matching all items (use `.count()`, `.nth(i)` etc.)
+- `.page()` — the underlying `Page`.
+- `.expect()` — assertion API on the multi-element locator.
+- `waitCount(n)` — wait until the list has `n` items.
+
+## List-specific API
+
+### `.items` — typed proxy
+
+`.items` is a lazy proxy that supports numeric indexing, `.at()`, and async iteration:
+
+```ts
+list.items[0];          // first item, typed as itemType
+list.items.at(-1);      // last item
+for await (const item of list.items) { /* ... */ }
+```
+
+Each access constructs a fresh item bound to that index.
+
+### `.count()`
+
+Returns `Promise<number>` of matching elements.
+
+```ts
+const n = await list.count();
+```
+
+### `.first()` / `.last()`
+
+Return a single item bound to the first / last match.
+
+```ts
+const head = list.first();
+const tail = list.last();
+```
+
+### `.getAll()`
+
+Returns an array of all items (resolved at call time).
+
+```ts
+const all = await list.getAll();
+for (const item of all) { /* ... */ }
+```
+
+## Filter methods (return narrowed `ListPageObject`)
+
+Each filter returns a new `ListPageObject` of the same item type, narrowed to matching items. Chain `.first()`, `.count()`, `.getAll()`, or async iteration.
+
+| Method | Matches when |
+|--------|---|
+| `filterByText(text)` | item contains `text` (`string \| RegExp`) |
+| `filterByItemTestId(id)` | the item row itself has `data-testid={id}` (`string \| RegExp`) |
+| `filterByHasTestId(id)` | the item row contains a descendant with `data-testid={id}` |
+| `filterByRole(...)` | the item row contains an element matching the role |
+
+```ts
+const apples = list.filterByText("Apple");
+await apples.count();
+
+const named = list.filterByItemTestId("CartItem_2");
+const withRemoveButton = list.filterByHasTestId("RemoveButton");
+```
+
+## Lookup methods (return single item)
+
+Each returns a single item bound to the first match.
+
+| Method | Returns |
+|--------|---|
+| `getItemByText(text)` | first item containing `text` |
+| `getItemByTestId(id)` | first item with `data-testid={id}` (`string \| RegExp`) |
+| `getItemByRole(...)` | first item containing the role |
+
+```ts
+const apple = list.getItemByText("Apple");
+const second = list.getItemByTestId("CartItem_2");
+const byPattern = list.getItemByTestId(/^CartItem_/);
+const removable = list.getItemByRole("button", { name: "Remove" });
+```
+
+## `filterByItemTestId` vs `filterByHasTestId`
+
+```html
+<div data-testid="CartItem_1">
+  <span data-testid="Name">Apple</span>
+  <button data-testid="RemoveButton">Remove</button>
+</div>
+```
+
+- `filterByItemTestId("CartItem_1")` → matches this row (own `data-testid`).
+- `filterByHasTestId("RemoveButton")` → matches this row (descendant `data-testid`).
+
+The two methods address different cases — pick by which level the id lives on.
+
+## With raw `Locator`
+
+If you don't need item helpers, decorate with `@ListSelector` but type the accessor as `Locator`:
+
+```ts
+@ListSelector("CartItem_")
+accessor Rows!: Locator;
+
+const count = await cart.Rows.count();
+const second = cart.Rows.nth(1);
+```
+
+## See also
+
+- [Lists guide](/playwright-page-object/guides/lists/) — walkthrough with examples.
+- [Decorator API](/playwright-page-object/api/decorators/) — `@ListSelector` and `@ListRootSelector` reference.
+- [PageObject](/playwright-page-object/api/page-object/) — base class for item types.

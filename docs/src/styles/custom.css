@@ -1,0 +1,18 @@
+/* Balanced accent palette across light and dark modes.
+ * Tuned so the active sidebar item reads with the same visual weight
+ * in both themes — a confident blue rather than neon (light) or pale (dark).
+ */
+
+/* Dark mode (Starlight's default :root scope). */
+:root {
+	--sl-color-accent-low: #172554;
+	--sl-color-accent: #3b82f6;
+	--sl-color-accent-high: #bfdbfe;
+}
+
+/* Light mode override. */
+:root[data-theme="light"] {
+	--sl-color-accent-low: #dbeafe;
+	--sl-color-accent: #2563eb;
+	--sl-color-accent-high: #1e3a8a;
+}

@@ -1,0 +1,86 @@
+---
+title: RootPageObject
+description: Base class for root-level page objects instantiated from a Page.
+---
+
+`RootPageObject` is the base for top-level page objects. It is constructed with `Page` and pairs with a root decorator (`@RootSelector`, `@RootSelectorByRole`, etc.).
+
+```ts
+import {
+  PageObject,
+  RootPageObject,
+  RootSelector,
+  Selector,
+} from "playwright-page-object";
+
+@RootSelector("CheckoutPage")
+class CheckoutPage extends RootPageObject {
+  @Selector("PromoCode")
+  accessor PromoCode = new PageObject();
+}
+
+const checkout = new CheckoutPage(page);
+```
+
+## Constructor
+
+```ts
+new CheckoutPage(page);
+```
+
+The first argument must be a Playwright `Page`. The root decorator wires the resolved root locator into the instance — without a root decorator, the class will not resolve children correctly.
+
+## Inherited members
+
+`RootPageObject` extends `PageObject`, so all the [`PageObject` members](/playwright-page-object/api/page-object/) are available:
+
+- `.$` — raw `Locator` for the root.
+- `.page()` — the underlying `Page`.
+- `.expect(options?)` — Playwright assertion API on `.$`.
+- `waitVisible()`, `waitText()`, `waitValue()`, etc.
+
+```ts
+await checkout.expect().toBeVisible();
+await checkout.waitVisible();
+const page = checkout.page();
+```
+
+## When to extend `RootPageObject`
+
+- You want wait helpers and `.expect()` on the page itself.
+- The class has nested `PageObject` accessors that rely on the root decorator's scope.
+
+For plain page objects without those needs, use a plain class with `@RootSelector(...)`. See [Plain Classes](/playwright-page-object/guides/plain-classes/).
+
+## Constraint: must pair with a root decorator
+
+```ts
+// Without @RootSelector — child accessors will not resolve correctly.
+class A extends RootPageObject {}
+
+// With @RootSelector — fully wired.
+@RootSelector("Page")
+class B extends RootPageObject {}
+```
+
+If you need a `RootPageObject` scoped to the whole page (no container), use `@RootSelector()` with no argument:
+
+```ts
+@RootSelector()
+class AppPage extends RootPageObject {}
+// Scope: page.locator("body")
+```
+
+## Static guards
+
+| Static | Returns |
+|--------|---------|
+| `RootPageObject.isRootClass(v)` | `true` if `v` is a class extending `RootPageObject` |
+
+Used internally to distinguish `RootPageObject` subclasses from generic `PageObject` subclasses when applying root decorators.
+
+## See also
+
+- [PageObject](/playwright-page-object/api/page-object/) — the base class.
+- [Decorator API](/playwright-page-object/api/decorators/) — all root decorators.
+- [Built-In POM guide](/playwright-page-object/guides/built-in-pom/) — walkthrough.

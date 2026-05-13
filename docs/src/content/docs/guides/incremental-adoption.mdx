@@ -1,0 +1,94 @@
+---
+title: Incremental Adoption
+description: Add the library to an existing Playwright suite without rewriting it.
+---
+
+The library is designed for staged adoption. You can start with one page object and one accessor, leave the rest of the suite untouched, and add structure where it pays back.
+
+## Step 1: replace one chain with an accessor
+
+Pick the most-duplicated locator chain in your suite. Wrap it in a class:
+
+```ts
+// Before
+test("apply promo", async ({ page }) => {
+  await page.getByTestId("CheckoutPage").getByTestId("PromoCodeInput").fill("SAVE20");
+});
+
+// After
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
+}
+
+test("apply promo", async ({ page }) => {
+  const checkout = new CheckoutPage(page);
+  await checkout.PromoCodeInput.fill("SAVE20");
+});
+```
+
+That's it. No fixtures, no inheritance, no migration of other tests.
+
+## Step 2: extract a control when a selector repeats
+
+If the same `PromoCodeInput` accessor appears across many specs and you keep writing the same `.fill().expect().toHaveValue()` pattern, extract it:
+
+```ts
+class InputControl {
+  constructor(readonly locator: Locator) {}
+
+  async fillAndVerify(value: string) {
+    await this.locator.fill(value);
+    await expect(this.locator).toHaveValue(value);
+  }
+}
+
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput", InputControl)
+  accessor PromoCode!: InputControl;
+}
+```
+
+The control is reusable in every other page object that has a similar input.
+
+## Step 3: adopt PageObject where helpers add value
+
+If you find yourself writing wait helpers or `.expect()` chains repeatedly, switch the accessor to `PageObject`:
+
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage extends RootPageObject {
+  @Selector("PromoCodeInput")
+  accessor PromoCode = new PageObject();
+}
+
+// Capture the accessor in a variable — the chain rebuilds lazily on every use.
+const promo = checkout.PromoCode;
+
+await promo.waitVisible();
+await promo.$.fill("SAVE20");
+await promo.expect({ soft: true }).toHaveValue("SAVE20");
+```
+
+Switching one accessor does not require changing others. Mix styles in the same class.
+
+## Why this works
+
+- **Decorators are scoped per accessor.** Changing one accessor does not affect siblings.
+- **`Locator`, custom controls, and `PageObject` coexist.** No "you must extend X" rule.
+- **Fixtures are optional.** Manual `new CheckoutPage(page)` keeps existing test files untouched.
+
+## Don't refactor too early
+
+Three similar `.fill()` calls is not duplication. Five similar `await expect(...).toHaveValue(...)` chains across pages is the threshold where extracting a control pays back. Until then, the cost of the abstraction exceeds its value.
+
+## See also
+
+- [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/) — when to use each pattern.
+- [Plain Classes](/playwright-page-object/guides/plain-classes/), [Custom Controls](/playwright-page-object/guides/custom-controls/), [Built-In POM](/playwright-page-object/guides/built-in-pom/) — the three styles.

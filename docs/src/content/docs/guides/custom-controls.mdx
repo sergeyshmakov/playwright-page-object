@@ -1,0 +1,96 @@
+---
+title: Custom Controls
+description: Wrap selectors in your own control classes with typed methods.
+---
+
+A *custom control* is any class whose constructor accepts a `Locator`. Pass it as the second argument to `@Selector(...)` (or any selector decorator) and the decorator constructs it with the resolved locator.
+
+This is the recommended way to integrate an existing control library without committing to the built-in `PageObject` hierarchy.
+
+## Minimal example
+
+```ts
+import type { Locator } from "@playwright/test";
+import { Selector } from "playwright-page-object";
+
+class InputControl {
+  constructor(readonly locator: Locator) {}
+
+  async fill(value: string) {
+    await this.locator.fill(value);
+  }
+
+  async expectValue(value: string) {
+    await expect(this.locator).toHaveValue(value);
+  }
+}
+
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput", InputControl)
+  accessor PromoCode!: InputControl;
+}
+
+// Usage
+await checkoutPage.PromoCode.fill("SAVE20");
+await checkoutPage.PromoCode.expectValue("SAVE20");
+```
+
+## Factory function form
+
+If your control needs extra constructor arguments, pass an arrow function instead of a class:
+
+```ts
+class TimedInputControl {
+  constructor(readonly locator: Locator, readonly timeout: number) {}
+}
+
+@Selector("PromoCodeInput", (locator) => new TimedInputControl(locator, 5000))
+accessor PromoCode!: TimedInputControl;
+```
+
+The decorator detects the difference: classes (with a `prototype`) get `new`-called; arrow functions get called directly.
+
+## With any selector decorator
+
+All selector decorators accept a control class as their last argument:
+
+```ts
+@SelectorByRole("button", { name: "Apply" }, ButtonControl)
+accessor ApplyButton!: ButtonControl;
+
+@SelectorByText("Submit", ButtonControl)
+accessor SubmitButton!: ButtonControl;
+
+@SelectorByLabel("Email", InputControl)
+accessor EmailField!: InputControl;
+```
+
+## Constraint: do not pass a `PageObject` subclass
+
+`PageObject` instances are nested via the *initializer form*, not the factory form. Passing a `PageObject` subclass as the second argument throws at decoration time:
+
+```ts
+// Throws — PageObject subclasses must be initialized, not passed.
+@Selector("PromoCode", PromoCodePageObject)
+accessor PromoCode!: PromoCodePageObject;
+
+// Correct — initialize the instance.
+@Selector("PromoCode")
+accessor PromoCode = new PromoCodePageObject();
+```
+
+This protects the `cloneWithContext` nesting contract that `PageObject` relies on. See [Built-In POM](/playwright-page-object/guides/built-in-pom/) for the initializer form.
+
+## When to pick this style
+
+- Your team already has a control library.
+- Selectors repeat enough to deserve a named, typed abstraction.
+- You want methods like `.fill()` or `.click()` without the full `PageObject` surface.
+
+## See also
+
+- [Built-In POM](/playwright-page-object/guides/built-in-pom/) — for `PageObject`-based controls with wait helpers.
+- [Fragments](/playwright-page-object/guides/fragments/) — the same constructor shape, used for sub-trees with their own decorators.

@@ -1,0 +1,128 @@
+---
+title: Context Resolution
+description: How child decorators find their root locator.
+---
+
+When a decorated accessor is read, the library walks a fixed priority list to determine the *root locator* it chains from. Understanding this list explains every host pattern in the library.
+
+## Priority order
+
+For a class instance `host`:
+
+1. **Decorator-managed locator** — set by `@RootSelector(...)`, `@RootSelectorByRole(...)`, etc., on the class. Stored under an internal `LOCATOR_SYMBOL`.
+2. **`locator` property** — a Playwright `Locator`-like value on `host.locator`. Used by *fragments* and *custom controls*.
+3. **`page` property** — a Playwright `Page`-like value on `host.page`. Falls back to `host.page.locator("body")`.
+4. **Throw** — if none match.
+
+The first match wins.
+
+## Examples
+
+### 1. Decorator-managed (scoped root)
+
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("Promo")
+  accessor Promo!: Locator;
+}
+// Promo resolves to: page.locator("body").getByTestId("CheckoutPage").getByTestId("Promo")
+```
+
+The `@RootSelector` decorator stores `page.locator("body").getByTestId("CheckoutPage")` under `LOCATOR_SYMBOL`. Child accessors find it via priority 1.
+
+### 2. `locator` property (fragment)
+
+```ts
+class PromoSection {
+  constructor(readonly locator: Locator) {}
+
+  @Selector("CodeInput")
+  accessor CodeInput!: Locator;
+}
+// CodeInput resolves to: locator.getByTestId("CodeInput")
+```
+
+There is no `LOCATOR_SYMBOL` (no `@RootSelector`). The `locator` property is used directly — priority 2.
+
+### 3. `page` property (page-only host)
+
+```ts
+class HomePage {
+  constructor(readonly page: Page) {}
+
+  @Selector("Welcome")
+  accessor Welcome!: Locator;
+}
+// Welcome resolves to: page.locator("body").getByTestId("Welcome")
+```
+
+No `LOCATOR_SYMBOL`, no `locator` property. The `page` property is used via `page.locator("body")` — priority 3.
+
+## Edge cases
+
+### Both `locator` and `page` present
+
+```ts
+class Hybrid {
+  constructor(readonly page: Page, readonly locator: Locator) {}
+}
+```
+
+Priority 2 wins. `locator` is the more specific scope, so it takes precedence over `page.locator("body")`.
+
+### `@RootSelector()` with no argument
+
+Sets the scope to `page.locator("body")` — the same as a page-only host:
+
+```ts
+@RootSelector()
+class A { constructor(readonly page: Page) {} }
+
+class B { constructor(readonly page: Page) {} }
+
+// A and B have identical child resolution.
+```
+
+Use `@RootSelector()` only when the class extends `RootPageObject` — that base class relies on the decorator to wire up its internal state.
+
+### `@Selector()` with no argument
+
+The *identity* selector — returns the resolved root unchanged:
+
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector()
+  accessor self!: Locator;
+}
+// self resolves to: page.locator("body").getByTestId("CheckoutPage")
+```
+
+Useful for exposing the root locator directly.
+
+### No matching priority
+
+If none of the three sources are present, accessing the decorated accessor throws:
+
+```
+Cannot resolve locator: the class does not implement the context
+protocol (LOCATOR_SYMBOL), and has no Locator-like `locator`
+property, and has no Playwright `page` property.
+```
+
+Fix: add `@RootSelector(...)`, or a `readonly locator: Locator`, or a `readonly page: Page` to the host.
+
+## Why this design
+
+Every host pattern in the library — scoped root, page-only, fragment, custom control, built-in POM — is a different position on this priority list. There is one resolution rule, not four; the patterns just compose it differently.
+
+## See also
+
+- [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/) — which pattern to pick.
+- [Decorator API](/playwright-page-object/api/decorators/) — full decorator reference.
+- [Troubleshooting](/playwright-page-object/reference/troubleshooting/) — common resolution errors.

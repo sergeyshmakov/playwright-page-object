@@ -1,0 +1,89 @@
+---
+title: Fragments
+description: Reusable sub-trees that inherit context from their parent locator.
+---
+
+A *fragment* is a class whose first constructor argument is `Locator` (not `Page`). It has no root decorator. Child decorators inside it chain from that `locator`, which is passed in by the parent.
+
+## Minimal example
+
+```ts
+import type { Locator } from "@playwright/test";
+import { Selector } from "playwright-page-object";
+
+class PromoSection {
+  constructor(readonly locator: Locator) {}
+
+  @Selector("CodeInput")
+  accessor CodeInput!: Locator;
+
+  @Selector("ApplyButton")
+  accessor ApplyButton!: Locator;
+}
+```
+
+## Wiring it into a parent
+
+Pass the fragment class as the second argument to `@Selector(...)`. The decorator constructs the fragment with the resolved locator:
+
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoSection", PromoSection)
+  accessor promo!: PromoSection;
+}
+
+// Usage
+await checkoutPage.promo.CodeInput.fill("SAVE20");
+await checkoutPage.promo.ApplyButton.click();
+```
+
+The chain resolves as:
+
+```
+page.locator("body")
+  .getByTestId("CheckoutPage")
+  .getByTestId("PromoSection")
+  .getByTestId("CodeInput")
+```
+
+## Context inheritance
+
+Fragments work because the [context resolution](/playwright-page-object/reference/context-resolution/) priority looks at the host's `locator` property before falling back to `page`. The parent's `@Selector(..., FragmentClass)` constructs `new FragmentClass(resolvedLocator)` and the resolved locator becomes the fragment's scope.
+
+## Sharing fragments across pages
+
+A fragment is just a class — instantiate it as a property in any page object that has the section:
+
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoSection", PromoSection)
+  accessor promo!: PromoSection;
+}
+
+@RootSelector("CartPage")
+class CartPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoSection", PromoSection)
+  accessor promo!: PromoSection;
+}
+```
+
+Both pages reuse `PromoSection` without inheritance or shared state.
+
+## When to pick this style
+
+- A UI section appears on multiple pages.
+- The section has its own child structure worth modeling.
+- You want reusable typed accessors without forcing inheritance.
+
+## See also
+
+- [Custom Controls](/playwright-page-object/guides/custom-controls/) — fragments and custom controls share the same constructor shape.
+- [Context Resolution](/playwright-page-object/reference/context-resolution/) — the resolution rules that make fragments work.

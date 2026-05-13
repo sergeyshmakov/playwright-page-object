@@ -1,0 +1,97 @@
+---
+title: Decorators
+description: Complete reference for root and child decorators.
+---
+
+Every decorator returns a Playwright locator built from the host's resolved root. See [Context Resolution](/playwright-page-object/reference/context-resolution/) for how the root is determined.
+
+## Root decorators
+
+Apply to a *class* whose first constructor argument is `page: Page`. Sets the class's root locator scope.
+
+| Decorator | Playwright API | Notes |
+|-----------|----------------|-------|
+| `@RootSelector(id)` | `page.locator("body").getByTestId(id)` | |
+| `@RootSelector()` | `page.locator("body")` | No-arg form |
+| `@ListRootSelector(id)` | `getByTestId(new RegExp(id))` | `id: string \| RegExp` |
+| `@RootSelectorByRole(...)` | `getByRole(...)` | Same args as `Locator.getByRole` |
+| `@RootSelectorByText(text)` | `getByText(text)` | |
+| `@RootSelectorByLabel(...)` | `getByLabel(...)` | Same args as `Locator.getByLabel` |
+| `@RootSelectorByPlaceholder(...)` | `getByPlaceholder(...)` | |
+| `@RootSelectorByAltText(...)` | `getByAltText(...)` | |
+| `@RootSelectorByTitle(...)` | `getByTitle(...)` | |
+
+### Constraints
+
+- The host class's first constructor argument must be `Page`.
+- Cannot be applied to a class extending `PageObject` (the base for nested children). Use `RootPageObject` instead, or apply the decorator to a plain class.
+
+## Child decorators
+
+Apply to a class accessor. Resolves relative to the host's resolved root.
+
+| Decorator | Playwright API | Notes |
+|-----------|----------------|-------|
+| `@Selector(id)` | `root.getByTestId(id)` | |
+| `@Selector()` | identity (returns `root`) | |
+| `@ListSelector(id)` | `getByTestId(new RegExp(id))` | `id: string \| RegExp` |
+| `@SelectorByRole(...)` | `root.getByRole(...)` | |
+| `@SelectorByText(text)` | `root.getByText(text)` | |
+| `@SelectorByLabel(...)` | `root.getByLabel(...)` | |
+| `@SelectorByPlaceholder(...)` | `root.getByPlaceholder(...)` | |
+| `@SelectorByAltText(...)` | `root.getByAltText(...)` | |
+| `@SelectorByTitle(...)` | `root.getByTitle(...)` | |
+| `@SelectorBy(fn)` | `fn(root, value)` | Custom logic — escape hatch |
+
+### Accessor output
+
+Each child decorator returns one of:
+
+- A raw `Locator` (the resolved locator).
+- A custom control instance (when a second-argument constructor or factory is passed).
+- A `PageObject` / `ListPageObject` instance (when the accessor is initialized with `= new ...`).
+
+See [Custom Controls](/playwright-page-object/guides/custom-controls/) and [Built-In POM](/playwright-page-object/guides/built-in-pom/) for the two non-raw forms.
+
+### Factory argument (second argument)
+
+Most child decorators accept a constructor or arrow function as the last argument:
+
+```ts
+@Selector("Promo", InputControl)
+accessor Promo!: InputControl;
+
+@SelectorByRole("button", { name: "Apply" }, ButtonControl)
+accessor Apply!: ButtonControl;
+
+@SelectorByLabel("Email", (locator) => new TimedInput(locator, 5000))
+accessor Email!: TimedInput;
+```
+
+- A *class* (has `prototype`) is `new`-called with the resolved `Locator`.
+- An *arrow function* is called directly with the resolved `Locator`.
+- A `PageObject` subclass passed here throws at decoration time. Use the initializer form instead.
+
+## `@SelectorBy(fn)` — custom logic
+
+Escape hatch for selector logic the built-in decorators don't cover. Receives the resolved root locator and the accessor's initialized value; returns the locator to expose.
+
+```ts
+@SelectorBy<Locator>((root) =>
+  root.locator(".cart-item:has(button.disabled)")
+)
+accessor DisabledItem!: Locator;
+```
+
+## Quick rules
+
+- Use `accessor` (not `get`/`set` or regular properties) on decorated members.
+- Use `!:` for raw `Locator` accessors (`accessor X!: Locator`).
+- Use `= new ...()` for `PageObject`-based accessors (`accessor X = new PageObject()`).
+- Pass a custom control class as the *last* argument to any child decorator.
+
+## See also
+
+- [Context Resolution](/playwright-page-object/reference/context-resolution/) — root resolution priority.
+- [PageObject](/playwright-page-object/api/page-object/) — methods on `PageObject` accessors.
+- [ListPageObject](/playwright-page-object/api/list-page-object/) — methods on `ListPageObject` accessors.

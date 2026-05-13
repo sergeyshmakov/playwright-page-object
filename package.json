@@ -1,7 +1,7 @@
 {
 	"name": "playwright-page-object",
 	"version": "1.4.2",
-	"description": "TypeScript-first Page Object Model framework for Playwright that replaces raw `page.locator()` chains with a typed, composable, decorator-driven control graph.",
+	"description": "Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator chains in plain TypeScript classes.",
 	"license": "ISC",
 	"type": "commonjs",
 	"main": "./dist/index.js",
@@ -24,8 +24,18 @@
 	},
 	"keywords": [
 		"playwright",
-		"page object",
-		"pom"
+		"page-object",
+		"page-object-model",
+		"pom",
+		"typescript",
+		"decorators",
+		"selectors",
+		"locators",
+		"e2e",
+		"e2e-testing",
+		"test-automation",
+		"testing",
+		"qa"
 	],
 	"author": {
 		"name": "Sergei Shmakov",
@@ -38,7 +48,7 @@
 	"bugs": {
 		"url": "https://github.com/sergeyshmakov/playwright-page-object/issues"
 	},
-	"homepage": "https://github.com/sergeyshmakov/playwright-page-object#readme",
+	"homepage": "https://sergeyshmakov.github.io/playwright-page-object/",
 	"release": {
 		"branches": [
 			"main"

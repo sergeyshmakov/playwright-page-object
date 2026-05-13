@@ -1,0 +1,74 @@
+---
+title: Quick Start
+description: A complete working example using playwright-page-object with plain classes.
+---
+
+This page walks through a minimal working setup using a plain class with decorators and raw `Locator` accessors — the simplest entry point.
+
+## 1. Define a page object
+
+```ts
+import type { Locator, Page } from "@playwright/test";
+import { RootSelector, Selector, SelectorByRole } from "playwright-page-object";
+
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
+
+  @SelectorByRole("button", { name: "Apply" })
+  accessor ApplyPromoButton!: Locator;
+
+  async applyPromoCode(code: string) {
+    await this.PromoCodeInput.fill(code);
+    await this.ApplyPromoButton.click();
+  }
+}
+```
+
+The `@RootSelector("CheckoutPage")` scopes every child accessor under `page.locator("body").getByTestId("CheckoutPage")`. Each child accessor resolves lazily — the locator chain is rebuilt on every access, so the same accessor can be reused across awaits without staleness.
+
+## 2. Use it in a test
+
+```ts
+import { test } from "@playwright/test";
+
+test("apply promo code", async ({ page }) => {
+  const checkout = new CheckoutPage(page);
+  await checkout.applyPromoCode("SAVE20");
+});
+```
+
+## 3. Optional: typed fixtures
+
+For test suites that use Playwright fixtures, `createFixtures` wires up instantiation:
+
+```ts
+import { test as base } from "@playwright/test";
+import { createFixtures } from "playwright-page-object";
+
+export const test = base.extend<{ checkoutPage: CheckoutPage }>(
+  createFixtures({ checkoutPage: CheckoutPage }),
+);
+
+test("apply promo code", async ({ checkoutPage }) => {
+  await checkoutPage.applyPromoCode("SAVE20");
+});
+```
+
+See the [Fixtures guide](/playwright-page-object/guides/fixtures/) for factory-function support and shared configuration.
+
+## What just happened
+
+- `@RootSelector(id)` set the class's root locator to `page.locator("body").getByTestId(id)`.
+- `@Selector(id)` resolved each child accessor as `root.getByTestId(id)`.
+- `@SelectorByRole(...)` resolved as `root.getByRole(...)`.
+- Locators were lazy — each `.fill()` or `.click()` rebuilt the chain from the current `page`.
+
+## Next
+
+- [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/) — when to use plain classes vs. fragments vs. built-in POM.
+- [Plain Classes guide](/playwright-page-object/guides/plain-classes/) — deeper coverage of this pattern.
+- [Decorator API](/playwright-page-object/api/decorators/) — full reference for all decorators.

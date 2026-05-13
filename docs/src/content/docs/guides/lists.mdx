@@ -1,0 +1,128 @@
+---
+title: Lists
+description: Iterate, filter, and look up items with ListPageObject — or fall back to raw Locator.
+---
+
+Two patterns for repeated children: `ListPageObject` for typed iteration and filtering, raw `Locator` for `.nth()` and `.count()`.
+
+## With `ListPageObject`
+
+Use when you need iteration, filtering, or item lookup with typed item controls.
+
+```ts
+import {
+  ListPageObject,
+  ListSelector,
+  PageObject,
+  RootPageObject,
+  RootSelector,
+  Selector,
+} from "playwright-page-object";
+
+class CartItemControl extends PageObject {
+  @Selector("Name")
+  accessor Name = new PageObject();
+
+  @Selector("RemoveButton")
+  accessor RemoveButton = new PageObject();
+}
+
+@RootSelector("CartPage")
+class CartPage extends RootPageObject {
+  @ListSelector("CartItem_")
+  accessor Items = new ListPageObject(CartItemControl);
+}
+```
+
+`@ListSelector("CartItem_")` matches `data-testid` values starting with `CartItem_` — typically `CartItem_1`, `CartItem_2`, etc. The argument is used as a regex pattern; pass a `RegExp` for full control.
+
+### Item access patterns
+
+```ts
+// Numeric indexing (returns a CartItemControl bound to that item)
+const first = cart.Items.items[0];
+const last = cart.Items.items.at(-1);
+
+// Async iteration
+for await (const item of cart.Items.items) {
+  await item.RemoveButton.$.click();
+}
+
+// Count assertions
+await cart.Items.waitCount(3);
+await cart.Items.count(); // returns Promise<number>
+
+// Convenience accessors
+const firstItem = cart.Items.first();
+const lastItem = cart.Items.last();
+```
+
+### Filtering (returns narrowed list)
+
+`filter...` methods return a new `ListPageObject` narrowed to matching items. Chain `.first()`, `.count()`, `.getAll()`, or async iteration.
+
+```ts
+const filtered = cart.Items.filterByText("Apple");
+await filtered.count();
+const firstApple = filtered.first();
+
+const withRemove = cart.Items.filterByHasTestId("RemoveButton");
+
+const byOwnId = cart.Items.filterByItemTestId("CartItem_2");
+```
+
+### Lookup (returns single item)
+
+`getItemBy...` methods return a single item bound to the first match.
+
+```ts
+const apple = cart.Items.getItemByText("Apple");
+const second = cart.Items.getItemByTestId("CartItem_2");
+const removable = cart.Items.getItemByRole("button", { name: "Remove" });
+
+await apple.RemoveButton.$.click();
+```
+
+### `filterByItemTestId` vs `filterByHasTestId`
+
+A common confusion — the two methods address different cases:
+
+| Method | Matches when |
+|--------|---|
+| `filterByItemTestId(id)` | the item row itself has `data-testid={id}` |
+| `filterByHasTestId(id)` | the item row *contains a descendant* with `data-testid={id}` |
+
+Example:
+
+```html
+<div data-testid="CartItem_1">
+  <span data-testid="Name">Apple</span>
+  <button data-testid="RemoveButton">Remove</button>
+</div>
+```
+
+- `filterByItemTestId("CartItem_1")` → matches this row (own id).
+- `filterByHasTestId("RemoveButton")` → matches this row (descendant id).
+
+## With raw `Locator`
+
+Use when you only need `.nth()`, `.count()`, or basic element operations:
+
+```ts
+@ListSelector("CartItem_")
+accessor ItemRows!: Locator;
+
+const count = await cart.ItemRows.count();
+const second = cart.ItemRows.nth(1);
+```
+
+This is the pure-Playwright form — no item controls, no filtering helpers.
+
+## Tip: prefix row ids
+
+Use a separator suffix (`CartItem_1`, `CartItem_2`) and avoid collisions with descendant ids like `CartItemName`. The regex `^CartItem_` will match row ids and not descendant ids.
+
+## See also
+
+- [ListPageObject API](/playwright-page-object/api/list-page-object/) — complete API surface.
+- [Decorator API](/playwright-page-object/api/decorators/) — `@ListSelector` and `@ListRootSelector` reference.

@@ -1,0 +1,73 @@
+---
+title: Choosing a Style
+description: Start simple, add structure only when it pays back.
+---
+
+## Start here
+
+A plain class with `@RootSelector(...)` and raw `Locator` accessors covers most pages:
+
+```ts
+import type { Locator, Page } from "@playwright/test";
+import { RootSelector, Selector } from "playwright-page-object";
+
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
+}
+```
+
+That's the whole pattern. No inheritance, no fixtures, no extra abstractions. If you can use this, use it — and skip the rest of this page until you hit a case that needs something else.
+
+## Depart from the default when...
+
+| Situation | What to do | Why |
+|---|---|---|
+| The page has no container `data-testid` | Drop `@RootSelector` — keep the plain class | Chains from `page.locator("body")` automatically |
+| A UI section repeats across pages | Make it a [fragment](/playwright-page-object/guides/fragments/) | Constructor takes `locator: Locator`; nested decorators chain from it |
+| You already have a control library | Pass it as the second arg to `@Selector(...)` | The decorator wraps the resolved locator in your class |
+| You want `waitVisible()`, `.expect()`, filter chains | Use [`PageObject`](/playwright-page-object/api/page-object/) / [`ListPageObject`](/playwright-page-object/api/list-page-object/) | Built-in wait helpers and assertions |
+
+Each row is a small change to the default, not a different framework. Mix freely.
+
+## Mixing in the same class
+
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage extends RootPageObject {
+  @Selector("PromoCodeInput")
+  accessor PromoCode!: Locator;                                  // raw
+
+  @SelectorByRole("button", { name: "Apply" }, ButtonControl)
+  accessor ApplyButton!: ButtonControl;                          // custom control
+
+  @ListSelector("CartItem_")
+  accessor Items = new ListPageObject(CartItemControl);          // built-in POM
+}
+```
+
+The decorator decides what shape to produce based on how you declare the accessor:
+
+- `accessor X!: Locator` → raw `Locator`
+- `@Selector("Id", MyClass)` → instance of `MyClass`, constructed with the resolved locator
+- `accessor X = new PageObject()` → `PageObject` (or subclass), bound to the parent's scope
+
+## Adoption path
+
+Pick the simplest thing that works. Evolve only when a real pain shows up:
+
+- **Duplicate locator chains across tests** — wrap them in a plain class with `@RootSelector` and raw `Locator` accessors.
+- **Same methods called on the same accessor** (`fill`, `click`, `expect`) — extract a custom control.
+- **Same wait or assertion code repeating** — switch that accessor to `PageObject`.
+
+Three similar `.fill()` calls is not duplication; five matching wait blocks across files is. See [Incremental Adoption](/playwright-page-object/guides/incremental-adoption/) for a longer walkthrough.
+
+## Next
+
+- [Plain Classes](/playwright-page-object/guides/plain-classes/) — the default pattern in depth.
+- [Fragments](/playwright-page-object/guides/fragments/) — reusable sub-trees.
+- [Custom Controls](/playwright-page-object/guides/custom-controls/) — integrating existing control classes.
+- [Built-In POM](/playwright-page-object/guides/built-in-pom/) — when wait helpers and `.expect()` pay back.

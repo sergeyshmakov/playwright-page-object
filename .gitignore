@@ -7,3 +7,8 @@ dist
 playwright-report
 test-results
 tsconfig.tsbuildinfo
+
+# Claude Code local data and personal overrides
+.claude/memory/
+.claude/*.local.json
+.claude/*.local.md

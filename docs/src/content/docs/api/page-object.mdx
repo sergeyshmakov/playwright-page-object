@@ -1,0 +1,125 @@
+---
+title: PageObject
+description: Built-in nested-control class with wait helpers and assertions.
+---
+
+`PageObject` is the base class for *nested* controls. Use it as the initializer for a decorated accessor:
+
+```ts
+@Selector("PromoCode")
+accessor PromoCode = new PageObject();
+```
+
+For root-level page objects, use [`RootPageObject`](/playwright-page-object/api/root-page-object/) instead.
+
+## Instance members
+
+### `.$`
+
+The raw Playwright `Locator` bound to this control's resolved chain.
+
+```ts
+await checkout.PromoCode.$.fill("SAVE20");
+await checkout.PromoCode.$.click();
+```
+
+Use whenever a built-in wait helper does not cover your case.
+
+### `.page()`
+
+Returns the underlying `Page` instance.
+
+```ts
+const page = checkout.PromoCode.page();
+await page.keyboard.press("Escape");
+```
+
+### `.expect(options?)`
+
+Returns Playwright's assertion API on `.$`. Accepts the same options as Playwright's `expect`:
+
+```ts
+await control.expect().toBeVisible();
+await control.expect({ soft: true }).toHaveText("Click me");
+await control.expect({ message: "Apply must be enabled" }).toBeEnabled();
+```
+
+## Wait helpers
+
+| Method | Accepts |
+|--------|---------|
+| `waitVisible()` | — |
+| `waitHidden()` | — |
+| `waitText(text)` | `string \| RegExp` |
+| `waitValue(value)` | `string \| RegExp \| number` |
+| `waitCount(count)` | `number` |
+| `waitChecked()` | — |
+| `waitUnChecked()` | — |
+
+```ts
+await control.waitVisible();
+await control.waitText("Applied");
+await control.waitText(/applied/i);
+await control.waitValue(42);   // coerced to "42"
+```
+
+`waitValue` accepts `number` and coerces with `String(value)` for convenience. Pass a `RegExp` for pattern matching.
+
+## Subclassing
+
+For typed nested children, extend `PageObject` and add decorated accessors:
+
+```ts
+class CartItemControl extends PageObject {
+  @Selector("Name")
+  accessor Name = new PageObject();
+
+  @SelectorByRole("button", { name: "Remove" })
+  accessor RemoveButton = new PageObject();
+
+  async remove() {
+    await this.RemoveButton.$.click();
+  }
+}
+```
+
+Use the subclass as an initializer:
+
+```ts
+@Selector("CartItem_1")
+accessor FirstItem = new CartItemControl();
+```
+
+### `cloneWithContext` for custom constructors
+
+If your subclass has constructor arguments beyond the default, override `cloneWithContext(root, selector)`. The library calls this on every access to bind the instance to its parent's resolved scope.
+
+```ts
+class TimedItem extends PageObject {
+  constructor(readonly timeout: number) {
+    super();
+  }
+
+  cloneWithContext(root, selector) {
+    const next = new TimedItem(this.timeout);
+    return next.attach(root, selector);
+  }
+}
+```
+
+Most users do not need this — the default `cloneWithContext` covers the no-arg constructor case.
+
+## Static guards
+
+| Static | Returns |
+|--------|---------|
+| `PageObject.isClass(v)` | `true` if `v` is a class extending `PageObject` |
+| `PageObject.isInstance(v)` | `true` if `v` is an instance of `PageObject` |
+
+Used internally and exposed for advanced use cases (e.g., generic helpers that inspect accessor types).
+
+## See also
+
+- [RootPageObject](/playwright-page-object/api/root-page-object/) — the root variant.
+- [ListPageObject](/playwright-page-object/api/list-page-object/) — for repeated children.
+- [Built-In POM guide](/playwright-page-object/guides/built-in-pom/) — walkthrough.

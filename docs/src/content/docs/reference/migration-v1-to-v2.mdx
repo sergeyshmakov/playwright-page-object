@@ -1,0 +1,127 @@
+---
+title: Migration v1 → v2
+description: Breaking changes from v1 to v2 and how to update existing code.
+---
+
+v2 removes deprecated APIs and tightens contracts. There is no compatibility shim — update call sites.
+
+## Breaking changes
+
+| v1 | v2 |
+|----|-----|
+| `ListStrictSelector(id)` | `Selector(id)` — identical locator |
+| `PageObject.waitNoValue()` | `control.$.expect().toHaveValue("")` |
+| `PageObject.waitProp(name, value)` | `control.$.expect().toHaveAttribute(...)` |
+| `PageObject.waitPropAbsence(name, value)` | `control.$.expect().not.toHaveAttribute(...)` |
+| `list.filterByTestId(id)` | `list.filterByItemTestId(id)` |
+| `list.getItemByIdMask(mask)` | `list.getItemByTestId(new RegExp(mask))` |
+| `createFixtures({ x: MyClass })` | unchanged — factory functions now also accepted |
+
+## Removed APIs
+
+### `ListStrictSelector`
+
+`Selector(id)` already produces the same locator chain. Replace mechanically:
+
+```diff
+- @ListStrictSelector("CartItem")
++ @Selector("CartItem")
+  accessor item!: Locator;
+```
+
+### `PageObject.waitProp` / `waitPropAbsence` / `waitNoValue`
+
+These assumed an internal `data-prop-*` attribute convention. Express the intent with Playwright's `.expect()`:
+
+```diff
+- await checkout.PromoCode.waitProp("disabled", "true");
++ await checkout.PromoCode.$.expect().toHaveAttribute("data-prop-disabled", "true");
+
+- await checkout.PromoCode.waitNoValue();
++ await checkout.PromoCode.$.expect().toHaveValue("");
+```
+
+## Renamed APIs
+
+### `filterByTestId` → `filterByItemTestId`
+
+The rename clarifies the self-vs-descendant distinction. The behavior is unchanged.
+
+```diff
+- const item = list.filterByTestId("CartItem_2");
++ const item = list.filterByItemTestId("CartItem_2");
+```
+
+The companion `filterByHasTestId(id)` matches rows that *contain* a descendant with `data-testid={id}`. See [Lists](/playwright-page-object/guides/lists/) for the full distinction.
+
+### `getItemByIdMask` → `getItemByTestId(new RegExp(...))`
+
+The mask was always a regex pattern. The new form is explicit:
+
+```diff
+- const item = list.getItemByIdMask("CartItem_\\d+");
++ const item = list.getItemByTestId(/CartItem_\d+/);
+```
+
+## Widened signatures
+
+### `waitText` and `waitValue` accept `RegExp`
+
+```ts
+await checkout.PromoCode.waitText(/applied/i);
+await checkout.PromoCode.waitValue(/^\d{6}$/);
+await checkout.PromoCode.waitValue(42);  // number → coerced to "42"
+```
+
+### `@ListSelector` and `@ListRootSelector` accept `string | RegExp`
+
+Strings are still used as regex patterns (escape metacharacters if needed). Pass a `RegExp` for full control:
+
+```ts
+@ListSelector("CartItem_")             // matches /CartItem_/
+@ListSelector(/^CartItem_\d+$/)        // matches CartItem_1, CartItem_2, ...
+```
+
+## New strictness
+
+### `PageObject` subclasses cannot be passed as factory arguments
+
+In v1, `@Selector("X", MyPageObjectSubclass)` silently produced broken instances. In v2, it throws at decoration time:
+
+```diff
+- @Selector("PromoCode", PromoPageObject)
+- accessor PromoCode!: PromoPageObject;
+
++ @Selector("PromoCode")
++ accessor PromoCode = new PromoPageObject();
+```
+
+Use the *initializer form* for `PageObject` subclasses. The factory-argument form is reserved for plain classes whose constructor accepts a `Locator` (see [Custom Controls](/playwright-page-object/guides/custom-controls/)).
+
+### `ListPageObject` constructor validates `itemType`
+
+Invalid item types throw at construction time instead of failing silently on access:
+
+```ts
+new ListPageObject("not a class");  // throws
+new ListPageObject(42);              // throws
+new ListPageObject(CartItemControl); // ok
+new ListPageObject(new CartItemControl()); // ok
+```
+
+## Update strategy
+
+1. **Run a grep pass** for the removed and renamed APIs:
+   ```
+   ListStrictSelector | waitNoValue | waitProp | waitPropAbsence
+   filterByTestId | getItemByIdMask
+   ```
+2. **Apply the table above** — each row is a one-line change.
+3. **Run TypeScript.** The compiler catches most of the rest.
+4. **Run your test suite.** Behavior of equivalent calls is unchanged.
+
+## See also
+
+- [Lists](/playwright-page-object/guides/lists/) — `filterByItemTestId` vs `filterByHasTestId`.
+- [Custom Controls](/playwright-page-object/guides/custom-controls/) — factory-argument form.
+- [Built-In POM](/playwright-page-object/guides/built-in-pom/) — initializer form for `PageObject`.

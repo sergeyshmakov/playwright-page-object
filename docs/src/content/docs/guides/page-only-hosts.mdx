@@ -1,0 +1,66 @@
+---
+title: Page-Only Hosts
+description: Skip the root decorator when test ids are globally unique.
+---
+
+A page-only host is a class without `@RootSelector(...)` that still has a `page` property. Child decorators chain from `page.locator("body")` — the same default scope as `@RootSelector()` with no argument.
+
+## Minimal example
+
+```ts
+import type { Locator, Page } from "@playwright/test";
+import { Selector } from "playwright-page-object";
+
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
+}
+```
+
+Resolves to:
+
+```
+page.locator("body").getByTestId("PromoCodeInput")
+```
+
+## When to pick this style
+
+- Test ids in your application are globally unique.
+- Wrapping every page in a container `data-testid` is more noise than signal.
+- The page logically *is* the root.
+
+## Trade-off
+
+Without a container scope, selectors are not protected against collisions elsewhere on the page. If two pages reuse the same `data-testid`, switch to `@RootSelector(...)`.
+
+## Equivalent forms
+
+These three are functionally equivalent in scope:
+
+```ts
+// 1. Page-only host (no decorator)
+class A {
+  constructor(readonly page: Page) {}
+}
+
+// 2. @RootSelector() with no argument
+@RootSelector()
+class B {
+  constructor(readonly page: Page) {}
+}
+
+// 3. @RootSelector() with body
+@RootSelector()
+class C {
+  constructor(readonly page: Page) {}
+}
+```
+
+All three scope children to `page.locator("body")`. Pick the page-only form when you don't need the decorator for any other purpose; pick `@RootSelector()` if the class extends `RootPageObject` (the decorator is what wires the root locator into the base class).
+
+## See also
+
+- [Plain Classes](/playwright-page-object/guides/plain-classes/) — the scoped-root variant.
+- [Built-In POM](/playwright-page-object/guides/built-in-pom/) — when you want wait helpers and `.expect()`.
