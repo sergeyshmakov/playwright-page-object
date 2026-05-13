@@ -10,9 +10,9 @@ v2 removes deprecated APIs and tightens contracts. There is no compatibility shi
 | v1 | v2 |
 |----|-----|
 | `ListStrictSelector(id)` | `Selector(id)` — identical locator |
-| `PageObject.waitNoValue()` | `control.$.expect().toHaveValue("")` |
-| `PageObject.waitProp(name, value)` | `control.$.expect().toHaveAttribute(...)` |
-| `PageObject.waitPropAbsence(name, value)` | `control.$.expect().not.toHaveAttribute(...)` |
+| `PageObject.waitNoValue()` | `control.expect().toHaveValue("")` |
+| `PageObject.waitProp(name, value)` | `control.expect().toHaveAttribute(...)` |
+| `PageObject.waitPropAbsence(name, value)` | `control.expect().not.toHaveAttribute(...)` |
 | `list.filterByTestId(id)` | `list.filterByItemTestId(id)` |
 | `list.getItemByIdMask(mask)` | `list.getItemByTestId(new RegExp(mask))` |
 | `createFixtures({ x: MyClass })` | unchanged — factory functions now also accepted |
@@ -35,10 +35,18 @@ These assumed an internal `data-prop-*` attribute convention. Express the intent
 
 ```diff
 - await checkout.PromoCode.waitProp("disabled", "true");
-+ await checkout.PromoCode.$.expect().toHaveAttribute("data-prop-disabled", "true");
++ await checkout.PromoCode.expect().toHaveAttribute("data-prop-disabled", "true");
 
 - await checkout.PromoCode.waitNoValue();
-+ await checkout.PromoCode.$.expect().toHaveValue("");
++ await checkout.PromoCode.expect().toHaveValue("");
+```
+
+`PageObject.expect()` returns Playwright's assertion API bound to the underlying locator. If you prefer working with the raw locator directly, import Playwright's `expect` and pass `control.$`:
+
+```ts
+import { expect } from "@playwright/test";
+
+await expect(checkout.PromoCode.$).toHaveAttribute("data-prop-disabled", "true");
 ```
 
 ## Renamed APIs
