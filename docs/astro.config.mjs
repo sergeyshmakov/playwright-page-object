@@ -4,7 +4,7 @@ import { defineConfig } from "astro/config";
 const REPO_URL = "https://github.com/sergeyshmakov/playwright-page-object";
 
 export default defineConfig({
-	site: "https://sergeyshmakov.github.io/playwright-page-object",
+	site: "https://sergeyshmakov.github.io",
 	base: "/playwright-page-object",
 	integrations: [
 		starlight({
