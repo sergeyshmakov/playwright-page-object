@@ -1,0 +1,83 @@
+---
+title: playwright-page-object
+description: Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator chains in plain TypeScript classes.
+template: splash
+hero:
+  title: Typed Page Objects for Playwright
+  tagline: Decorator-driven, lazy locator chains in plain TypeScript classes.
+  actions:
+    - text: Quick Start
+      link: /playwright-page-object/getting-started/quick-start/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/sergeyshmakov/playwright-page-object
+      icon: external
+      variant: minimal
+    - text: View on npm
+      link: https://www.npmjs.com/package/playwright-page-object
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, Code } from "@astrojs/starlight/components";
+
+## Before / after
+
+```ts
+// Before — selectors duplicated, structure invisible
+await page.getByTestId("CheckoutPage").getByTestId("PromoCodeInput").fill("SAVE20");
+await page.getByTestId("CheckoutPage").getByRole("button", { name: "Apply" }).click();
+```
+
+```ts
+// After — typed, composable, reusable
+await checkoutPage.applyPromoCode("SAVE20");
+```
+
+## What it is
+
+A locator-composition layer, not a framework. Decorators scope a class to a Playwright locator; child decorators resolve relative to that scope. The accessor type determines output: raw `Locator`, a custom control, or a built-in `PageObject`.
+
+- No inheritance required for basic use
+- Lazy locator chains rebuild only when accessed
+- Three output styles coexist in the same suite
+- TypeScript-first, ECMAScript decorators
+
+## Three output styles
+
+<CardGrid>
+  <Card title="Raw Locator" icon="document">
+    Minimal abstraction. Decorate accessors, get typed `Locator` properties.
+    [Read the guide](/playwright-page-object/guides/plain-classes/)
+  </Card>
+  <Card title="Custom Controls" icon="puzzle">
+    Wrap selectors with your own control classes — typed methods, no inheritance.
+    [Read the guide](/playwright-page-object/guides/custom-controls/)
+  </Card>
+  <Card title="Built-In POM" icon="rocket">
+    `PageObject` / `ListPageObject` for wait helpers, soft assertions, filter chains.
+    [Read the guide](/playwright-page-object/guides/built-in-pom/)
+  </Card>
+</CardGrid>
+
+## Next steps
+
+<CardGrid>
+  <Card title="Install" icon="download">
+    Add the package and configure TypeScript.
+    [Installation](/playwright-page-object/getting-started/installation/)
+  </Card>
+  <Card title="Quick start" icon="rocket">
+    A working example in under five minutes.
+    [Quick Start](/playwright-page-object/getting-started/quick-start/)
+  </Card>
+  <Card title="Choose a style" icon="open-book">
+    Decide between plain classes, fragments, and built-in POM.
+    [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/)
+  </Card>
+  <Card title="API reference" icon="information">
+    Complete decorator and class API tables.
+    [API](/playwright-page-object/api/decorators/)
+  </Card>
+</CardGrid>

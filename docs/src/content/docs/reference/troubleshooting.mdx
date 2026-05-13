@@ -1,0 +1,145 @@
+---
+title: Troubleshooting
+description: Common errors and how to fix them.
+---
+
+## "Cannot resolve locator: the class does not implement the context protocol..."
+
+**Cause:** the host class has no `@RootSelector(...)`, no `locator` property, and no `page` property. Child decorators have nowhere to chain from.
+
+**Fix:** make the host fit one of the patterns:
+
+```ts
+// ✅ Option A — scoped root
+@RootSelector("Page")
+class HostA { constructor(readonly page: Page) {} }
+
+// ✅ Option B — fragment
+class HostB { constructor(readonly locator: Locator) {} }
+
+// ✅ Option C — page-only host
+class HostC { constructor(readonly page: Page) {} }
+```
+
+See [Context Resolution](/playwright-page-object/reference/context-resolution/) for the full priority list.
+
+## "X extends PageObject and cannot be passed as a factory argument..."
+
+**Cause:** a `PageObject` subclass was passed as the second argument to `@Selector(...)`. The decorator detects this at decoration time.
+
+```ts
+// ❌ throws at decoration time
+@Selector("PromoCode", PromoPageObject)
+accessor PromoCode!: PromoPageObject;
+```
+
+**Fix:** use the *initializer form*:
+
+```ts
+// ✅ initialize the instance instead
+@Selector("PromoCode")
+accessor PromoCode = new PromoPageObject();
+```
+
+Why: `PageObject` instances are cloned under the parent's scope via `cloneWithContext`. The factory-argument form constructs a new instance with the locator, which bypasses that contract. Custom controls (plain classes with `constructor(locator: Locator)`) do use the factory-argument form — see [Custom Controls](/playwright-page-object/guides/custom-controls/).
+
+## "X must extend RootPageObject to use root decorators..."
+
+**Cause:** `@RootSelector(...)` was applied to a class that extends `PageObject` (not `RootPageObject`). `PageObject` is for nested children only.
+
+**Fix:** extend `RootPageObject` for root-level page objects:
+
+```ts
+// ❌ PageObject is for nested children only
+@RootSelector("CheckoutPage")
+class CheckoutPage extends PageObject {}
+
+// ✅ RootPageObject is the root-level base class
+@RootSelector("CheckoutPage")
+class CheckoutPage extends RootPageObject {}
+```
+
+## "Decorated class must receive Playwright Page as the first constructor argument."
+
+**Cause:** the root-decorated class was instantiated with something other than a `Page` object as its first argument.
+
+**Fix:** pass `page` directly, or use `createFixtures()` which wires `page` into every fixture:
+
+```ts
+// ✅ manual instantiation
+new CheckoutPage(page);
+
+// ✅ via fixtures
+const test = base.extend(createFixtures({ checkoutPage: CheckoutPage }));
+```
+
+## TypeScript: "Property 'X' has no initializer..."
+
+**Cause:** missing the `!` non-null assertion on a decorated accessor.
+
+**Fix:**
+
+```ts
+// ❌ missing the non-null assertion
+accessor PromoCode: Locator;
+
+// ✅ decorator handles initialization
+accessor PromoCode!: Locator;
+```
+
+The `!:` tells TypeScript the decorator handles initialization.
+
+## TypeScript: "'accessor' modifier requires 'ES2015' or higher..."
+
+**Cause:** the `tsconfig.json` `target` is below `ES2015`.
+
+**Fix:**
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022"
+  }
+}
+```
+
+See [Installation](/playwright-page-object/getting-started/installation/) for the full recommended config.
+
+## `for await (const item of list.items)` types as `unknown`
+
+**Cause:** `ListPageObject` was constructed without an `itemType`, so item type cannot be inferred.
+
+**Fix:** pass the item control class:
+
+```ts
+// ❌ no item type — items are typed as unknown
+accessor Items = new ListPageObject();
+
+// ✅ items are typed as CartItemControl
+accessor Items = new ListPageObject(CartItemControl);
+```
+
+## Fixture factory is treated as a constructor
+
+**Cause:** the factory is a regular function (not arrow), so it has a `prototype` and is detected as a class.
+
+**Fix:** use arrow function syntax:
+
+```ts
+// ❌ regular function — has a prototype, detected as a class
+createFixtures({
+  authPage: function (page) {
+    return new AuthPage(page, config);
+  },
+});
+
+// ✅ arrow function — no prototype, called directly
+createFixtures({
+  authPage: (page) => new AuthPage(page, config),
+});
+```
+
+## See also
+
+- [Context Resolution](/playwright-page-object/reference/context-resolution/)
+- [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/)

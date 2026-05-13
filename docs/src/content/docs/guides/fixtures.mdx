@@ -1,0 +1,87 @@
+---
+title: Fixtures
+description: Wire page objects into Playwright fixtures with createFixtures.
+---
+
+`createFixtures()` turns a map of constructors (or factory functions) into a Playwright `Fixtures` object. Pass the result to `test.extend()`.
+
+## Basic usage — constructors
+
+```ts
+import { test as base } from "@playwright/test";
+import { createFixtures } from "playwright-page-object";
+import { CheckoutPage } from "./page-objects/CheckoutPage";
+import { CartPage } from "./page-objects/CartPage";
+
+export const test = base.extend<{
+  checkoutPage: CheckoutPage;
+  cartPage: CartPage;
+}>(
+  createFixtures({
+    checkoutPage: CheckoutPage,
+    cartPage: CartPage,
+  }),
+);
+
+test("apply promo code", async ({ checkoutPage }) => {
+  await checkoutPage.applyPromoCode("SAVE20");
+});
+```
+
+Each fixture instantiates its class with `new Class(page)` and passes the instance to `use()`.
+
+## Factory functions — extra arguments
+
+When a page object's constructor needs more than `page`, supply an arrow function:
+
+```ts
+class AuthPage {
+  constructor(readonly page: Page, readonly config: AuthConfig) {}
+}
+
+export const test = base.extend<{ authPage: AuthPage }>(
+  createFixtures({
+    authPage: (page) => new AuthPage(page, authConfig),
+  }),
+);
+```
+
+The library detects class-vs-function at runtime: classes (with a `prototype`) get `new`-called; arrow functions get called directly.
+
+## Mixed map
+
+Classes and factories can coexist in the same map:
+
+```ts
+export const test = base.extend<{
+  homePage: HomePage;
+  authPage: AuthPage;
+}>(
+  createFixtures({
+    homePage: HomePage,                                    // class
+    authPage: (page) => new AuthPage(page, authConfig),    // factory
+  }),
+);
+```
+
+## Manual instantiation is still valid
+
+Fixtures are optional. If your suite doesn't already use Playwright fixtures, manual `new` works fine:
+
+```ts
+test("apply promo code", async ({ page }) => {
+  const checkout = new CheckoutPage(page);
+  await checkout.applyPromoCode("SAVE20");
+});
+```
+
+Use fixtures when your suite already relies on them or when you want to share setup across many tests.
+
+## Gotchas
+
+- **Regular (non-arrow) functions** are detected as constructors because they have a `prototype` property. Use arrow functions for factories: `(page) => new X(page, config)`.
+- **Class with no constructor accepting `page`** will fail at runtime when instantiated. The library does not validate the signature — TypeScript catches this at compile time via the `extend<>` type parameter.
+
+## See also
+
+- [createFixtures API](/playwright-page-object/api/create-fixtures/) — full type and detection rules.

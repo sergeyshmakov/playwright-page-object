@@ -1,6 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { LOCATOR_SYMBOL } from "../protocol";
-import { prop } from "../utils/helpers";
 
 /**
  * Function type that derives a {@link Locator} from a root locator.
@@ -30,7 +29,7 @@ export type PageObjectConstructor<TPageObject extends PageObject = PageObject> =
  * ```ts
  * class HeaderSection extends PageObject {
  *   @SelectorByText("Sign in")
- *   accessor signInButton = this.locator;
+ *   accessor signInButton = new PageObject();
  * }
  * ```
  */
@@ -107,7 +106,10 @@ export class PageObject {
 	): value is new (
 		...args: TArgs
 	) => PageObject {
-		return typeof value === "function" && value.prototype instanceof PageObject;
+		return (
+			typeof value === "function" &&
+			(value === PageObject || value.prototype instanceof PageObject)
+		);
 	}
 
 	/**
@@ -147,21 +149,18 @@ export class PageObject {
 	 * Waits for the element to have the given text.
 	 * @param text - Expected text (string or regex)
 	 */
-	async waitText(text: string) {
+	async waitText(text: string | RegExp) {
 		await this.expect().toHaveText(text);
 	}
 
 	/**
 	 * Waits for the element to have the given value.
-	 * @param value - Expected value (string or number)
+	 * @param value - Expected value (string, regex, or number)
 	 */
-	async waitValue(value: string | number) {
-		await this.expect().toHaveValue(String(value));
-	}
-
-	/** Waits for the element to have no value. */
-	async waitNoValue() {
-		await this.expect().not.toHaveAttribute(prop("$value"));
+	async waitValue(value: string | RegExp | number) {
+		await this.expect().toHaveValue(
+			value instanceof RegExp ? value : String(value),
+		);
 	}
 
 	/**
@@ -180,32 +179,6 @@ export class PageObject {
 	/** Waits for a checkbox/radio to be unchecked. */
 	async waitUnChecked() {
 		await this.expect().not.toBeChecked();
-	}
-
-	/**
-	 * Waits for a React/Vue prop (data attribute) to equal the given value.
-	 * **Prefer user-visible assertions**; use sparingly for internal component state.
-	 *
-	 * @param name - Prop name (e.g. `disabled`)
-	 * @param value - Expected value
-	 */
-	async waitProp(name: string, value: string) {
-		await this.expect({
-			message: `Waiting for prop «${name}» to be equal to «${value}»`,
-		}).toHaveAttribute(prop(name), value);
-	}
-
-	/**
-	 * Waits for a React/Vue prop (data attribute) to NOT equal the given value.
-	 * **Prefer user-visible assertions**; use sparingly for internal component state.
-	 *
-	 * @param name - Prop name (e.g. `disabled`)
-	 * @param value - Value that must not be present
-	 */
-	async waitPropAbsence(name: string, value: string) {
-		await this.expect({
-			message: `Waiting for prop «${name}» to NOT be equal to «${value}»`,
-		}).not.toHaveAttribute(prop(name), value);
 	}
 
 	/** ASSERTIONS */

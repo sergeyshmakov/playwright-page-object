@@ -1,0 +1,62 @@
+---
+title: Installation
+description: Install playwright-page-object and configure TypeScript for ECMAScript decorators.
+---
+
+## Install
+
+```bash
+npm install -D playwright-page-object
+```
+
+## Requirements
+
+- Node `>=20`
+- `@playwright/test >=1.35.0`
+- TypeScript `>=5.0` (for ECMAScript decorators and `accessor` keyword)
+
+## TypeScript configuration
+
+Ensure your `tsconfig.json` targets `ES2015` or higher so the `accessor` keyword is supported.
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  }
+}
+```
+
+No `experimentalDecorators` flag is required. The library uses **standard ECMAScript decorators**, supported natively in TypeScript 5.0+.
+
+## Verify the install
+
+A minimal smoke test in your existing Playwright spec file:
+
+```ts
+import type { Locator, Page } from "@playwright/test";
+import { test } from "@playwright/test";
+import { RootSelector, Selector } from "playwright-page-object";
+
+@RootSelector("App")
+class AppPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("Header")
+  accessor Header!: Locator;
+}
+
+test("library is wired", async ({ page }) => {
+  const app = new AppPage(page);
+  await app.Header.waitFor();
+});
+```
+
+If TypeScript compiles and the test runs, the package is correctly installed.
+
+## Next
+
+- [Quick Start](/playwright-page-object/getting-started/quick-start/) — a complete working example.
+- [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/) — decide between plain classes, fragments, and built-in POM.

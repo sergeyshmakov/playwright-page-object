@@ -1,0 +1,79 @@
+---
+title: Plain Classes
+description: Use decorators on plain TypeScript classes — no inheritance required.
+---
+
+The simplest entry point. A plain class receives `Page` as its first constructor argument and uses decorators to declare typed accessors. No inheritance from any library base class.
+
+## Minimal example
+
+```ts
+import type { Locator, Page } from "@playwright/test";
+import { RootSelector, Selector } from "playwright-page-object";
+
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
+}
+```
+
+Every access of `checkoutPage.PromoCodeInput` rebuilds the chain:
+
+```
+page.locator("body").getByTestId("CheckoutPage").getByTestId("PromoCodeInput")
+```
+
+## Why `accessor`
+
+The `accessor` keyword creates a getter/setter pair that the decorator wraps. Because the getter runs on every property access, the chain is lazy — and because Playwright `Locator` is itself lazy, you can capture the accessor in a local variable and reuse it across awaits:
+
+```ts
+test("retry on flakiness", async ({ page }) => {
+  const checkout = new CheckoutPage(page);
+  const input = checkout.PromoCodeInput;
+
+  await input.fill("SAVE20");
+  await expect(input).toHaveValue("SAVE20");
+  // `input` is a Locator — Playwright re-evaluates it on every action, so it never goes stale.
+});
+```
+
+The `!:` non-null assertion is a TypeScript hint: the decorator replaces the underlying value, so `accessor X!: Locator` tells TS "this looks uninitialized but the decorator handles it."
+
+## Adding actions
+
+Compose decorators with regular methods. The decorators only generate accessors — everything else is plain class syntax:
+
+```ts
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
+
+  @SelectorByRole("button", { name: "Apply" })
+  accessor ApplyButton!: Locator;
+
+  async applyPromoCode(code: string) {
+    await this.PromoCodeInput.fill(code);
+    await this.ApplyButton.click();
+  }
+}
+```
+
+## When to pick this style
+
+- The page has a unique container `data-testid`.
+- You want typed accessors but no extra abstraction.
+- You're migrating an existing suite and want minimal change.
+
+For a page without a container test id, see [Page-Only Hosts](/playwright-page-object/guides/page-only-hosts/).
+
+## See also
+
+- [Decorator API](/playwright-page-object/api/decorators/) — full reference.
+- [Context Resolution](/playwright-page-object/reference/context-resolution/) — how child decorators resolve.

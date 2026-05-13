@@ -34,6 +34,27 @@ describe("ListPageObject", () => {
 			expect((list as unknown as { itemType: unknown }).itemType).toBe(Item);
 		});
 
+		it("throws when itemType is a non-PageObject value", () => {
+			expect(() => {
+				new ListPageObject(
+					42 as unknown as PageObject,
+					mockRoot as unknown as Locator,
+					selector,
+				);
+			}).toThrow(/itemType must be a PageObject/);
+		});
+
+		it("throws when itemType is a plain function (not PageObject subclass)", () => {
+			const factory = (_root?: Locator) => new PageObject();
+			expect(() => {
+				new ListPageObject(
+					factory as unknown as PageObject,
+					mockRoot as unknown as Locator,
+					selector,
+				);
+			}).toThrow(/itemType must be a PageObject/);
+		});
+
 		it("cloneWithContext preserves itemType and passes root, selector", () => {
 			class Item extends PageObject {}
 			const list = createList(Item);
@@ -199,19 +220,45 @@ describe("ListPageObject", () => {
 			expect(mockLocator.filter).toHaveBeenCalledWith({ hasText: "bar" });
 		});
 
-		it("filterByTestId(id) returns a narrowed list matching item test ids", () => {
+		it("filterByText(RegExp) passes regex to filter", () => {
+			const filteredLocator = createMockLocator(mockPage);
+			mockLocator.filter = vi.fn().mockReturnValue(filteredLocator);
+			const pattern = /widget/i;
+			const list = createList();
+
+			const result = list.filterByText(pattern);
+
+			expect(result).toBeInstanceOf(ListPageObject);
+			expect(result.$).toBe(filteredLocator);
+			expect(mockLocator.filter).toHaveBeenCalledWith({ hasText: pattern });
+		});
+
+		it("filterByItemTestId(id) returns a narrowed list matching item test ids", () => {
 			const pageTestIdLocator = createMockLocator(mockPage);
 			const filteredLocator = createMockLocator(mockPage);
 			mockPage.getByTestId = vi.fn().mockReturnValue(pageTestIdLocator);
 			mockLocator.and = vi.fn().mockReturnValue(filteredLocator);
 			const list = createList();
 
-			const result = list.filterByTestId("myId");
+			const result = list.filterByItemTestId("myId");
 
 			expect(result).toBeInstanceOf(ListPageObject);
 			expect(result.$).toBe(filteredLocator);
 			expect(mockPage.getByTestId).toHaveBeenCalledWith("myId");
 			expect(mockLocator.and).toHaveBeenCalledWith(pageTestIdLocator);
+		});
+
+		it("filterByItemTestId(RegExp) passes regex to getByTestId", () => {
+			const pageTestIdLocator = createMockLocator(mockPage);
+			const filteredLocator = createMockLocator(mockPage);
+			mockPage.getByTestId = vi.fn().mockReturnValue(pageTestIdLocator);
+			mockLocator.and = vi.fn().mockReturnValue(filteredLocator);
+			const pattern = /CartItem_\d+/;
+			const list = createList();
+
+			const result = list.filterByItemTestId(pattern);
+			expect(result.$).toBe(filteredLocator);
+			expect(mockPage.getByTestId).toHaveBeenCalledWith(pattern);
 		});
 
 		it("filterByHasTestId(id) returns a narrowed list matching Playwright has test ids", () => {
@@ -246,15 +293,17 @@ describe("ListPageObject", () => {
 			expect(filteredLocator.nth).toHaveBeenCalledWith(0);
 		});
 
-		it("getItemByIdMask(mask) returns the first matched item from the filtered list", () => {
+		it("getItemByTestId(RegExp) passes regex through to filterByItemTestId", () => {
 			const pageTestIdLocator = createMockLocator(mockPage);
 			const filteredLocator = createMockLocator(mockPage);
 			mockPage.getByTestId = vi.fn().mockReturnValue(pageTestIdLocator);
 			mockLocator.and = vi.fn().mockReturnValue(filteredLocator);
+			const pattern = /CartItem_\d+/;
 			const list = createList();
-			void list.getItemByIdMask("Item-").$;
-			expect(mockPage.getByTestId).toHaveBeenCalledWith(expect.any(RegExp));
-			expect(mockLocator.and).toHaveBeenCalledWith(pageTestIdLocator);
+
+			void list.getItemByTestId(pattern).$;
+
+			expect(mockPage.getByTestId).toHaveBeenCalledWith(pattern);
 			expect(filteredLocator.nth).toHaveBeenCalledWith(0);
 		});
 
@@ -484,7 +533,7 @@ describe("ListPageObject", () => {
 			expect(items[1].root).toBe(filteredLocator);
 		});
 
-		it("filterByTestId(id) keeps ListPageObject APIs on the narrowed list", async () => {
+		it("filterByItemTestId(id) keeps ListPageObject APIs on the narrowed list", async () => {
 			const pageTestIdLocator = createMockLocator(mockPage);
 			const filteredLocator = createMockLocator(mockPage);
 			mockPage.getByTestId = vi.fn().mockReturnValue(pageTestIdLocator);
@@ -493,7 +542,7 @@ describe("ListPageObject", () => {
 			class Item extends PageObject {}
 			const list = createList(Item);
 
-			const filtered = list.filterByTestId("CartItem_2");
+			const filtered = list.filterByItemTestId("CartItem_2");
 			const first = filtered.first();
 			const count = await filtered.count();
 			const items = await filtered.getAll();

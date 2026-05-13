@@ -1,0 +1,121 @@
+---
+title: Built-In POM
+description: Use RootPageObject and PageObject for wait helpers, assertions, and structured child controls.
+---
+
+The built-in POM layer adds wait helpers, soft assertions, and a typed `.expect()` API on top of the locator-composition primitives. Use it when these helpers save real code; use [plain classes](/playwright-page-object/guides/plain-classes/) when they do not.
+
+## Root: `RootPageObject`
+
+A page object that is instantiated directly from `Page`. Pair with `@RootSelector(...)` to set the scope.
+
+```ts
+import {
+  PageObject,
+  RootPageObject,
+  RootSelector,
+  Selector,
+  SelectorByRole,
+} from "playwright-page-object";
+
+@RootSelector("CheckoutPage")
+class CheckoutPage extends RootPageObject {
+  @Selector("PromoCodeInput")
+  accessor PromoCode = new PageObject();
+
+  @SelectorByRole("button", { name: "Apply" })
+  accessor ApplyButton = new PageObject();
+
+  async applyPromoCode(code: string) {
+    await this.PromoCode.waitVisible();
+    await this.PromoCode.$.fill(code);
+    await this.ApplyButton.$.click();
+  }
+}
+
+// Usage
+const checkout = new CheckoutPage(page);
+await checkout.expect().toBeVisible();
+await checkout.applyPromoCode("SAVE20");
+```
+
+## Children: `PageObject`
+
+A `PageObject` is a nested control. Decorate accessors with `= new PageObject()` (the *initializer form*) — the library clones it under the parent's scope on each access.
+
+### Accessing the raw locator
+
+```ts
+await checkout.PromoCode.$.fill("SAVE20");
+//                         ^ raw Locator
+```
+
+`.$` is the raw Playwright `Locator`. Use it whenever a built-in wait helper does not cover your case.
+
+### Wait helpers
+
+| Method | Accepts |
+|--------|---------|
+| `waitVisible()` / `waitHidden()` | — |
+| `waitText(text)` | `string \| RegExp` |
+| `waitValue(value)` | `string \| RegExp \| number` |
+| `waitCount(count)` | `number` |
+| `waitChecked()` / `waitUnChecked()` | — |
+
+```ts
+const promo = checkout.PromoCode;
+
+await promo.waitVisible();
+await promo.waitValue("SAVE20");
+await promo.waitText(/applied/i);
+```
+
+### Assertions via `.expect()`
+
+`.expect()` returns Playwright's assertion API on the underlying locator. Pass `{ soft: true }` for soft assertions, `{ message: "..." }` for a custom failure message.
+
+```ts
+await checkout.PromoCode.expect().toBeVisible();
+await checkout.PromoCode.expect({ soft: true }).toHaveText("Code applied");
+await checkout.ApplyButton.expect({ message: "Apply must be enabled" }).toBeEnabled();
+```
+
+## Nested page objects
+
+A custom `PageObject` subclass uses the same initializer form:
+
+```ts
+class CartItemControl extends PageObject {
+  @SelectorByRole("button", { name: "Remove" })
+  accessor RemoveButton = new PageObject();
+
+  async remove() {
+    await this.RemoveButton.$.click();
+  }
+}
+
+@RootSelector("CartPage")
+class CartPage extends RootPageObject {
+  @Selector("CartItem_1")
+  accessor FirstItem = new CartItemControl();
+}
+```
+
+For subclasses with custom constructor arguments, implement `cloneWithContext()` — see the [PageObject API reference](/playwright-page-object/api/page-object/).
+
+## When to pick this style
+
+- You want wait helpers and `.expect()` on accessors without writing them yourself.
+- You're working with lists and want `filterByText`, `getItemByTestId`, async iteration — see [Lists](/playwright-page-object/guides/lists/).
+- The page object has enough nested structure that the helpers pay back.
+
+## When to skip it
+
+- Test ids are mostly raw — `Locator` accessors are enough.
+- You already have a control library — see [Custom Controls](/playwright-page-object/guides/custom-controls/).
+
+## See also
+
+- [PageObject API](/playwright-page-object/api/page-object/) — full method reference.
+- [RootPageObject API](/playwright-page-object/api/root-page-object/) — root-only methods and constructor contract.
+- [Lists](/playwright-page-object/guides/lists/) — `ListPageObject` for repeated controls.

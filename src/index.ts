@@ -11,7 +11,6 @@ export {
 export { SelectorBy } from "./decorators/selectorBy";
 export {
 	ListSelector,
-	ListStrictSelector,
 	Selector,
 	SelectorByAltText,
 	SelectorByLabel,

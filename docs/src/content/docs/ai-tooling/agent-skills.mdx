@@ -1,0 +1,31 @@
+---
+title: Agent Skills
+description: Install the playwright-page-object Agent Skill so AI assistants load data-path guidance.
+---
+
+`playwright-page-object` ships an [Agent Skills](https://agentskills.io/)-compatible skill that AI assistants can load on demand. The skill provides decorator selection, host pattern, and fixture wiring guidance in a compact, machine-readable form.
+
+## Install
+
+```bash
+npx ctx7 skills install /sergeyshmakov/playwright-page-object playwright-page-object
+```
+
+After installation, assistants with skill support (Claude Code, Cursor, etc.) load the skill automatically when working with this library.
+
+## What the skill covers
+
+- Context resolution priority and when each host pattern applies.
+- Output style selection (raw `Locator`, custom control, `PageObject`).
+- Common errors and their fixes.
+- Hard rules (e.g., do not pass `PageObject` subclasses as factory arguments).
+- Migration guidance from v1.
+
+## Where it lives in the repo
+
+The skill source is at [`skills/playwright-page-object/SKILL.md`](https://github.com/sergeyshmakov/playwright-page-object/blob/main/skills/playwright-page-object/SKILL.md). Pull requests welcome.
+
+## See also
+
+- [Context7](/playwright-page-object/ai-tooling/context7/)
+- [Cubic Wiki](/playwright-page-object/ai-tooling/cubic-wiki/)

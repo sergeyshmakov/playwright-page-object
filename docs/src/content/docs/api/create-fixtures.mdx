@@ -1,0 +1,87 @@
+---
+title: createFixtures
+description: Convert a map of page object classes into Playwright fixtures.
+---
+
+## Signature
+
+```ts
+function createFixtures<T extends PageObjectConstructorsMap>(
+  pageObjects: T,
+): Fixtures<FixturesFromMap<T>, {}, {}, {}>;
+
+type PageObjectEntry<T> =
+  | (new (page: Page) => T)
+  | ((page: Page) => T);
+
+type PageObjectConstructorsMap = Record<string, PageObjectEntry<unknown>>;
+```
+
+## Usage
+
+```ts
+import { test as base } from "@playwright/test";
+import { createFixtures } from "playwright-page-object";
+
+export const test = base.extend<{
+  checkoutPage: CheckoutPage;
+  authPage: AuthPage;
+}>(
+  createFixtures({
+    checkoutPage: CheckoutPage,
+    authPage: (page) => new AuthPage(page, authConfig),
+  }),
+);
+```
+
+The `<{ ... }>` generic on `base.extend` tells TypeScript the fixture types. `createFixtures` produces matching runtime wiring.
+
+## Class vs factory detection
+
+For each entry, `createFixtures` decides whether to `new`-call or directly call:
+
+```ts
+const isConstructor =
+  typeof entry === "function" &&
+  entry.prototype !== undefined &&
+  entry.prototype.constructor === entry;
+
+const instance = isConstructor
+  ? new entry(page)
+  : entry(page);
+```
+
+This means:
+
+| Entry shape | Detected as | Called as |
+|-------------|-------------|-----------|
+| `class Foo {}` (ES class) | constructor | `new entry(page)` |
+| `function Foo() {}` (regular function) | constructor | `new entry(page)` |
+| `(page) => new Foo(page, config)` (arrow) | factory | `entry(page)` |
+
+**Use arrow functions for factories.** Regular functions have a `prototype` and will be treated as constructors.
+
+## Type inference
+
+`FixturesFromMap<T>` maps each entry to its instance type so that `test.extend` infers fixture types correctly:
+
+```ts
+createFixtures({
+  homePage: HomePage,                     // homePage: HomePage
+  authPage: (page) => new AuthPage(page), // authPage: AuthPage
+});
+```
+
+You still pass the explicit generic to `base.extend<{ homePage; authPage }>` — Playwright's `extend` requires it for stricter type narrowing.
+
+## When to use it
+
+- Your suite already uses Playwright fixtures.
+- You want a single point of configuration for page-object setup.
+- You need factories for page objects with custom constructor arguments.
+
+Manual instantiation (`new CheckoutPage(page)` inside each test) is equally valid. The library does not require fixtures.
+
+## See also
+
+- [Fixtures guide](/playwright-page-object/guides/fixtures/) — walkthrough and examples.

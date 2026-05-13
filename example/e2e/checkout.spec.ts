@@ -66,6 +66,25 @@ test("should use filterByText to get matching items", async ({
 	await widgetItems.expect().toHaveCount(2);
 });
 
+test("should narrow the list by item's own test id with filterByItemTestId", async ({
+	checkoutPage,
+}) => {
+	const second =
+		checkoutPage.CartItems.filterByItemTestId("CartItem_2").first();
+	await second.waitVisible();
+	await second.RemoveButton.$.click();
+	await checkoutPage.expectCartHasItemCount(2);
+});
+
+test("should get a single cart item by its own test id with getItemByTestId", async ({
+	checkoutPage,
+}) => {
+	const third = checkoutPage.CartItems.getItemByTestId("CartItem_3");
+	await third.expect().toBeVisible();
+	await third.RemoveButton.$.click();
+	await checkoutPage.expectCartHasItemCount(2);
+});
+
 test("should use ListPageObject without itemType — items are PageObjects", async ({
 	checkoutPage,
 }) => {

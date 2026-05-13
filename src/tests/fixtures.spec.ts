@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { describe, expect, it, vi } from "vitest";
 import { RootSelector } from "../decorators/rootSelectors";
 import { createFixtures } from "../fixtures";
@@ -53,7 +54,7 @@ describe("createFixtures", () => {
 		expect(use).toHaveBeenCalled();
 	});
 
-	it("fixture instantiates with page", async () => {
+	it("fixture instantiates class with page", async () => {
 		@RootSelector()
 		class TestPage extends RootPageObject {}
 
@@ -68,7 +69,7 @@ describe("createFixtures", () => {
 		expect(instance.page).toBe(mockPage);
 	});
 
-	it("use() receives instance", async () => {
+	it("use() receives instance from class constructor", async () => {
 		@RootSelector()
 		class TestPage extends RootPageObject {}
 
@@ -102,5 +103,76 @@ describe("createFixtures", () => {
 
 		expect(useCompleted).toBe(true);
 		expect(use).toHaveBeenCalled();
+	});
+
+	describe("factory function support", () => {
+		it("arrow factory is called with page and result passed to use()", async () => {
+			class AuthPage {
+				readonly config: string;
+				constructor(
+					readonly page: Page,
+					config: string,
+				) {
+					this.config = config;
+				}
+			}
+
+			const fixtures = createFixtures({
+				authPage: (page) => new AuthPage(page, "test-config"),
+			});
+			const mockPage = createMockPage();
+
+			const use = vi.fn().mockResolvedValue(undefined);
+			await invokeFixture(
+				getFixture(fixtures.authPage),
+				{ page: mockPage },
+				use,
+			);
+
+			const instance = use.mock.calls[0][0] as AuthPage;
+			expect(instance).toBeInstanceOf(AuthPage);
+			expect(instance.config).toBe("test-config");
+			expect(instance.page).toBe(mockPage);
+		});
+
+		it("factory and constructor can be mixed in the same map", async () => {
+			@RootSelector()
+			class HomePage extends RootPageObject {}
+
+			class SettingsPage {
+				readonly env: string;
+				constructor(
+					readonly page: Page,
+					env: string,
+				) {
+					this.env = env;
+				}
+			}
+
+			const fixtures = createFixtures({
+				homePage: HomePage,
+				settingsPage: (page) => new SettingsPage(page, "staging"),
+			});
+			const mockPage = createMockPage();
+
+			const homeUse = vi.fn().mockResolvedValue(undefined);
+			await invokeFixture(
+				getFixture(fixtures.homePage),
+				{ page: mockPage },
+				homeUse,
+			);
+			expect(homeUse.mock.calls[0][0]).toBeInstanceOf(HomePage);
+
+			const settingsUse = vi.fn().mockResolvedValue(undefined);
+			await invokeFixture(
+				getFixture(fixtures.settingsPage),
+				{ page: mockPage },
+				settingsUse,
+			);
+			const settings = settingsUse.mock.calls[0][0] as SettingsPage;
+			expect(settings).toBeInstanceOf(SettingsPage);
+			expect(settings.env).toBe("staging");
+			expect(settings.page).toBe(mockPage);
+		});
 	});
 });

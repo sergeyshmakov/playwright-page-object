@@ -22,6 +22,14 @@ function toLocatorFactory<T>(
 		return undefined;
 	}
 
+	if (PageObject.isClass(value)) {
+		const name = (value as { name?: string }).name ?? "PageObject subclass";
+		throw new Error(
+			`[playwright-page-object] "${name}" extends PageObject and cannot be passed as a factory argument. ` +
+				`Use the accessor initializer instead: \`accessor X = new ${name}()\``,
+		);
+	}
+
 	return value.prototype !== undefined
 		? (locator: Locator) =>
 				new (value as new (locator: Locator, ...args: never[]) => T)(locator)
@@ -50,47 +58,33 @@ const getSelector =
 /**
  * Accessor decorator: locator by test id regex. Use for list items sharing a pattern.
  *
- * @param itemMask - Regex pattern string for `data-testid`
+ * The `itemMask` string is used as a regex pattern (e.g. `"CartItem_"` matches
+ * `CartItem_1`, `CartItem_2`, etc.). Pass a `RegExp` directly for full control.
+ * Escape special characters in strings if the prefix contains regex metacharacters.
+ *
+ * @param itemMask - Regex pattern string or `RegExp` for `data-testid`
  *
  * @example
  * ```ts
  * @ListSelector("todo-item-")
- * accessor item = this.locator;
+ * accessor items = new ListPageObject(TodoItem);
  * ```
  */
-export function ListSelector(itemMask: string): ReturnType<typeof SelectorBy>;
+export function ListSelector(
+	itemMask: string | RegExp,
+): ReturnType<typeof SelectorBy>;
 export function ListSelector<T>(
-	itemMask: string,
+	itemMask: string | RegExp,
 	locatorFactory: LocatorFactoryArg<T>,
 ): ReturnType<typeof SelectorBy>;
 export function ListSelector<T>(
-	itemMask: string,
+	itemMask: string | RegExp,
 	locatorFactory?: LocatorFactoryArg<T>,
 ) {
+	const pattern =
+		typeof itemMask === "string" ? new RegExp(itemMask) : itemMask;
 	const selector = getSelector(
-		(p) => p.getByTestId(new RegExp(itemMask)),
-		toLocatorFactory(locatorFactory),
-	);
-	return SelectorBy(selector);
-}
-
-/**
- * Accessor decorator: locator by exact test id.
- * @param itemId - Exact `data-testid` value
- */
-export function ListStrictSelector(
-	itemId: string,
-): ReturnType<typeof SelectorBy>;
-export function ListStrictSelector<T>(
-	itemId: string,
-	locatorFactory: LocatorFactoryArg<T>,
-): ReturnType<typeof SelectorBy>;
-export function ListStrictSelector<T>(
-	itemId: string,
-	locatorFactory?: LocatorFactoryArg<T>,
-) {
-	const selector = getSelector(
-		(p) => p.getByTestId(itemId),
+		(p) => p.getByTestId(pattern),
 		toLocatorFactory(locatorFactory),
 	);
 	return SelectorBy(selector);

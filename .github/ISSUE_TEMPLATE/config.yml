@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://sergeyshmakov.github.io/playwright-page-object/
+    about: Read the guides, API reference, and troubleshooting before opening an issue.
+  - name: Questions and discussions
+    url: https://github.com/sergeyshmakov/playwright-page-object/discussions
+    about: Ask usage questions, propose ideas, or share patterns in GitHub Discussions.

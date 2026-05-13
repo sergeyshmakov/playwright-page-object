@@ -4,8 +4,8 @@ import { PageObject, type SelectorType } from "./PageObject";
 /**
  * Page object for a list of items, each represented by a `TItem` page object.
  *
- * Use as a nested list control together with `Selector`, `ListSelector`, or
- * `ListStrictSelector`. Supports filtering, indexing, and async iteration.
+ * Use as a nested list control together with `Selector` or `ListSelector`.
+ * Supports filtering, indexing, and async iteration.
  *
  * @typeParam TItem - PageObject type for each list item (default: `PageObject`)
  *
@@ -29,10 +29,14 @@ export class ListPageObject<
 
 	/**
 	 * @param itemType - PageObject class or instance for each list item.
-	 *   - **Class**: Use when items use the default constructor.
-	 *   - **Instance**: Use when items need a custom constructor with specific arguments.
+	 *   - **Class**: Use when items use the default constructor `(root?, selector?)`.
+	 *   - **Instance**: Use when items need a custom constructor — pass a pre-configured
+	 *     instance and it will be cloned via `cloneWithContext()` for each item.
 	 * @param root - Root locator (set by decorators)
 	 * @param selector - Selector function (set by decorators)
+	 * @throws If `itemType` is provided but is neither a `PageObject` subclass nor a
+	 *   `PageObject` instance. Pass a class (`new ListPageObject(MyItem)`) or an
+	 *   instance (`new ListPageObject(new MyItem())`).
 	 */
 	constructor(
 		itemType?: TItem | (new (root?: Locator, selector?: SelectorType) => TItem),
@@ -40,6 +44,18 @@ export class ListPageObject<
 		selector?: SelectorType,
 	) {
 		super(root, selector);
+
+		if (
+			itemType !== undefined &&
+			!PageObject.isInstance(itemType) &&
+			!PageObject.isClass(itemType)
+		) {
+			throw new Error(
+				`[ListPageObject] itemType must be a PageObject subclass constructor or instance, got ${typeof itemType}. ` +
+					"Pass a class: new ListPageObject(MyItemControl), or an instance: new ListPageObject(new MyItemControl()).",
+			);
+		}
+
 		this.itemType = itemType;
 	}
 
@@ -59,7 +75,8 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns the item at the given index (0-based). Use `-1` for last item.
+	 * Returns the item at the given index (0-based). Supports negative indices like
+	 * `Array.at()` — use `-1` for last, `-2` for second-to-last, etc.
 	 * @param index - Item index
 	 * @returns PageObject for the item at that index
 	 */
@@ -68,7 +85,8 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns the item at the given index. Supports negative indices like Array.at().
+	 * Returns the item at the given index. Alias for `getItemByIndex` with negative
+	 * index support matching `Array.at()` semantics.
 	 * @param index - Item index (0-based; -1 = last, -2 = second-to-last, etc.)
 	 * @returns PageObject for the item at that index
 	 */
@@ -95,16 +113,25 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns a narrowed list of items whose own test id matches the given value.
+	 * Returns a narrowed list of items whose **own** `data-testid` matches the given
+	 * value. Use this when the item row itself carries the test id.
+	 *
+	 * For rows that *contain* a descendant with the test id, use `filterByHasTestId`.
+	 *
 	 * @param id - Test id (string or regex)
 	 * @returns Narrowed list page object containing the matching item(s)
 	 */
-	filterByTestId(id: string | RegExp): this {
+	filterByItemTestId(id: string | RegExp): this {
 		return this.resolveList((p) => p.and(this.page.getByTestId(id)));
 	}
 
 	/**
-	 * Returns a narrowed list of items that contain a descendant with the given test id using Playwright's `has` filter.
+	 * Returns a narrowed list of items that contain a **descendant** with the given
+	 * test id (Playwright `has` filter). Use this when matching by a child element's
+	 * test id, not the row's own test id.
+	 *
+	 * For rows whose own test id matches, use `filterByItemTestId`.
+	 *
 	 * @param id - Test id (string or regex)
 	 * @returns Narrowed list page object containing the matching item(s)
 	 */
@@ -115,21 +142,12 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns the item whose own test id matches the given value.
+	 * Returns the item whose own `data-testid` matches the given value.
 	 * @param id - Test id (string or regex)
 	 * @returns PageObject for the matching item
 	 */
 	getItemByTestId(id: string | RegExp): TItem {
-		return this.filterByTestId(id).first();
-	}
-
-	/**
-	 * Returns the item whose own test id matches the given regex pattern.
-	 * @param mask - Regex pattern string for the item test id
-	 * @returns PageObject for the matching item
-	 */
-	getItemByIdMask(mask: string): TItem {
-		return this.getItemByTestId(new RegExp(mask));
+		return this.filterByItemTestId(id).first();
 	}
 
 	/** Returns the first item (index 0). */
@@ -227,7 +245,9 @@ export class ListPageObject<
 	}
 
 	/**
-	 * Returns all items as an array of page objects.
+	 * Returns all items as an array of page objects. Each item is a lazy locator
+	 * wrapper — the count is resolved eagerly but individual element actions are
+	 * deferred until called.
 	 * @returns Array of `TItem` instances
 	 */
 	async getAll(): Promise<TItem[]> {
@@ -252,10 +272,6 @@ export class ListPageObject<
 			return this.itemType.cloneWithContext(this.locator, selector) as TItem;
 		}
 
-		if (PageObject.isClass(this.itemType)) {
-			return new this.itemType(this.locator, selector);
-		}
-
-		return selector(this.locator) as unknown as TItem;
+		return new this.itemType(this.locator, selector);
 	}
 }

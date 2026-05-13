@@ -1,8 +1,8 @@
 {
 	"name": "playwright-page-object",
 	"version": "1.4.2",
-	"description": "TypeScript-first Page Object Model framework for Playwright that replaces raw `page.locator()` chains with a typed, composable, decorator-driven control graph.",
-	"license": "ISC",
+	"description": "Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator chains in plain TypeScript classes.",
+	"license": "MIT",
 	"type": "commonjs",
 	"main": "./dist/index.js",
 	"module": "./dist/index.mjs",
@@ -24,8 +24,18 @@
 	},
 	"keywords": [
 		"playwright",
-		"page object",
-		"pom"
+		"page-object",
+		"page-object-model",
+		"pom",
+		"typescript",
+		"decorators",
+		"selectors",
+		"locators",
+		"e2e",
+		"e2e-testing",
+		"test-automation",
+		"testing",
+		"qa"
 	],
 	"author": {
 		"name": "Sergei Shmakov",
@@ -38,7 +48,7 @@
 	"bugs": {
 		"url": "https://github.com/sergeyshmakov/playwright-page-object/issues"
 	},
-	"homepage": "https://github.com/sergeyshmakov/playwright-page-object#readme",
+	"homepage": "https://sergeyshmakov.github.io/playwright-page-object/",
 	"release": {
 		"branches": [
 			"main"
@@ -46,13 +56,20 @@
 		"plugins": [
 			"@semantic-release/commit-analyzer",
 			"@semantic-release/release-notes-generator",
+			[
+				"@semantic-release/changelog",
+				{
+					"changelogFile": "CHANGELOG.md"
+				}
+			],
 			"@semantic-release/npm",
 			[
 				"@semantic-release/git",
 				{
 					"assets": [
 						"package.json",
-						"package-lock.json"
+						"package-lock.json",
+						"CHANGELOG.md"
 					],
 					"message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
 				}
@@ -61,19 +78,20 @@
 		]
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.4.5",
-		"@commitlint/cli": "^20.4.3",
-		"@commitlint/config-conventional": "^20.4.3",
-		"@playwright/test": "^1.49.0",
+		"@biomejs/biome": "^2.4.15",
+		"@commitlint/cli": "^21.0.1",
+		"@commitlint/config-conventional": "^21.0.1",
+		"@playwright/test": "^1.60.0",
+		"@semantic-release/changelog": "^6.0.3",
 		"@semantic-release/git": "^10.0.1",
-		"@types/node": "^22.19.11",
+		"@types/node": "^22.19.19",
 		"concurrently": "^9.1.2",
 		"husky": "^9.1.7",
-		"lint-staged": "^16.4.0",
+		"lint-staged": "^17.0.4",
 		"semantic-release": "^25.0.3",
 		"tsup": "^8.5.1",
 		"typescript": "^5.9.3",
-		"vitest": "^4.0.18"
+		"vitest": "~4.0.18"
 	},
 	"peerDependencies": {
 		"@playwright/test": ">=1.35.0",
