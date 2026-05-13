@@ -10,9 +10,9 @@ v2 removes deprecated APIs and tightens contracts. There is no compatibility shi
 | v1 | v2 |
 |----|-----|
 | `ListStrictSelector(id)` | `Selector(id)` — identical locator |
-| `PageObject.waitNoValue()` | `control.expect().toHaveValue("")` |
-| `PageObject.waitProp(name, value)` | `control.expect().toHaveAttribute(...)` |
-| `PageObject.waitPropAbsence(name, value)` | `control.expect().not.toHaveAttribute(...)` |
+| `PageObject.waitProp(name, value)` | `control.expect().toHaveAttribute("data-prop-{name}", value)` |
+| `PageObject.waitPropAbsence(name, value)` | `control.expect().not.toHaveAttribute("data-prop-{name}", value)` |
+| `PageObject.waitNoValue()` | `control.expect().not.toHaveAttribute("data-prop-$value")` |
 | `list.filterByTestId(id)` | `list.filterByItemTestId(id)` |
 | `list.getItemByIdMask(mask)` | `list.getItemByTestId(new RegExp(mask))` |
 | `createFixtures({ x: MyClass })` | unchanged — factory functions now also accepted |
@@ -31,14 +31,25 @@ v2 removes deprecated APIs and tightens contracts. There is no compatibility shi
 
 ### `PageObject.waitProp` / `waitPropAbsence` / `waitNoValue`
 
-These assumed an internal `data-prop-*` attribute convention. Express the intent with Playwright's `.expect()`:
+All three assumed an internal `data-prop-*` attribute convention — your framework was expected to mirror component props to `data-prop-{name}` attributes for testing. Both `waitProp` and `waitNoValue` used that same convention internally; `waitNoValue` specifically checked for the absence of `data-prop-$value`.
+
+Express the same intent directly with Playwright's `.expect()`:
 
 ```diff
 - await checkout.PromoCode.waitProp("disabled", "true");
 + await checkout.PromoCode.expect().toHaveAttribute("data-prop-disabled", "true");
 
+- await checkout.PromoCode.waitPropAbsence("disabled", "true");
++ await checkout.PromoCode.expect().not.toHaveAttribute("data-prop-disabled", "true");
+
 - await checkout.PromoCode.waitNoValue();
-+ await checkout.PromoCode.expect().toHaveValue("");
++ await checkout.PromoCode.expect().not.toHaveAttribute("data-prop-$value");
+```
+
+If your project does **not** use the `data-prop-*` convention and you originally wanted to assert that a form control's value is empty, use Playwright's `toHaveValue` instead — but note this is a different assertion (DOM `.value` vs. an attribute):
+
+```ts
+await checkout.PromoCode.expect().toHaveValue("");
 ```
 
 `PageObject.expect()` returns Playwright's assertion API bound to the underlying locator. If you prefer working with the raw locator directly, import Playwright's `expect` and pass `control.$`:
