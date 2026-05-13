@@ -5,7 +5,6 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
-      day: "monday"
       time: "06:00"
       timezone: "UTC"
     allow:
@@ -26,7 +25,6 @@ updates:
     directory: "/docs"
     schedule:
       interval: "monthly"
-      day: "monday"
       time: "06:00"
       timezone: "UTC"
     allow:
@@ -44,7 +42,6 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
-      day: "monday"
       time: "06:00"
       timezone: "UTC"
     open-pull-requests-limit: 3
