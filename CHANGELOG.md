@@ -1,3 +1,10 @@
+## [2.0.2](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.0.1...v2.0.2) (2026-05-13)
+
+
+### Bug Fixes
+
+* fix node eol in package.json ([c3c42f8](https://github.com/sergeyshmakov/playwright-page-object/commit/c3c42f8f3e40ad4b18dbffca2c01f2b86c0d207a))
+
 ## [2.0.1](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.0.0...v2.0.1) (2026-05-13)
 
 
