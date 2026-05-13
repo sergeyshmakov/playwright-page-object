@@ -35,14 +35,14 @@ The first argument must be a Playwright `Page`. The root decorator wires the res
 `RootPageObject` extends `PageObject`, so all the [`PageObject` members](/playwright-page-object/api/page-object/) are available:
 
 - `.$` — raw `Locator` for the root.
-- `.page()` — the underlying `Page`.
+- `.page` — getter for the underlying `Page`.
 - `.expect(options?)` — Playwright assertion API on `.$`.
 - `waitVisible()`, `waitText()`, `waitValue()`, etc.
 
 ```ts
 await checkout.expect().toBeVisible();
 await checkout.waitVisible();
-const page = checkout.page();
+const page = checkout.page;
 ```
 
 ## When to extend `RootPageObject`

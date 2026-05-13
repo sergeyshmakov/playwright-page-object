@@ -25,12 +25,12 @@ await checkout.PromoCode.$.click();
 
 Use whenever a built-in wait helper does not cover your case.
 
-### `.page()`
+### `.page`
 
-Returns the underlying `Page` instance.
+A getter that returns the underlying `Page` instance.
 
 ```ts
-const page = checkout.PromoCode.page();
+const page = checkout.PromoCode.page;
 await page.keyboard.press("Escape");
 ```
 

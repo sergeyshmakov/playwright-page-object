@@ -48,7 +48,7 @@ new ListPageObject(42);              // throws
 ## Inherited from `PageObject`
 
 - `.$` — raw `Locator` matching all items (use `.count()`, `.nth(i)` etc.)
-- `.page()` — the underlying `Page`.
+- `.page` — getter for the underlying `Page`.
 - `.expect()` — assertion API on the multi-element locator.
 - `waitCount(n)` — wait until the list has `n` items.
 
