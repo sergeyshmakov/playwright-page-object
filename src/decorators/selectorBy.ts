@@ -76,7 +76,7 @@ function resolveLocator(instance: object): Locator {
  * @example RootPageObject + @RootSelector
  * ```ts
  * @RootSelector("sidebar")
- * class Sidebar extends PageObject {
+ * class Sidebar extends RootPageObject {
  *   @SelectorBy((root, id) => root.getByTestId(id))
  *   accessor link = "nav-link" as string;
  * }

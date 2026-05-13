@@ -71,7 +71,6 @@ function RootSelectorBy(selector: SelectorType) {
 				}
 			} as unknown as TClass;
 		}
-		// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
 		throw new Error(
 			`Decorator SelectorBy... can be used only with class, but used with "${kind}" member of class`,
 		);
@@ -84,7 +83,11 @@ function RootSelectorBy(selector: SelectorType) {
  * Package root classes should extend `RootPageObject`.
  * Plain external classes must receive Playwright `Page` as the first argument.
  *
- * @param id - Regex pattern string for `data-testid`
+ * The `id` string is used as a regex pattern. Pass a `RegExp` directly for full
+ * control. Escape special characters in strings if the prefix contains regex
+ * metacharacters.
+ *
+ * @param id - Regex pattern string or `RegExp` for `data-testid`
  *
  * @example
  * ```ts
@@ -92,8 +95,9 @@ function RootSelectorBy(selector: SelectorType) {
  * class TodoListRoot extends RootPageObject {}
  * ```
  */
-export function ListRootSelector(id: string) {
-	return RootSelectorBy((p) => p.getByTestId(new RegExp(id)));
+export function ListRootSelector(id: string | RegExp) {
+	const pattern = typeof id === "string" ? new RegExp(id) : id;
+	return RootSelectorBy((p) => p.getByTestId(pattern));
 }
 
 /**

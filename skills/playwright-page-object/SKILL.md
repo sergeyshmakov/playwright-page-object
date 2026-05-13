@@ -1,6 +1,6 @@
 ---
 name: playwright-page-object
-version: 1.4.0
+version: 2.0.0
 description: >
   Decorator-driven Playwright selector composition for plain classes, fragments,
   external controls, and optional PageObject/ListPageObject helpers. Use when
@@ -33,7 +33,7 @@ Child decorators resolve in this order:
 
 **Key facts:**
 - `locator` property takes precedence over `page` property
-- `@Selector()` (no args) is the identity selector—no chaining
+- `@Selector()` (no args) is the identity selector — no chaining
 - `@RootSelector()` (no args) uses body scope, same as page-only hosts
 - Page-only hosts behave like `@RootSelector()`, not container-scoped
 
@@ -53,11 +53,11 @@ Child decorators resolve in this order:
 @Selector("Promo")
 accessor PromoInput!: Locator;
 
-// Custom control (must accept Locator in constructor)
+// Custom control (must accept Locator in constructor — arrow factory also works)
 @Selector("Promo", MyInputControl)
 accessor PromoInput!: MyInputControl;
 
-// PageObject (built-in, nested)
+// PageObject (built-in, nested) — use the initializer form, not the factory arg
 @Selector("Promo")
 accessor PromoInput = new PageObject();
 
@@ -66,13 +66,15 @@ accessor PromoInput = new PageObject();
 accessor Items = new ListPageObject(ItemControl);
 ```
 
+**Critical:** When the accessor type is a `PageObject` subclass, always use the **initializer form** (`= new MyControl()`). Do NOT pass the class as a factory argument — the library will throw if you do.
+
 ## Hard Rules
 
 1. Use `accessor` on all decorated members
-2. Do **not** put `@RootSelector` on a `PageObject` subclass—use `RootPageObject` instead
+2. Do **not** put `@RootSelector` on a `PageObject` subclass — use `RootPageObject` instead
 3. Never use `PageObject` as a root; only use it for nested controls
 4. For nested `PageObject` subclasses with custom constructors, implement `cloneWithContext()`
-5. `createFixtures()` only works for classes constructible as `new X(page)`. For extra args, write a custom fixture
+5. `createFixtures()` works for constructors (`new X(page)`) and factory functions (`(page) => new X(page, config)`)
 6. **Preserve the user's existing style.** Do not force built-in POM adoption unless explicitly requested
 
 ## Style Selection Cheat Sheet
@@ -83,9 +85,9 @@ accessor Items = new ListPageObject(ItemControl);
 ```ts
 @RootSelector("CheckoutPage")
 class CheckoutPage {
-	constructor(readonly page: Page) {}
-	@Selector("Promo")
-	accessor PromoInput!: Locator;
+  constructor(readonly page: Page) {}
+  @Selector("Promo")
+  accessor PromoInput!: Locator;
 }
 ```
 
@@ -94,9 +96,9 @@ class CheckoutPage {
 
 ```ts
 class CheckoutPage {
-	constructor(readonly page: Page) {}
-	@Selector("Promo")
-	accessor PromoInput!: Locator;
+  constructor(readonly page: Page) {}
+  @Selector("Promo")
+  accessor PromoInput!: Locator;
 }
 ```
 
@@ -105,9 +107,9 @@ class CheckoutPage {
 
 ```ts
 class PromoSection {
-	constructor(readonly locator: Locator) {}
-	@Selector("CodeInput")
-	accessor CodeInput!: Locator;
+  constructor(readonly locator: Locator) {}
+  @Selector("CodeInput")
+  accessor CodeInput!: Locator;
 }
 
 // Used in parent:
@@ -120,8 +122,8 @@ accessor promo!: PromoSection;
 
 ```ts
 class InputControl {
-	constructor(readonly locator: Locator) {}
-	async fill(value: string) { await this.locator.fill(value); }
+  constructor(readonly locator: Locator) {}
+  async fill(value: string) { await this.locator.fill(value); }
 }
 
 @Selector("Promo", InputControl)
@@ -133,13 +135,13 @@ accessor PromoInput!: InputControl;
 
 ```ts
 class CheckoutPage extends RootPageObject {
-	@Selector("Promo")
-	accessor PromoInput = new PageObject();
-	
-	async applyPromo(code: string) {
-		await this.PromoInput.waitVisible();
-		await this.PromoInput.$.fill(code);
-	}
+  @Selector("Promo")
+  accessor PromoInput = new PageObject();
+
+  async applyPromo(code: string) {
+    await this.PromoInput.waitVisible();
+    await this.PromoInput.$.fill(code);
+  }
 }
 ```
 
@@ -159,7 +161,11 @@ await filtered.count();
 for await (const row of list.items) { /* ... */ }
 ```
 
-`filter...` methods return a narrowed `ListPageObject` for chaining (`.first()`, `.count()`, `.getAll()`, async iteration). `getItemBy...` methods return a single item. `filterByTestId()` matches the row item's own test id; use `filterByHasTestId()` when you need Playwright `has`-style matching for rows containing a child with that test id.
+`filter...` methods return a narrowed `ListPageObject` for chaining (`.first()`, `.count()`, `.getAll()`, async iteration). `getItemBy...` methods return a single item.
+
+**Self vs. descendant test id matching:**
+- `filterByItemTestId(id)` — the item row itself has that `data-testid`
+- `filterByHasTestId(id)` — the item row *contains* a descendant with that `data-testid`
 
 ### Raw Locator (pure Playwright)
 Use when you want `.nth()`, `.count()`, and basic element operations:
@@ -177,31 +183,40 @@ const first = itemRows.nth(0);
 ## Fixtures
 
 ### With createFixtures()
-Automatic wiring for classes constructible as `new Class(page)`:
+Supports constructors and factory functions:
 
 ```ts
 export const test = base.extend(
-	createFixtures({ checkoutPage: CheckoutPage }),
+  createFixtures({
+    checkoutPage: CheckoutPage,                          // class constructor
+    authPage: (page) => new AuthPage(page, authConfig),  // factory for extra args
+  }),
 );
 
 test("...", async ({ checkoutPage }) => {
-	await checkoutPage.PromoInput.fill("CODE");
+  await checkoutPage.PromoInput.fill("CODE");
 });
 ```
-
-**Supports:** `RootPageObject`, `@RootSelector(...)` classes, page-only hosts
-
-**Does not support:** Classes with extra constructor arguments
 
 ### Manual instantiation
 Still valid and sometimes simpler:
 
 ```ts
 test("...", async ({ page }) => {
-	const checkout = new CheckoutPage(page);
-	await checkout.PromoInput.fill("CODE");
+  const checkout = new CheckoutPage(page);
+  await checkout.PromoInput.fill("CODE");
 });
 ```
+
+## PageObject Wait Methods
+
+| Method | Accepts |
+|--------|---------|
+| `waitVisible()` / `waitHidden()` | — |
+| `waitText(text)` | `string \| RegExp` |
+| `waitValue(value)` | `string \| RegExp \| number` |
+| `waitCount(count)` | `number` |
+| `waitChecked()` / `waitUnChecked()` | — |
 
 ## Common Issues & Solutions
 
@@ -219,7 +234,7 @@ test("...", async ({ page }) => {
 **Solution:** Yes. Mix accessor types freely. Return raw `Locator` where you don't need helpers, and `PageObject` where you do.
 
 ### Issue: "I have an external control library. Do I use it?"
-**Solution:** Yes. Pass your control class as the second argument to `@Selector(...)`. If it doesn't accept `Locator` in its constructor, wrap it first.
+**Solution:** Yes. Pass your control class as the second argument to `@Selector(...)`. If it doesn't accept `Locator` in its constructor, wrap it first. Do NOT pass a `PageObject` subclass as a factory arg — use `= new MyControl()` instead.
 
 ### Issue: "Do I have to use createFixtures()?"
 **Solution:** No. It's optional. Manual `new CheckoutPage(page)` is valid. Use fixtures only if your test suite already relies on them.
@@ -231,7 +246,7 @@ Unless the user explicitly asks for a full built-in POM:
 1. **Start small:** Add `@Selector(...)` to plain classes, keep raw `Locator` accessors
 2. **Extract controls:** When selectors repeat, move to external classes
 3. **Add POM helpers only where they add value:** Use `PageObject` / `ListPageObject` for wait/filter/iterate operations
-4. These three styles coexist—no all-or-nothing commitment required
+4. These three styles coexist — no all-or-nothing commitment required
 
 ## Examples to Reference
 
@@ -242,10 +257,9 @@ When in doubt, direct the user to:
 - **Fragment:** [PromoSectionFragment.ts](example/e2e/page-objects/PromoSectionFragment.ts)
 - **External controls:** [ExternalCheckoutPage.ts](example/e2e/page-objects/ExternalCheckoutPage.ts)
 - **Fixtures:** [fixtures.ts](example/e2e/fixtures.ts)
-- **Built-in POM tests:** [PageObject.advanced.spec.ts](src/tests/page-objects/PageObject.advanced.spec.ts)
 
 For complete decorator and API reference, read [README.md](README.md).
 
 ## Principle: Decoration, Not Prescription
 
-This library decorates your selectors; it does not dictate your class hierarchy. Favor the user's existing patterns. Mix styles as needed. Inheritance (via `RootPageObject` or `PageObject`) is optional—a convenience, not a requirement.
+This library decorates your selectors; it does not dictate your class hierarchy. Favor the user's existing patterns. Mix styles as needed. Inheritance (via `RootPageObject` or `PageObject`) is optional — a convenience, not a requirement.

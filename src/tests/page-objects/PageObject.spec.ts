@@ -141,7 +141,7 @@ describe("PageObject", () => {
 			);
 		});
 
-		it("waitText calls expect(locator).toHaveText(text)", async () => {
+		it("waitText(string) calls expect(locator).toHaveText(text)", async () => {
 			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitText("hello");
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
@@ -150,7 +150,21 @@ describe("PageObject", () => {
 			);
 		});
 
-		it("waitValue calls expect(locator).toHaveValue", async () => {
+		it("waitText(RegExp) calls expect(locator).toHaveText(regex)", async () => {
+			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
+			const pattern = /hello/i;
+			await pageObj.waitText(pattern);
+			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
+				mockLocator,
+				expect.any(Object),
+			);
+			const chainReturn = mockPlaywrightExpect.mock.results[0]?.value as {
+				toHaveText: ReturnType<typeof vi.fn>;
+			};
+			expect(chainReturn.toHaveText).toHaveBeenCalledWith(pattern);
+		});
+
+		it("waitValue(number) calls expect(locator).toHaveValue", async () => {
 			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
 			await pageObj.waitValue(42);
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
@@ -159,13 +173,14 @@ describe("PageObject", () => {
 			);
 		});
 
-		it("waitNoValue calls expect(locator).not.toHaveAttribute", async () => {
+		it("waitValue(RegExp) passes regex to toHaveValue", async () => {
 			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
-			await pageObj.waitNoValue();
-			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
-				mockLocator,
-				expect.any(Object),
-			);
+			const pattern = /^\d+$/;
+			await pageObj.waitValue(pattern);
+			const chainReturn = mockPlaywrightExpect.mock.results[0]?.value as {
+				toHaveValue: ReturnType<typeof vi.fn>;
+			};
+			expect(chainReturn.toHaveValue).toHaveBeenCalledWith(pattern);
 		});
 
 		it("waitCount calls expect(locator).toHaveCount", async () => {
@@ -192,28 +207,6 @@ describe("PageObject", () => {
 			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
 				mockLocator,
 				expect.any(Object),
-			);
-		});
-
-		it("waitProp calls expect with message", async () => {
-			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
-			await pageObj.waitProp("name", "value");
-			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
-				mockLocator,
-				expect.objectContaining({
-					message: "Waiting for prop «name» to be equal to «value»",
-				}),
-			);
-		});
-
-		it("waitPropAbsence calls expect with message", async () => {
-			const pageObj = new PageObject(mockRoot as unknown as Locator, selector);
-			await pageObj.waitPropAbsence("name", "value");
-			expect(mockPlaywrightExpect).toHaveBeenCalledWith(
-				mockLocator,
-				expect.objectContaining({
-					message: "Waiting for prop «name» to NOT be equal to «value»",
-				}),
 			);
 		});
 	});

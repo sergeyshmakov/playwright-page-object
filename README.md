@@ -5,11 +5,28 @@ Typed, decorator-driven selector composition for Playwright. Keep selectors clos
 [![npm version](https://badge.fury.io/js/playwright-page-object.svg)](https://badge.fury.io/js/playwright-page-object)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
 
-## Problem
+## The problem
 
 Playwright locators are powerful, but selector logic often leaks into tests:
 
-- Selector strings get duplicated across files
+```ts
+// Before — selectors duplicated, structure invisible
+test("apply promo code", async ({ page }) => {
+  await page.getByTestId("CheckoutPage").getByTestId("PromoCodeInput").fill("SAVE20");
+  await page.getByTestId("CheckoutPage").getByRole("button", { name: "Apply" }).click();
+});
+```
+
+```ts
+// After — typed, composable, reusable
+test("apply promo code", async ({ checkoutPage }) => {
+  await checkoutPage.applyPromoCode("SAVE20");
+});
+```
+
+Specific problems this library solves:
+
+- Selector strings duplicated across files
 - Long locator chains obscure the actual UI structure
 - Reusable UI parts become scattered ad-hoc helpers
 - Adopting a structured Page Object Model feels like an all-or-nothing rewrite
@@ -20,10 +37,10 @@ Playwright locators are powerful, but selector logic often leaks into tests:
 
 - **Root decorators** scope a class to a top-level locator
 - **Child decorators** resolve selectors relative to that scope
-- **Lazy chains** rebuild only when accessed
+- **Lazy chains** rebuild only when accessed — reuse the same accessor as a typed variable
 - **Multiple output styles** support your existing patterns
 
-Use it with plain classes, custom controls, or built-in `PageObject` helpers—no breaking changes required.
+Use it with plain classes, custom controls, or built-in `PageObject` helpers — no breaking changes required.
 
 ## Installation
 
@@ -34,36 +51,36 @@ npm install -D playwright-page-object
 **Requirements:**
 - Node `>=20`
 - `@playwright/test >=1.35.0`
-- TypeScript `>=5.0` (when using decorators + accessors)
+- TypeScript `>=5.0` (decorators + accessors)
 
 Ensure your `tsconfig.json` targets `"ES2015"` or higher for ECMAScript accessor support.
 
 ## Quick Start
 
-No need to extend built-in classes—start with plain classes:
+No need to extend built-in classes — start with plain classes:
 
 ```ts
 import type { Locator, Page } from "@playwright/test";
 import { RootSelector, Selector, SelectorByRole } from "playwright-page-object";
 
 class ButtonControl {
-	constructor(readonly locator: Locator) {}
+  constructor(readonly locator: Locator) {}
 }
 
 @RootSelector("CheckoutPage")
 class CheckoutPage {
-	constructor(readonly page: Page) {}
+  constructor(readonly page: Page) {}
 
-	@Selector("PromoCodeInput")
-	accessor PromoCodeInput!: Locator;
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
 
-	@SelectorByRole("button", { name: "Apply" }, ButtonControl)
-	accessor ApplyPromoButton!: ButtonControl;
+  @SelectorByRole("button", { name: "Apply" }, ButtonControl)
+  accessor ApplyPromoButton!: ButtonControl;
 
-	async applyPromoCode(code: string) {
-		await this.PromoCodeInput.fill(code);
-		await this.ApplyPromoButton.locator.click();
-	}
+  async applyPromoCode(code: string) {
+    await this.PromoCodeInput.fill(code);
+    await this.ApplyPromoButton.locator.click();
+  }
 }
 ```
 
@@ -71,56 +88,42 @@ class CheckoutPage {
 import { test } from "@playwright/test";
 
 test("apply promo code", async ({ page }) => {
-	const checkout = new CheckoutPage(page);
-	await checkout.applyPromoCode("SAVE20");
+  const checkout = new CheckoutPage(page);
+  await checkout.applyPromoCode("SAVE20");
 });
 ```
 
-### Using page-only hosts (no root decorator)
+### Page-only hosts (no root decorator)
 
 Skip `@RootSelector` when your `data-testid` values are globally unique:
 
 ```ts
-import type { Locator, Page } from "@playwright/test";
-import { Selector, SelectorByRole } from "playwright-page-object";
-
-class ButtonControl {
-	constructor(readonly locator: Locator) {}
-}
-
 class CheckoutPage {
-	constructor(readonly page: Page) {}
+  constructor(readonly page: Page) {}
 
-	@Selector("PromoCodeInput")
-	accessor PromoCodeInput!: Locator;
-
-	@SelectorByRole("button", { name: "Apply" }, ButtonControl)
-	accessor ApplyPromoButton!: ButtonControl;
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
 }
+// Resolves to: page.locator("body").getByTestId("PromoCodeInput")
 ```
 
-See [PlainHostCheckoutPage.ts](example/e2e/page-objects/PlainHostCheckoutPage.ts) and [PromoSectionFragment.ts](example/e2e/page-objects/PromoSectionFragment.ts) for a fuller example.
+### Composing fragments
 
-### Composing fragments with `@Selector` + `this.locator`
-
-Pass a class to `@Selector(...)` to create reusable fragments. If that class exposes a `locator` property, nested decorators chain under that element:
+Pass a class to `@Selector(...)` to create reusable fragments. Nested decorators chain under that element's `locator`:
 
 ```ts
-import type { Locator, Page } from "@playwright/test";
-import { Selector } from "playwright-page-object";
-
 class PromoSection {
-	constructor(readonly locator: Locator) {}
+  constructor(readonly locator: Locator) {}
 
-	@Selector("PromoCodeInput")
-	accessor PromoInput!: Locator;
+  @Selector("PromoCodeInput")
+  accessor PromoInput!: Locator;
 }
 
 class CheckoutPage {
-	constructor(readonly page: Page) {}
+  constructor(readonly page: Page) {}
 
-	@Selector("PromoSection", PromoSection)
-	accessor promo!: PromoSection;
+  @Selector("PromoSection", PromoSection)
+  accessor promo!: PromoSection;
 }
 ```
 
@@ -133,12 +136,11 @@ class CheckoutPage {
 ```ts
 @RootSelector("CheckoutPage")
 class CheckoutPage {
-	constructor(readonly page: Page) {}
+  constructor(readonly page: Page) {}
 
-	@Selector("PromoCodeInput")
-	accessor PromoCodeInput!: Locator;
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
 }
-
 // Resolves to: page.locator("body").getByTestId("CheckoutPage").getByTestId("PromoCodeInput")
 ```
 
@@ -146,16 +148,13 @@ class CheckoutPage {
 
 ```ts
 class CheckoutPage {
-	constructor(readonly page: Page) {}
+  constructor(readonly page: Page) {}
 
-	@Selector("PromoCodeInput")
-	accessor PromoCodeInput!: Locator;
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
 }
-
 // Resolves to: page.locator("body").getByTestId("PromoCodeInput")
 ```
-
-Use a scoped root when relying on a container test id; use page-only when globally unique ids suffice.
 
 ### Child decorators resolve from context
 
@@ -181,33 +180,31 @@ If both `locator` and `page` exist, `locator` wins (element scope > page scope).
 ```ts
 @RootSelector("CheckoutPage")
 class CheckoutPage {
-	constructor(readonly page: Page) {}
+  constructor(readonly page: Page) {}
 
-	@Selector("PromoCodeInput")
-	accessor PromoCodeInput!: Locator;
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
 }
 
 await checkoutPage.PromoCodeInput.fill("SAVE20");
 ```
 
-Drop `@RootSelector` if body scope suffices.
-
 ### 2. Custom Controls (reusable abstractions)
 
 ```ts
 class ExternalInputControl {
-	constructor(readonly locator: Locator) {}
-	fill(value: string) {
-		return this.locator.fill(value);
-	}
+  constructor(readonly locator: Locator) {}
+  fill(value: string) {
+    return this.locator.fill(value);
+  }
 }
 
 @RootSelector("CheckoutPage")
 class CheckoutPage {
-	constructor(readonly page: Page) {}
+  constructor(readonly page: Page) {}
 
-	@Selector("PromoCodeInput", ExternalInputControl)
-	accessor PromoCode!: ExternalInputControl;
+  @Selector("PromoCodeInput", ExternalInputControl)
+  accessor PromoCode!: ExternalInputControl;
 }
 
 await checkoutPage.PromoCode.fill("SAVE20");
@@ -217,30 +214,30 @@ await checkoutPage.PromoCode.fill("SAVE20");
 
 ```ts
 import {
-	ListPageObject,
-	ListSelector,
-	PageObject,
-	RootPageObject,
-	RootSelector,
-	Selector,
-	SelectorByRole,
+  ListPageObject,
+  ListSelector,
+  PageObject,
+  RootPageObject,
+  RootSelector,
+  Selector,
+  SelectorByRole,
 } from "playwright-page-object";
 
 class CartItemControl extends PageObject {
-	@SelectorByRole("button", { name: "Remove" })
-	accessor RemoveButton = new PageObject();
+  @SelectorByRole("button", { name: "Remove" })
+  accessor RemoveButton = new PageObject();
 }
 
 @RootSelector("CheckoutPage")
 class CheckoutPage extends RootPageObject {
-	@Selector("PromoCodeInput")
-	accessor PromoCode = new PageObject();
+  @Selector("PromoCodeInput")
+  accessor PromoCode = new PageObject();
 
-	@SelectorByRole("button", { name: "Apply" })
-	accessor ApplyPromoButton = new PageObject();
+  @SelectorByRole("button", { name: "Apply" })
+  accessor ApplyPromoButton = new PageObject();
 
-	@ListSelector("CartItem_")
-	accessor CartItems = new ListPageObject(CartItemControl);
+  @ListSelector("CartItem_")
+  accessor CartItems = new ListPageObject(CartItemControl);
 }
 
 await checkoutPage.PromoCode.$.fill("SAVE20");
@@ -248,7 +245,7 @@ await checkoutPage.expect().toBeVisible();
 await checkoutPage.CartItems.waitCount(3);
 ```
 
-Styles coexist in the same class—mix as needed.
+Styles coexist in the same class — mix as needed.
 
 ## Built-In Classes
 
@@ -279,12 +276,10 @@ Use for nested controls. Provides:
 | Method | Purpose |
 |--------|---------|
 | `.waitVisible()` / `.waitHidden()` | Wait for visibility |
-| `.waitText(text)` | Wait for exact text |
-| `.waitValue(value)` / `.waitNoValue()` | Wait for input value |
+| `.waitText(text)` | Wait for text (`string \| RegExp`) |
+| `.waitValue(value)` | Wait for input value (`string \| RegExp \| number`) |
 | `.waitCount(count)` | Wait for element count |
 | `.waitChecked()` / `.waitUnChecked()` | Wait for checkbox state |
-| `.waitProp(name, value)` | Wait for React/Vue data prop |
-| `.waitPropAbsence(name)` | Wait for data prop absence |
 
 **Assertion methods:**
 
@@ -306,20 +301,26 @@ accessor CartItems = new ListPageObject(CartItemControl);
 **Common APIs:**
 
 ```ts
-list.items[0]                          // First item
-list.items.at(-1)                      // Last item
-for await (const item of list.items) {} // Iterate
-await list.count()                     // Item count
-list.first()                           // First item (PageObject)
-list.last()                            // Last item (PageObject)
-list.filterByText("Apple")             // Narrowed ListPageObject
-list.filterByTestId("CartItem_2")      // Narrow by item test id
-list.getItemByText("Apple")            // First matching item
-list.getItemByTestId("CartItem_2")     // First item by item test id
+list.items[0]                                  // First item
+list.items.at(-1)                              // Last item
+for await (const item of list.items) {}        // Iterate
+await list.count()                             // Item count
+list.first()                                   // First item
+list.last()                                    // Last item
+list.filterByText("Apple")                     // Narrowed by text
+list.filterByItemTestId("CartItem_2")          // Narrowed by item's own test id
+list.filterByHasTestId("remove-btn")           // Narrowed by descendant test id
+list.getItemByText("Apple")                    // First matching item
+list.getItemByTestId("CartItem_2")             // First item by own test id
 list.getItemByRole("button", { name: "Remove" }) // First item containing that role
 ```
 
-`filter...` methods return a narrowed `ListPageObject`, so you can continue with `.first()`, `.count()`, `.getAll()`, or `for await...of`. `getItemBy...` methods return a single item. Use `filterByHasTestId()` when you want Playwright `has`-style matching for rows containing a child with a given test id instead of matching the row's own test id.
+`filter...` methods return a narrowed `ListPageObject` — chain `.first()`, `.count()`, `.getAll()`, or `for await...of`.
+
+**`filterByItemTestId` vs `filterByHasTestId`:**
+
+- `filterByItemTestId(id)` — the item row itself has that `data-testid`
+- `filterByHasTestId(id)` — the item row *contains* a descendant with that `data-testid`
 
 **For Locator-based lists** (multi-element without helpers):
 
@@ -334,21 +335,21 @@ Prefer declarative row ids (`CartItem_1`, `CartItem_2`) to keep selectors readab
 
 ## Fixtures
 
-`createFixtures()` works with classes constructible via `new Class(page)`:
+`createFixtures()` works with classes constructible via `new Class(page)` and with factory functions for custom constructor arguments:
 
 ```ts
 import { test as base } from "@playwright/test";
 import { createFixtures } from "playwright-page-object";
 import { CheckoutPage } from "./page-objects/CheckoutPage";
+import { AuthPage } from "./page-objects/AuthPage";
 
-export const test = base.extend<{ checkoutPage: CheckoutPage }>(
-	createFixtures({
-		checkoutPage: CheckoutPage,
-	}),
+export const test = base.extend<{ checkoutPage: CheckoutPage; authPage: AuthPage }>(
+  createFixtures({
+    checkoutPage: CheckoutPage,
+    authPage: (page) => new AuthPage(page, authConfig),  // factory for extra args
+  }),
 );
 ```
-
-For classes with custom constructor arguments, create them in your own fixture.
 
 ## Decorator Reference
 
@@ -373,7 +374,6 @@ For classes with custom constructor arguments, create them in your own fixture.
 | `@Selector(id)` | `getByTestId(id)` |
 | `@Selector()` | Identity (no chaining) |
 | `@ListSelector(id)` | `getByTestId(new RegExp(id))` |
-| `@ListStrictSelector(id)` | `getByTestId(id)` (strict) |
 | `@SelectorByRole(...)` | `getByRole(...)` |
 | `@SelectorByText(text)` | `getByText(text)` |
 | `@SelectorByLabel(...)` | `getByLabel(...)` |
@@ -382,7 +382,9 @@ For classes with custom constructor arguments, create them in your own fixture.
 | `@SelectorByTitle(...)` | `getByTitle(...)` |
 | `@SelectorBy(fn)` | Custom locator logic |
 
-Each can return raw `Locator`, custom controls, `PageObject`, or `ListPageObject`.
+Both `@ListSelector` and `@ListRootSelector` accept `string | RegExp`. A string is treated as a regex pattern — escape metacharacters if needed.
+
+Each can return raw `Locator`, a custom control, `PageObject`, or `ListPageObject`.
 
 ## Incremental Adoption
 
@@ -391,10 +393,10 @@ Each can return raw `Locator`, custom controls, `PageObject`, or `ListPageObject
 ```ts
 @RootSelector("CheckoutPage")
 class CheckoutPage {
-	constructor(readonly page: Page) {}
+  constructor(readonly page: Page) {}
 
-	@Selector("PromoCodeInput")
-	accessor PromoCodeInput!: Locator;
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
 }
 ```
 
@@ -409,8 +411,8 @@ accessor PromoCode!: ExternalInputControl;
 
 ```ts
 class CheckoutPage extends RootPageObject {
-	@Selector("PromoCodeInput")
-	accessor PromoCode = new PageObject();
+  @Selector("PromoCodeInput")
+  accessor PromoCode = new PageObject();
 }
 ```
 
@@ -422,13 +424,25 @@ This package is available in [Context7](https://context7.com/) MCP, so AI assist
 
 A [Cubic wiki](https://www.cubic.dev/wikis/sergeyshmakov/playwright-page-object) provides AI-ready documentation for this project.
 
-It also ships an [Agent Skills](https://agentskills.io/) – compatible skill. Install it so your AI assistant loads data-path guidance:
+It also ships an [Agent Skills](https://agentskills.io/)-compatible skill. Install it so your AI assistant loads data-path guidance:
 
 ```bash
 npx ctx7 skills install /sergeyshmakov/playwright-page-object playwright-page-object
 ```
 
 The skill lives in [skills/playwright-page-object/SKILL.md](skills/playwright-page-object/SKILL.md).
+
+## Migrating from v1
+
+| v1 | v2 |
+|----|-----|
+| `ListStrictSelector(id)` | `Selector(id)` — identical locator |
+| `PageObject.waitNoValue()` | `control.$.expect().toHaveValue("")` |
+| `PageObject.waitProp(name, value)` | `control.$.expect().toHaveAttribute(...)` |
+| `PageObject.waitPropAbsence(name, value)` | `control.$.expect().not.toHaveAttribute(...)` |
+| `list.filterByTestId(id)` | `list.filterByItemTestId(id)` |
+| `list.getItemByIdMask(mask)` | `list.getItemByTestId(new RegExp(mask))` |
+| `createFixtures({ x: MyClass })` | unchanged — factory functions also now accepted |
 
 ## Contributing
 

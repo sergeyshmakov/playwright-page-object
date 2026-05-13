@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RootSelector } from "../../decorators/rootSelectors";
 import {
 	ListSelector,
-	ListStrictSelector,
 	Selector,
 	SelectorByAltText,
 	SelectorByLabel,
@@ -33,7 +32,7 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 	});
 
 	describe("ListSelector", () => {
-		it("for Locator value returns root.getByTestId(new RegExp(mask))", () => {
+		it("string mask: calls root.getByTestId(new RegExp(mask))", () => {
 			@RootSelector()
 			class TestPage extends RootPageObject {
 				@ListSelector("Item")
@@ -50,7 +49,22 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			).toBe("Item");
 		});
 
-		it("for PageObject value calls cloneWithContext(root, selector)", () => {
+		it("RegExp mask: passes the RegExp directly to getByTestId", () => {
+			const pattern = /CartItem_\d+/;
+
+			@RootSelector()
+			class TestPage extends RootPageObject {
+				@ListSelector(pattern)
+				accessor items = bodyLocator as unknown as Locator;
+			}
+
+			const instance = new TestPage(mockPage);
+			instance.items;
+
+			expect(bodyLocator.getByTestId).toHaveBeenCalledWith(pattern);
+		});
+
+		it("PageObject initializer: calls cloneWithContext(root, selector)", () => {
 			class ItemPageObject extends PageObject {}
 			const itemInstance = new ItemPageObject(
 				bodyLocator,
@@ -71,21 +85,6 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 				bodyLocator,
 				expect.any(Function),
 			);
-		});
-	});
-
-	describe("ListStrictSelector", () => {
-		it("uses exact getByTestId(id)", () => {
-			@RootSelector()
-			class TestPage extends RootPageObject {
-				@ListStrictSelector("exactItem")
-				accessor items = bodyLocator as unknown as Locator;
-			}
-
-			const instance = new TestPage(mockPage);
-			instance.items;
-
-			expect(bodyLocator.getByTestId).toHaveBeenCalledWith("exactItem");
 		});
 	});
 
@@ -114,6 +113,19 @@ describe("selectors (ListSelector, Selector, etc.)", () => {
 			const result = instance.child;
 
 			expect(result).toBe(bodyLocator);
+		});
+
+		it("throws when a PageObject subclass is passed as factory arg", () => {
+			class ButtonControl extends PageObject {}
+
+			expect(() => {
+				@RootSelector()
+				class TestPage extends RootPageObject {
+					@Selector("Btn", ButtonControl)
+					accessor btn!: ButtonControl;
+				}
+				void TestPage;
+			}).toThrow(/ButtonControl.*extends PageObject.*accessor initializer/);
 		});
 	});
 
