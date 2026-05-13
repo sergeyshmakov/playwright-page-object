@@ -12,3 +12,8 @@ tsconfig.tsbuildinfo
 .claude/memory/
 .claude/*.local.json
 .claude/*.local.md
+.claude/settings.json
+.claude/rules/
+
+# OpenWolf agent local state
+.wolf/
