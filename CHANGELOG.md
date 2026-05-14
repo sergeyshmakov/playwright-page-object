@@ -1,3 +1,10 @@
+## [2.0.3](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.0.2...v2.0.3) (2026-05-14)
+
+
+### Bug Fixes
+
+* restore node engines >=20 after accidental bump ([c683ef3](https://github.com/sergeyshmakov/playwright-page-object/commit/c683ef3c0bcd613f581b1d86a6477159b7254711))
+
 ## [2.0.2](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.0.1...v2.0.2) (2026-05-13)
 
 
