@@ -20,6 +20,10 @@ updates:
     ignore:
       - dependency-name: "@types/node*"
         versions: [ ">=24" ]
+      - dependency-name: "lint-staged"
+        versions: [ ">=17" ]
+      - dependency-name: "typescript"
+        versions: [ ">=6" ]
 
   - package-ecosystem: "npm"
     directory: "/docs"
@@ -37,6 +41,11 @@ updates:
       docs-deps:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "lint-staged"
+        versions: [ ">=17" ]
+      - dependency-name: "typescript"
+        versions: [ ">=6" ]
 
   - package-ecosystem: "github-actions"
     directory: "/"
