@@ -30,7 +30,7 @@ jobs:
         uses: withastro/action@v6
         with:
           path: docs
-          node-version: 22
+          node-version: 24.14.0
 
   deploy:
     needs: build
@@ -42,3 +42,23 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+      - name: Refresh root sitemap
+        env:
+          GH_TOKEN: ${{ secrets.PAGES_REFRESH_TOKEN }}
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "PAGES_REFRESH_TOKEN is not configured; skipping root sitemap refresh."
+            exit 0
+          fi
+
+          curl -fsSL \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/sergeyshmakov/sergeyshmakov.github.io/dispatches \
+            -d "{\"event_type\":\"project-docs-deployed\",\"client_payload\":{\"repository\":\"$SOURCE_REPOSITORY\",\"page_url\":\"$PAGE_URL\",\"run_id\":\"$SOURCE_RUN_ID\",\"sha\":\"$SOURCE_SHA\"}}"
