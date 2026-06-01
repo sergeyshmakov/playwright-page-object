@@ -85,13 +85,13 @@
 		"@semantic-release/changelog": "^6.0.3",
 		"@semantic-release/git": "^10.0.1",
 		"@types/node": "^22.19.19",
-		"concurrently": "^9.1.2",
+		"concurrently": "^10.0.1",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.4.0",
 		"semantic-release": "^25.0.3",
 		"tsup": "^8.5.1",
 		"typescript": "^5.9.3",
-		"vitest": "~4.0.18"
+		"vitest": "~4.1.8"
 	},
 	"peerDependencies": {
 		"@playwright/test": ">=1.35.0",
