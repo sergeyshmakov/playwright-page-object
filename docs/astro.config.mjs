@@ -1,5 +1,6 @@
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
+import starlightBlog from "starlight-blog";
 
 const REPO_URL = "https://github.com/sergeyshmakov/playwright-page-object";
 
@@ -22,6 +23,18 @@ export default defineConfig({
 				themes: ["github-dark", "github-light"],
 				styleOverrides: { borderRadius: "0.375rem" },
 			},
+			plugins: [
+				starlightBlog({
+					title: "Blog",
+					authors: {
+						sergei: {
+							name: "Sergei Shmakov",
+							url: "https://github.com/sergeyshmakov",
+							picture: "https://github.com/sergeyshmakov.png",
+						},
+					},
+				}),
+			],
 			sidebar: [
 				{
 					label: "Getting Started",
