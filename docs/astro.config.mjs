@@ -1,11 +1,13 @@
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
+import starlightBlog from "starlight-blog";
+import { AUTHOR_NAME, BASE, SITE } from "./site.config.mjs";
 
 const REPO_URL = "https://github.com/sergeyshmakov/playwright-page-object";
 
 export default defineConfig({
-	site: "https://sergeyshmakov.github.io",
-	base: "/playwright-page-object",
+	site: SITE,
+	base: BASE,
 	integrations: [
 		starlight({
 			title: "playwright-page-object",
@@ -22,6 +24,18 @@ export default defineConfig({
 				themes: ["github-dark", "github-light"],
 				styleOverrides: { borderRadius: "0.375rem" },
 			},
+			plugins: [
+				starlightBlog({
+					title: "Blog",
+					authors: {
+						sergei: {
+							name: AUTHOR_NAME,
+							url: "https://github.com/sergeyshmakov",
+							picture: "https://github.com/sergeyshmakov.png",
+						},
+					},
+				}),
+			],
 			sidebar: [
 				{
 					label: "Getting Started",

@@ -1,0 +1,177 @@
+---
+title: "How to Build Typed Playwright Page Objects with Decorators"
+description: "Raw Playwright page objects get repetitive, and POM base classes grow teeth. Here's a typed, decorator-based pattern in TypeScript with no inheritance."
+date: 2026-06-07
+authors: sergei
+tags:
+  - Playwright
+  - TypeScript
+  - Page Object Model
+  - Test Automation
+  - E2E
+---
+
+*Last updated: 2026-06-07 · by Sergei Shmakov*
+
+You can build typed, reusable Playwright page objects out of plain TypeScript classes, with no base class to extend and no manual locator wiring. Decorate a class with `@RootSelector("CheckoutPage")`, add `accessor` properties for the controls, and each one resolves to a lazy `Locator` chain that rebuilds on access. That last part kills a whole class of flaky tests, and you keep full type safety. Here's the pain it removes and the refactor that gets you there.
+
+If your Playwright suite has more than ~20 tests, the page object layer is usually where the rot starts. Selectors get copy-pasted across files. A base `BasePage` class grows a method every sprint until three subclasses fight over `this`. Then one redesign moves a `data-testid` and 40 tests go red at once. The fix most teams reach for (a deeper inheritance tree) is the thing making it worse.
+
+## Why do Playwright page objects get repetitive?
+
+Because every action re-types the page's scope plus the control's selector, and nothing shares that chain. Write `page.getByTestId("CheckoutPage").getByTestId("PromoCodeInput")` in one test and you'll write it again in the next five. The page object pattern is supposed to fix this, but the common base-class version trades duplication for an inheritance hierarchy that's just as hard to change.
+
+Here's a normal raw-Playwright checkout spec. Watch the `CheckoutPage` scope repeat on every line:
+
+```ts
+import { test, expect } from "@playwright/test";
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+});
+
+test("apply promo, then remove an item", async ({ page }) => {
+  await page.getByTestId("CheckoutPage").getByTestId("PromoCodeInput").fill("SAVE20");
+  await page.getByTestId("CheckoutPage").getByRole("button", { name: "Apply" }).click();
+  await page.getByTestId("CheckoutPage").getByTestId("CartItem_1").getByTestId("Remove").click();
+
+  // CartItem_ is a prefix shared by every row, so raw getByTestId needs a regex.
+  await expect(page.getByTestId("CheckoutPage").getByTestId(/^CartItem_/)).toHaveCount(2);
+});
+```
+
+Four lines, the same `CheckoutPage` scope on every one. A second test repeats all of it. When `CheckoutPage` becomes `CheckoutShell`, you edit every occurrence by hand.
+
+## What makes reused Playwright locators flaky?
+
+Caching a `Locator` reference across `await`s is the quiet culprit. A Playwright `Locator` is a lazy query, not a handle, so it's normally safe. But the moment you wrap it in a page object field that's assigned once in a constructor, you can capture a stale scope after the component re-renders. Rebuilding the chain on every access avoids it.
+
+This is the difference between assigning a locator once and resolving it lazily:
+
+```ts
+class CheckoutPage {
+  // Assigned once at construction. If the page re-renders or you re-navigate,
+  // this field still points at the chain built from the old `page` state.
+  readonly promoInput = this.page.getByTestId("CheckoutPage").getByTestId("PromoCodeInput");
+  constructor(readonly page: Page) {}
+}
+```
+
+Playwright's own [locator guide](https://playwright.dev/docs/locators) recommends building locators at use time for exactly this reason. A decorator-driven `accessor` does that for you automatically, which is the next section.
+
+## How do you write a typed Playwright page object without a base class?
+
+Decorate a plain class. `@RootSelector("CheckoutPage")` scopes the class to `page.locator("body").getByTestId("CheckoutPage")`, and each `@Selector` / `@SelectorByRole` `accessor` resolves relative to that scope, lazily, on every read. No base class, no `super()`, no manual chaining. The class is a plain TypeScript class you instantiate with `new`.
+
+Here's the same checkout flow as a page object:
+
+```ts
+import type { Locator, Page } from "@playwright/test";
+import { RootSelector, Selector, SelectorByRole } from "playwright-page-object";
+
+@RootSelector("CheckoutPage")
+class CheckoutPage {
+  constructor(readonly page: Page) {}
+
+  @Selector("PromoCodeInput")
+  accessor PromoCodeInput!: Locator;
+
+  @SelectorByRole("button", { name: "Apply" })
+  accessor ApplyPromoButton!: Locator;
+
+  async applyPromoCode(code: string) {
+    await this.PromoCodeInput.fill(code);
+    await this.ApplyPromoButton.click();
+  }
+}
+```
+
+The test reads like the domain, not the DOM:
+
+```ts
+test("apply promo, then remove an item", async ({ page }) => {
+  const checkout = new CheckoutPage(page);
+  await checkout.applyPromoCode("SAVE20");
+});
+```
+
+`PromoCodeInput` is a real `Locator`, so the full Playwright API is available with no wrapper to learn. The `accessor` keyword is what makes this typed and lazy: the decorator intercepts the getter and returns a freshly built chain each time. When `CheckoutPage` becomes `CheckoutShell`, you change one string in one place.
+
+The decorator picks the output shape from how you declare the property. Type it as `Locator` for a raw locator. Initialize it with `new PageObject()` when you want wait helpers and `.expect()`. Pass a control class as the second argument when you already have one. All three styles coexist in the same class, covered in [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/).
+
+## Do I have to rewrite my whole test suite to adopt this?
+
+No. The page object is a plain class, so you introduce it in one spec file and leave the rest of the suite untouched. There's no global config, no custom test runner, and no base class every page must inherit. Migrate the noisiest page first, measure whether it pays back, then move on.
+
+A practical three-step adoption path, taken from the [incremental adoption guide](/playwright-page-object/guides/incremental-adoption/):
+
+1. **Duplicate locator chains across tests** — wrap them in a plain class with `@RootSelector` and raw `Locator` accessors. Stop here for most pages.
+2. **The same methods called on the same accessor** (`fill`, `click`, `expect`) — extract a [custom control](/playwright-page-object/guides/custom-controls/) so the calls live in one place.
+3. **The same wait or assertion code repeating** — switch that accessor to the built-in [`PageObject`](/playwright-page-object/guides/built-in-pom/) for `waitVisible()`, soft assertions, and list filters.
+
+Setup is one dev dependency and a TypeScript target of `ES2015` or higher. No `experimentalDecorators` flag, because the library uses standard [ECMAScript decorators](https://github.com/tc39/proposal-decorators) and the [TypeScript 5.0 `accessor` keyword](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html):
+
+```sh
+npm install -D playwright-page-object
+```
+
+## When should you not use this pattern?
+
+Skip it when the abstraction costs more than the duplication it removes. A one-off script or a five-test smoke suite reads fine with a couple of `page.getByTestId(...)` calls inline. Three similar `.fill()` calls are not duplication. Five matching wait blocks across files are.
+
+A short honest list of where this falls down:
+
+- **Tiny or throwaway suites.** Inline locators are clearer than a class you read once.
+- **Pages with no repeated structure.** If nothing recurs, there's nothing to factor out.
+- **A team already happy with a different POM convention.** Consistency across a suite beats a marginally nicer pattern in one corner of it.
+
+The library is a locator-composition layer, not a testing framework. It adds typed page objects to the Playwright runner you already use. It does not replace your runner, your config, or your assertions.
+
+## How does it work with Playwright fixtures?
+
+Wire instantiation once with `createFixtures`, then every test receives ready-built page objects as fixture arguments. No `new CheckoutPage(page)` in each test, and the types flow through.
+
+```ts
+import { test as base } from "@playwright/test";
+import { createFixtures } from "playwright-page-object";
+
+export const test = base.extend<{ checkoutPage: CheckoutPage }>(
+  createFixtures({ checkoutPage: CheckoutPage }),
+);
+
+test("apply promo code", async ({ checkoutPage }) => {
+  await checkoutPage.applyPromoCode("SAVE20");
+});
+```
+
+See the [Fixtures guide](/playwright-page-object/guides/fixtures/) for factory functions and shared configuration. One more thing worth mentioning: the package ships an [Agent Skill and a Context7 entry](/playwright-page-object/ai-tooling/agent-skills/) so AI coding assistants generate correct page objects against the current API instead of guessing at the decorator names.
+
+## Try it
+
+The [Quick Start](/playwright-page-object/getting-started/quick-start/) is a complete working example in under five minutes. If it saves you an afternoon of selector wrangling, the easiest way to say thanks is a star on [GitHub](https://github.com/sergeyshmakov/playwright-page-object) and `npm i -D playwright-page-object`.
+
+## FAQ
+
+### Is playwright-page-object a framework or a library?
+
+A library, and a small one. It adds decorators and a couple of optional base classes to the standard `@playwright/test` runner. There's no bespoke test command, no config file it owns, and no runtime it boots. Your existing Playwright setup keeps working; you opt into the page object layer file by file.
+
+### Does it work with the standard @playwright/test runner?
+
+Yes. Page objects are plain TypeScript classes. Instantiate one with `new CheckoutPage(page)` inside a test, or wire it through `createFixtures` so it arrives as a fixture argument. Nothing about the runner, reporters, or `playwright.config.ts` changes.
+
+### What is the TypeScript `accessor` keyword?
+
+`accessor` is a TypeScript 5.0 (and ECMAScript Stage-3) feature that declares an auto-implemented getter/setter pair backed by a private field. Decorators can wrap that getter, which is how this library returns a freshly resolved `Locator` on every read. The [TypeScript 5.0 notes](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html) cover the syntax.
+
+### Do I need `experimentalDecorators` in my tsconfig?
+
+No. The library uses standard ECMAScript decorators, supported natively in TypeScript 5.0+, so the legacy `experimentalDecorators` flag stays off. Target `ES2015` or higher (`ES2022` is a good default) and you're set. See [Installation](/playwright-page-object/getting-started/installation/) for the full requirements.
+
+### Can I use Playwright page objects without inheritance?
+
+Yes, and that's the default. A plain class with `@RootSelector` and `accessor` properties needs no base class. If you drop `@RootSelector`, selectors chain from `page.locator("body")` instead. The built-in `PageObject` base exists only for the cases that want its wait helpers, and it's opt-in.
+
+### Does this reduce flaky Playwright tests?
+
+It removes one specific cause: stale cached locator references. Because accessors rebuild the chain on every access, a page re-render between two `await`s can't leave you holding an outdated handle. It won't fix flakiness from application races or network timing, which is what Playwright's [auto-waiting](https://playwright.dev/docs/actionability) is for.
