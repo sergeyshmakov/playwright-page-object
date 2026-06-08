@@ -1,0 +1,29 @@
+name: Dependabot auto-merge
+
+# Auto-merges Dependabot PRs for patch and minor bumps once required checks pass.
+# Major bumps are left for manual review. CI is the safety net: auto-merge waits
+# for required status checks, so a red build (e.g. a breaking minor) never merges.
+# Requires the repo "Allow auto-merge" setting to be enabled.
+
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        # For grouped PRs this reports the highest semver bump in the group.
+        uses: dependabot/fetch-metadata@v2
+
+      - name: Enable auto-merge for patch and minor updates
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor' }}
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
