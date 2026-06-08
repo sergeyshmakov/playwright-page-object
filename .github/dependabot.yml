@@ -24,6 +24,12 @@ updates:
         versions: [ ">=17" ]
       - dependency-name: "typescript"
         versions: [ ">=6" ]
+      # concurrently >=10 requires Node 22; project floor is Node >=20.
+      - dependency-name: "concurrently"
+        versions: [ ">=10" ]
+      # vitest >=4.1 breaks the test suite (7 of 9 files fail to load); revisit when fixed.
+      - dependency-name: "vitest"
+        versions: [ ">=4.1" ]
 
   - package-ecosystem: "npm"
     directory: "/docs"
