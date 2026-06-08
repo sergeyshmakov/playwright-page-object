@@ -35,11 +35,12 @@ test("apply promo, then remove an item", async ({ page }) => {
   await page.getByTestId("CheckoutPage").getByRole("button", { name: "Apply" }).click();
   await page.getByTestId("CheckoutPage").getByTestId("CartItem_1").getByTestId("Remove").click();
 
-  await expect(page.getByTestId("CheckoutPage").getByTestId("CartItem_")).toHaveCount(2);
+  // CartItem_ is a prefix shared by every row, so raw getByTestId needs a regex.
+  await expect(page.getByTestId("CheckoutPage").getByTestId(/^CartItem_/)).toHaveCount(2);
 });
 ```
 
-Four lines, the scope selector five times. A second test repeats all of it. When `CheckoutPage` becomes `CheckoutShell`, you edit every occurrence by hand.
+Four lines, the same `CheckoutPage` scope on every one. A second test repeats all of it. When `CheckoutPage` becomes `CheckoutShell`, you edit every occurrence by hand.
 
 ## What makes reused Playwright locators flaky?
 

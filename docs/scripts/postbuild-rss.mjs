@@ -25,15 +25,13 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AUTHOR_NAME, BASE, SITE } from "../site.config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RSS_PATH = resolve(__dirname, "..", "dist", "blog", "rss.xml");
 
-const SITE = "https://sergeyshmakov.github.io";
-const BASE = "/playwright-page-object";
 const FEED_CHANNEL_LINK = `${SITE}${BASE}/blog/`;
 const FEED_SELF_HREF = `${SITE}${BASE}/blog/rss.xml`;
-const AUTHOR_NAME = "Sergei Shmakov";
 
 if (!existsSync(RSS_PATH)) {
 	console.error(`[postbuild-rss] ${RSS_PATH} not found — was the site built?`);
