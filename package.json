@@ -78,10 +78,12 @@
 		]
 	},
 	"devDependencies": {
+		"@babel/plugin-proposal-decorators": "^7.29.7",
 		"@biomejs/biome": "^2.4.15",
 		"@commitlint/cli": "^21.0.1",
 		"@commitlint/config-conventional": "^21.0.1",
 		"@playwright/test": "^1.60.0",
+		"@rolldown/plugin-babel": "^0.2.3",
 		"@semantic-release/changelog": "^6.0.3",
 		"@semantic-release/git": "^10.0.1",
 		"@types/node": "^22.19.19",
@@ -91,7 +93,7 @@
 		"semantic-release": "^25.0.3",
 		"tsup": "^8.5.1",
 		"typescript": "^5.9.3",
-		"vitest": "~4.0.18"
+		"vitest": "^4.1.8"
 	},
 	"peerDependencies": {
 		"@playwright/test": ">=1.35.0",
