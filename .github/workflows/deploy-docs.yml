@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Full history so Starlight's `lastUpdated` (git log per file) is accurate.
           fetch-depth: 0
