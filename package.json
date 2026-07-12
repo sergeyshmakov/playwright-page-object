@@ -87,7 +87,6 @@
 		"@semantic-release/changelog": "^6.0.3",
 		"@semantic-release/git": "^10.0.1",
 		"@types/node": "^22.19.19",
-		"concurrently": "^9.1.2",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.4.0",
 		"semantic-release": "^25.0.3",
