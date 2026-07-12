@@ -24,9 +24,6 @@ updates:
         versions: [ ">=17" ]
       - dependency-name: "typescript"
         versions: [ ">=6" ]
-      # concurrently >=10 requires Node 22; project floor is Node >=20.
-      - dependency-name: "concurrently"
-        versions: [ ">=10" ]
       # @babel/plugin-proposal-decorators >=8 drops the "2023-05" version that
       # matches TypeScript's shipped decorator semantics; "2023-11" breaks
       # parameter-property classes. Stay on v7 for the vitest babel transform.
@@ -52,6 +49,27 @@ updates:
     ignore:
       - dependency-name: "lint-staged"
         versions: [ ">=17" ]
+      - dependency-name: "typescript"
+        versions: [ ">=6" ]
+
+  - package-ecosystem: "npm"
+    directory: "/example"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    allow:
+      - dependency-type: "direct"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "example"
+    groups:
+      example-deps:
+        patterns:
+          - "*"
+    ignore:
+      # The example demonstrates the library, which supports TypeScript >=5.
       - dependency-name: "typescript"
         versions: [ ">=6" ]
 
