@@ -27,6 +27,11 @@ updates:
       # concurrently >=10 requires Node 22; project floor is Node >=20.
       - dependency-name: "concurrently"
         versions: [ ">=10" ]
+      # @babel/plugin-proposal-decorators >=8 drops the "2023-05" version that
+      # matches TypeScript's shipped decorator semantics; "2023-11" breaks
+      # parameter-property classes. Stay on v7 for the vitest babel transform.
+      - dependency-name: "@babel/plugin-proposal-decorators"
+        versions: [ ">=8" ]
 
   - package-ecosystem: "npm"
     directory: "/docs"
