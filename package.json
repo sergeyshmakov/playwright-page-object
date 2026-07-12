@@ -20,7 +20,7 @@
 		"typecheck": "tsc --noEmit && cd example && tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"test:example": "npm run pack:example && concurrently \"cd example && npm install --force ../playwright-page-object.tgz\" \"npx playwright install --with-deps chromium\" && cd example && npm run test:e2e"
+		"test:example": "npm run pack:example && cd example && npm install --force ../playwright-page-object.tgz && npx playwright install --with-deps chromium && npm run test:e2e"
 	},
 	"keywords": [
 		"playwright",
