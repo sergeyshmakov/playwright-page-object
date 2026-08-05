@@ -21,7 +21,7 @@ class HostB { constructor(readonly locator: Locator) {} }
 class HostC { constructor(readonly page: Page) {} }
 ```
 
-See [Context Resolution](/playwright-page-object/reference/context-resolution/) for the full priority list.
+See [Context Resolution](/reference/context-resolution/) for the full priority list.
 
 ## "X extends PageObject and cannot be passed as a factory argument..."
 
@@ -41,7 +41,7 @@ accessor PromoCode!: PromoPageObject;
 accessor PromoCode = new PromoPageObject();
 ```
 
-Why: `PageObject` instances are cloned under the parent's scope via `cloneWithContext`. The factory-argument form constructs a new instance with the locator, which bypasses that contract. Custom controls (plain classes with `constructor(locator: Locator)`) do use the factory-argument form — see [Custom Controls](/playwright-page-object/guides/custom-controls/).
+Why: `PageObject` instances are cloned under the parent's scope via `cloneWithContext`. The factory-argument form constructs a new instance with the locator, which bypasses that contract. Custom controls (plain classes with `constructor(locator: Locator)`) do use the factory-argument form — see [Custom Controls](/guides/custom-controls/).
 
 ## "X must extend RootPageObject to use root decorators..."
 
@@ -103,7 +103,7 @@ The `!:` tells TypeScript the decorator handles initialization.
 }
 ```
 
-See [Installation](/playwright-page-object/getting-started/installation/) for the full recommended config.
+See [Installation](/getting-started/installation/) for the full recommended config.
 
 ## `for await (const item of list.items)` types as `unknown`
 
@@ -141,5 +141,5 @@ createFixtures({
 
 ## See also
 
-- [Context Resolution](/playwright-page-object/reference/context-resolution/)
-- [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/)
+- [Context Resolution](/reference/context-resolution/)
+- [Choosing a Style](/getting-started/choosing-a-style/)

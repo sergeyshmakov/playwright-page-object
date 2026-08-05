@@ -51,7 +51,7 @@ page.locator("body")
 
 ## Context inheritance
 
-Fragments work because the [context resolution](/playwright-page-object/reference/context-resolution/) priority looks at the host's `locator` property before falling back to `page`. The parent's `@Selector(..., FragmentClass)` constructs `new FragmentClass(resolvedLocator)` and the resolved locator becomes the fragment's scope.
+Fragments work because the [context resolution](/reference/context-resolution/) priority looks at the host's `locator` property before falling back to `page`. The parent's `@Selector(..., FragmentClass)` constructs `new FragmentClass(resolvedLocator)` and the resolved locator becomes the fragment's scope.
 
 ## Sharing fragments across pages
 
@@ -85,5 +85,5 @@ Both pages reuse `PromoSection` without inheritance or shared state.
 
 ## See also
 
-- [Custom Controls](/playwright-page-object/guides/custom-controls/) — fragments and custom controls share the same constructor shape.
-- [Context Resolution](/playwright-page-object/reference/context-resolution/) — the resolution rules that make fragments work.
+- [Custom Controls](/guides/custom-controls/) — fragments and custom controls share the same constructor shape.
+- [Context Resolution](/reference/context-resolution/) — the resolution rules that make fragments work.
