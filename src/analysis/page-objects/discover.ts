@@ -1,4 +1,4 @@
-import type { ClassDeclaration, SourceFile } from "ts-morph";
+import { type ClassDeclaration, Node, type SourceFile } from "ts-morph";
 import { dedupeDiagnostics } from "../diagnostics";
 import type {
 	Diagnostic,
@@ -13,6 +13,7 @@ import { defKey, keyFold, matchesAnyGlob, toPosix } from "../util/paths";
 import type { Workspace } from "../workspace";
 import { type FixtureMap, readFixtureMaps } from "./fixtures";
 import {
+	type ClassLike,
 	classifyHost,
 	findRootDecorator,
 	type HostClassification,
@@ -64,6 +65,59 @@ export interface DiscoveryResult {
 }
 
 const MAX_FACTORY_ROUNDS = 6;
+
+/**
+ * Every decorated member the class exposes at runtime: its own, plus those it
+ * inherits from project-local base classes.
+ *
+ * A decorated `accessor` installs a get/set pair on the prototype, so a
+ * subclass really does expose its base's selectors — reporting only the
+ * subclass's own members made `counts.members` wrong and hid inherited
+ * selectors from the tree, which is how an agent ends up re-declaring one that
+ * already exists.
+ *
+ * Override semantics are by name, nearest class first: anything the subclass
+ * declares — decorated or not — shadows the base member of the same name,
+ * exactly as the prototype chain does.
+ */
+function collectMembers(
+	entry: DiscoveredClass,
+	ctx: AnalysisContext,
+): MemberRead[] {
+	const out: MemberRead[] = [];
+	const shadowed = new Set<string>();
+
+	const collect = (
+		declaration: ClassLike,
+		imports: LibraryImports,
+		inherited: boolean,
+	) => {
+		const declaredHere: string[] = [];
+		for (const member of declaration.getMembers()) {
+			const name = Node.hasName(member) ? String(member.getName()) : "";
+			if (name !== "") {
+				declaredHere.push(name);
+				if (shadowed.has(name)) {
+					continue;
+				}
+			}
+			const read = readMember(member, imports, ctx);
+			if (read) {
+				out.push(inherited ? { ...read, inherited: true } : read);
+			}
+		}
+		for (const name of declaredHere) {
+			shadowed.add(name);
+		}
+	};
+
+	collect(entry.declaration, entry.imports, false);
+	for (const base of readHeritage(entry.declaration, entry.imports, ctx)
+		.localBases) {
+		collect(base, collectLibraryImports(base.getSourceFile(), ctx), true);
+	}
+	return out;
+}
 
 function selectFiles(ws: Workspace, options: DiscoverOptions): SourceFile[] {
 	const include = options.include ?? [];
@@ -226,11 +280,7 @@ export function runDiscovery(
 		let added = false;
 		for (const entry of pending) {
 			entry.membersRead = true;
-			for (const member of entry.declaration.getMembers()) {
-				const read = readMember(member, entry.imports, ctx);
-				if (!read) {
-					continue;
-				}
+			for (const read of collectMembers(entry, ctx)) {
 				entry.members.push(read);
 				for (const edge of read.edges) {
 					if (edge.viaFactoryArg) {
@@ -277,7 +327,9 @@ export function runDiscovery(
 			signatureMode: options.signatureMode,
 		});
 		for (const member of entry.members) {
-			if (member.member.warnings) {
+			// An inherited member's diagnostics belong to the base class that
+			// declares it, and it is discovered in its own right.
+			if (member.member.warnings && !member.inherited) {
 				entry.warnings.push(...member.member.warnings);
 			}
 		}

@@ -37,20 +37,45 @@ export function defKey(relFile: string, className: string): string {
 }
 
 /**
- * Case-folded lookup key. Windows paths are case-insensitive, so two spellings
- * of the same file must collapse to one entry — but the displayed key keeps the
- * original casing.
+ * Whether the host filesystem treats two spellings of a path as the same file.
  *
- * Only the *file* half is folded. Class names are case-sensitive in every
+ * A platform check rather than a probe: writing a temp file to sniff the real
+ * behaviour would cost an I/O round trip on a hot path, and the default for
+ * every supported OS is well known (NTFS and APFS/HFS+ case-insensitive, ext4
+ * and friends case-sensitive). A case-sensitive volume mounted on macOS, or a
+ * case-sensitive directory on Windows, is the documented blind spot: there the
+ * engine merges `Foo.ts` and `foo.ts`, exactly as it did on every platform
+ * before.
+ */
+export function isCaseInsensitiveFileSystem(): boolean {
+	return process.platform === "win32" || process.platform === "darwin";
+}
+
+/** Case-folds a path for lookups, but only where the filesystem does too. */
+export function foldPath(filePath: string): string {
+	return isCaseInsensitiveFileSystem() ? filePath.toLowerCase() : filePath;
+}
+
+/**
+ * Case-folded lookup key. Windows and macOS paths are case-insensitive, so two
+ * spellings of the same file must collapse to one entry — but the displayed key
+ * keeps the original casing.
+ *
+ * On a case-sensitive filesystem nothing is folded: `pages/Foo.ts#Checkout` and
+ * `pages/foo.ts#Checkout` are two different files there, and collapsing them
+ * would silently drop one class from the registry and resolve its references to
+ * the other.
+ *
+ * Only the *file* half is ever folded. Class names are case-sensitive in every
  * language the engine reads, so folding them would merge two distinct page
  * objects into one entry and let a lookup return the wrong class.
  */
 export function keyFold(key: string): string {
 	const hash = key.lastIndexOf("#");
 	if (hash < 0) {
-		return key.toLowerCase();
+		return foldPath(key);
 	}
-	return `${key.slice(0, hash).toLowerCase()}${key.slice(hash)}`;
+	return `${foldPath(key.slice(0, hash))}${key.slice(hash)}`;
 }
 
 export function splitDefKey(key: string): { file: string; name: string } {

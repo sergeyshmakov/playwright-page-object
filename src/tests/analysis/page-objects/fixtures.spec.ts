@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFixtureMaps } from "../../../analysis/page-objects/fixtures";
 import { createAnalysisContext } from "../../../analysis/page-objects/libraryImports";
+import { keyFold } from "../../../analysis/util/paths";
 import { libImport, makeWorkspace } from "../helpers/inMemory";
 
 const PAGE_FILES = {
@@ -31,8 +32,10 @@ describe("readFixtureMaps", () => {
 				"export const fixtures = createFixtures({ homePage: HomePage });",
 			].join("\n"),
 		});
-		expect(map.byName.get("homePage")).toBe("src/homepage.ts#HomePage");
-		const bindings = map.byClass.get("src/homepage.ts#HomePage");
+		expect(map.byName.get("homePage")).toBe(
+			keyFold("src/HomePage.ts#HomePage"),
+		);
+		const bindings = map.byClass.get(keyFold("src/HomePage.ts#HomePage"));
 		expect(bindings).toHaveLength(1);
 		expect(bindings?.[0]).toMatchObject({
 			name: "homePage",
@@ -51,7 +54,7 @@ describe("readFixtureMaps", () => {
 				"});",
 			].join("\n"),
 		});
-		const bindings = map.byClass.get("src/authpage.ts#AuthPage");
+		const bindings = map.byClass.get(keyFold("src/AuthPage.ts#AuthPage"));
 		expect(bindings?.[0]).toMatchObject({
 			name: "authPage",
 			form: "factory",
@@ -82,7 +85,9 @@ describe("readFixtureMaps", () => {
 				"export const b = createFixtures({ landing: HomePage });",
 			].join("\n"),
 		});
-		expect(map.byClass.get("src/homepage.ts#HomePage")).toHaveLength(2);
+		expect(map.byClass.get(keyFold("src/HomePage.ts#HomePage"))).toHaveLength(
+			2,
+		);
 	});
 
 	it("binds a multi-statement factory to the class it returns", () => {
@@ -100,8 +105,10 @@ describe("readFixtureMaps", () => {
 				"});",
 			].join("\n"),
 		});
-		expect(map.byName.get("authPage")).toBe("src/authpage.ts#AuthPage");
-		expect(map.byClass.has("src/helper.ts#Helper")).toBe(false);
+		expect(map.byName.get("authPage")).toBe(
+			keyFold("src/AuthPage.ts#AuthPage"),
+		);
+		expect(map.byClass.has(keyFold("src/helper.ts#Helper"))).toBe(false);
 	});
 
 	it("follows a returned local one hop to its constructor", () => {
@@ -117,7 +124,9 @@ describe("readFixtureMaps", () => {
 				"});",
 			].join("\n"),
 		});
-		expect(map.byName.get("homePage")).toBe("src/homepage.ts#HomePage");
+		expect(map.byName.get("homePage")).toBe(
+			keyFold("src/HomePage.ts#HomePage"),
+		);
 	});
 
 	it("resolves a constructor reached through a namespace import", () => {
@@ -131,7 +140,9 @@ describe("readFixtureMaps", () => {
 				"});",
 			].join("\n"),
 		});
-		expect(map.byName.get("homePage")).toBe("src/homepage.ts#HomePage");
+		expect(map.byName.get("homePage")).toBe(
+			keyFold("src/HomePage.ts#HomePage"),
+		);
 	});
 
 	it("does not key a binding under an alias with no class declaration", () => {
@@ -144,7 +155,7 @@ describe("readFixtureMaps", () => {
 			].join("\n"),
 		});
 		expect(map.byName.has("homePage")).toBe(false);
-		expect(map.byClass.has("src/fixtures.ts#Alias")).toBe(false);
+		expect(map.byClass.has(keyFold("src/fixtures.ts#Alias"))).toBe(false);
 		expect(map.warnings.map((diagnostic) => diagnostic.code)).toContain(
 			"fixture-entry-dynamic",
 		);

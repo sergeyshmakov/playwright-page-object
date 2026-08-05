@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
-import { libImport, makeWorkspace } from "../helpers/inMemory";
+import {
+	libImport,
+	MEMORY_ROOT_POSIX,
+	makeWorkspace,
+} from "../helpers/inMemory";
 
 const ROOT = [
 	'import type { Locator } from "@playwright/test";',
@@ -165,5 +169,124 @@ describe("discoverPageObjects", () => {
 		const ws = makeWorkspace(FILES);
 		expect(discoverPageObjects(ws).stats.cached).toBe(false);
 		expect(discoverPageObjects(ws).stats.cached).toBe(true);
+	});
+});
+
+/**
+ * A decorated `accessor` installs its get/set pair on the prototype, so a
+ * subclass really does expose every selector its project-local bases declare.
+ */
+describe("discoverPageObjects — inherited members", () => {
+	const INHERITED = {
+		"e2e/Badge.ts": [
+			'import type { Locator } from "@playwright/test";',
+			"export class Badge { constructor(private readonly _l: Locator) {} }",
+		].join("\n"),
+		"e2e/BasePage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			'import { Badge } from "./Badge";',
+			'@RootSelector("Base")',
+			"export class BasePage extends RootPageObject {",
+			'  @Selector("Header")',
+			"  accessor Header!: Locator;",
+			'  @Selector("BaseShared")',
+			"  accessor Shared!: Locator;",
+			'  @Selector("Flag", Badge)',
+			"  accessor Flag!: Badge;",
+			"  async baseHelper() {}",
+			"}",
+		].join("\n"),
+		"e2e/CheckoutPage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("Selector"),
+			'import { BasePage } from "./BasePage";',
+			"export class CheckoutPage extends BasePage {",
+			'  @Selector("Submit")',
+			"  accessor Submit!: Locator;",
+			'  @Selector("OwnShared")',
+			"  accessor Shared!: Locator;",
+			"}",
+		].join("\n"),
+	};
+
+	function checkout() {
+		const index = discoverPageObjects(makeWorkspace(INHERITED));
+		const entry = index.pageObjects.find(
+			(candidate) => candidate.className === "CheckoutPage",
+		);
+		if (!entry) {
+			throw new Error("CheckoutPage was not discovered");
+		}
+		return entry;
+	}
+
+	it("counts inherited decorated accessors as part of the surface", () => {
+		// Submit + Shared (own) + Header + Flag (inherited); `Shared` is not
+		// counted twice.
+		expect(checkout().counts.members).toBe(4);
+	});
+
+	it("does not report the base class's own members twice", () => {
+		const index = discoverPageObjects(makeWorkspace(INHERITED));
+		const base = index.pageObjects.find(
+			(entry) => entry.className === "BasePage",
+		);
+		expect(base?.counts.members).toBe(3);
+	});
+
+	it("keeps a class with no local base unchanged", () => {
+		const index = discoverPageObjects(makeWorkspace(FILES));
+		const home = index.pageObjects.find(
+			(entry) => entry.className === "HomePage",
+		);
+		expect(home?.counts.members).toBe(3);
+	});
+});
+
+describe("discoverPageObjects — tsconfig path aliases", () => {
+	const ALIASED = {
+		"e2e/Ctrl.ts": [
+			'import type { Locator } from "@playwright/test";',
+			"export class Ctrl { constructor(private readonly _l: Locator) {} }",
+		].join("\n"),
+		"e2e/HomePage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			'import { Ctrl } from "@/Ctrl";',
+			'@RootSelector("Home")',
+			"export class HomePage extends RootPageObject {",
+			'  @Selector("promo", Ctrl)',
+			"  accessor Promo!: Ctrl;",
+			"}",
+		].join("\n"),
+	};
+
+	function aliasedWorkspace() {
+		const ws = makeWorkspace(ALIASED);
+		ws.project.compilerOptions.set({
+			baseUrl: MEMORY_ROOT_POSIX,
+			paths: { "@/*": ["e2e/*"] },
+		});
+		return ws;
+	}
+
+	it("expands a control imported through an alias", () => {
+		const index = discoverPageObjects(aliasedWorkspace(), {
+			includeControls: true,
+		});
+		const ctrl = index.pageObjects.find((entry) => entry.className === "Ctrl");
+		expect(ctrl?.id).toBe("e2e/Ctrl.ts#Ctrl");
+		expect(ctrl?.discoveredBy).toEqual(["factoryArg"]);
+		expect(ctrl?.hostKind).toBe("externalControl");
+	});
+
+	it("still treats a genuinely external import as external", () => {
+		const index = discoverPageObjects(aliasedWorkspace(), {
+			includeControls: true,
+		});
+		expect(index.pageObjects.map((entry) => entry.className)).not.toContain(
+			"Locator",
+		);
 	});
 });

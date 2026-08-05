@@ -7,8 +7,10 @@ import {
 	defaultIncludeGlobs,
 	locateTsConfig,
 	synthesizedCompilerOptions,
+	tsConfigFileNames,
 } from "../../../analysis/config/tsconfig";
 import { AnalysisLimitError } from "../../../analysis/diagnostics";
+import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import { Workspace } from "../../../analysis/workspace";
 
 const roots: string[] = [];
@@ -147,5 +149,131 @@ describe("Workspace file discovery", () => {
 		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 2 })).toThrow(
 			AnalysisLimitError,
 		);
+	});
+});
+
+describe("tsConfigFileNames", () => {
+	it("lists the tsconfig's sources without building a project", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/a.ts": "export const a = 1;",
+			"src/nested/b.ts": "export const b = 1;",
+			"other/c.ts": "export const c = 1;",
+		});
+		const names = tsConfigFileNames(path.join(root, "tsconfig.json"));
+		expect(names?.map((name) => path.basename(name)).sort()).toEqual([
+			"a.ts",
+			"b.ts",
+		]);
+	});
+
+	it("returns null for a config it cannot read", () => {
+		const root = scratch({});
+		expect(tsConfigFileNames(path.join(root, "nope.json"))).toBeNull();
+	});
+});
+
+/**
+ * The in-memory resolver tests set `paths` on the project by hand. This one
+ * goes through a real tsconfig, where TypeScript — not the test — decides what
+ * the mapping is relative to.
+ */
+describe("path aliases from a real tsconfig", () => {
+	const sources = {
+		"e2e/Ctrl.ts": [
+			'import type { Locator } from "@playwright/test";',
+			"export class Ctrl { constructor(private readonly _l: Locator) {} }",
+		].join("\n"),
+		"e2e/HomePage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+			'import { Ctrl } from "@/Ctrl";',
+			'@RootSelector("Home")',
+			"export class HomePage extends RootPageObject {",
+			'  @Selector("promo", Ctrl)',
+			"  accessor Promo!: Ctrl;",
+			"}",
+		].join("\n"),
+	};
+
+	function discoverWith(compilerOptions: Record<string, unknown>): string[] {
+		const root = scratch({
+			...sources,
+			"tsconfig.json": JSON.stringify({ compilerOptions, include: ["e2e"] }),
+		});
+		Workspace.reset();
+		const index = discoverPageObjects(
+			Workspace.acquire({ projectRoot: root }),
+			{
+				includeControls: true,
+			},
+		);
+		return index.pageObjects.map((entry) => entry.id);
+	}
+
+	it("expands an aliased control when the config sets baseUrl", () => {
+		expect(
+			discoverWith({ baseUrl: ".", paths: { "@/*": ["e2e/*"] } }),
+		).toContain("e2e/Ctrl.ts#Ctrl");
+	});
+
+	it("expands an aliased control when the config omits baseUrl", () => {
+		expect(discoverWith({ paths: { "@/*": ["e2e/*"] } })).toContain(
+			"e2e/Ctrl.ts#Ctrl",
+		);
+	});
+
+	it("leaves a control external when nothing maps the specifier", () => {
+		expect(discoverWith({})).not.toContain("e2e/Ctrl.ts#Ctrl");
+	});
+});
+
+describe("maxFiles pre-scan", () => {
+	it("rejects an oversized tsconfig before parsing its sources", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+			"src/c.ts": "export const c = 1;",
+		});
+		Workspace.reset();
+		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 2 })).toThrow(
+			/3 source files, which exceeds the 2 file limit/,
+		);
+	});
+
+	// The pre-scan counts a raw tsconfig file list, which includes declaration
+	// files the loaded project never analyses. Counting those would reject a
+	// repository that is comfortably inside the cap.
+	it("ignores declaration files, exactly as sourceFiles() does", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src", "types"] }),
+			"src/a.ts": "export const a = 1;",
+			"types/globals.d.ts": "declare const x: number;",
+			"types/other.d.ts": "declare const y: number;",
+		});
+		Workspace.reset();
+		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 1 });
+		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
+			"src/a.ts",
+		]);
+	});
+
+	it("counts only what `include` scopes the analysis to", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src", "scripts"] }),
+			"src/a.ts": "export const a = 1;",
+			"scripts/one.ts": "export const one = 1;",
+			"scripts/two.ts": "export const two = 1;",
+		});
+		Workspace.reset();
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src"],
+			maxFiles: 1,
+		});
+		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
+			"src/a.ts",
+		]);
 	});
 });

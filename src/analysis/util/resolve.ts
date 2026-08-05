@@ -1,5 +1,11 @@
 import * as path from "node:path";
-import { Node, type Project, type SourceFile, SyntaxKind } from "ts-morph";
+import {
+	type CompilerOptions,
+	Node,
+	type Project,
+	type SourceFile,
+	SyntaxKind,
+} from "ts-morph";
 import type { DynamicReason } from "../types";
 import { toPosix } from "./paths";
 
@@ -86,24 +92,10 @@ export function isRelativeSpecifier(specifier: string): boolean {
 }
 
 /**
- * Resolves a relative module specifier to a file already in — or addable to —
- * the project. Bare specifiers deliberately return `undefined`: library base
- * classes are identified by *name plus import source*, never by walking into
- * `node_modules`. That is what lets the engine work on a freshly cloned repo
- * with no install.
+ * Resolves a module path prefix (no extension) to a file already in — or
+ * addable to — the project, trying every extension and the `index.*` form.
  */
-export function resolveRelativeModule(
-	project: Project,
-	fromFile: SourceFile,
-	specifier: string,
-): SourceFile | undefined {
-	if (!isRelativeSpecifier(specifier)) {
-		return undefined;
-	}
-	const base = path.posix.join(
-		toPosix(fromFile.getDirectoryPath()),
-		toPosix(specifier),
-	);
+function loadFromBase(project: Project, base: string): SourceFile | undefined {
 	const bases = [base];
 	// NodeNext ESM style: `./x.js` on disk is `./x.ts`.
 	const jsExt = /\.([cm]?)js$/.exec(base);
@@ -141,6 +133,129 @@ export function resolveRelativeModule(
 			}
 		} catch {
 			// A path that cannot be stat'ed is simply not a candidate.
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Resolves a relative module specifier to a file already in — or addable to —
+ * the project. Bare specifiers deliberately return `undefined`: use
+ * {@link resolveModuleSpecifier}, which also consults the tsconfig `paths`
+ * table. Neither ever walks into `node_modules`: library base classes are
+ * identified by *name plus import source*, which is what lets the engine work
+ * on a freshly cloned repo with no install.
+ */
+export function resolveRelativeModule(
+	project: Project,
+	fromFile: SourceFile,
+	specifier: string,
+): SourceFile | undefined {
+	if (!isRelativeSpecifier(specifier)) {
+		return undefined;
+	}
+	return loadFromBase(
+		project,
+		path.posix.join(toPosix(fromFile.getDirectoryPath()), toPosix(specifier)),
+	);
+}
+
+/**
+ * Directory the tsconfig `paths` entries are written relative to.
+ *
+ * `baseUrl` when there is one; otherwise TypeScript records the config's own
+ * directory as `pathsBasePath` (paths without baseUrl, allowed since TS 4.1).
+ */
+function pathsBaseDir(options: CompilerOptions): string | undefined {
+	const baseUrl = options.baseUrl;
+	if (typeof baseUrl === "string" && baseUrl !== "") {
+		return toPosix(baseUrl);
+	}
+	const pathsBasePath = (options as { pathsBasePath?: unknown }).pathsBasePath;
+	if (typeof pathsBasePath === "string" && pathsBasePath !== "") {
+		return toPosix(pathsBasePath);
+	}
+	return undefined;
+}
+
+/**
+ * Absolute path prefixes a non-relative specifier maps to through tsconfig
+ * `paths`, longest matching pattern first — the order TypeScript itself uses.
+ */
+function mappedModuleBases(project: Project, specifier: string): string[] {
+	const options = project.getCompilerOptions();
+	const paths = options.paths;
+	if (!paths) {
+		return [];
+	}
+	const base = pathsBaseDir(options);
+	if (!base) {
+		return [];
+	}
+
+	const matches: Array<{ rank: number; target: string }> = [];
+	for (const [pattern, targets] of Object.entries(paths)) {
+		const star = pattern.indexOf("*");
+		let substitution: string | null = null;
+		let rank = 0;
+		if (star < 0) {
+			if (pattern !== specifier) {
+				continue;
+			}
+			substitution = "";
+			rank = pattern.length + 1;
+		} else {
+			const prefix = pattern.slice(0, star);
+			const suffix = pattern.slice(star + 1);
+			if (
+				!specifier.startsWith(prefix) ||
+				!specifier.endsWith(suffix) ||
+				specifier.length < prefix.length + suffix.length
+			) {
+				continue;
+			}
+			substitution = specifier.slice(
+				prefix.length,
+				specifier.length - suffix.length,
+			);
+			rank = prefix.length;
+		}
+		for (const target of targets ?? []) {
+			matches.push({
+				rank,
+				target: path.posix.join(
+					base,
+					toPosix(target).replace("*", substitution ?? ""),
+				),
+			});
+		}
+	}
+	matches.sort((a, b) => b.rank - a.rank);
+	return matches.map((match) => match.target);
+}
+
+/**
+ * Resolves any module specifier the analysed project can own: relative, or
+ * non-relative through the tsconfig `paths` table.
+ *
+ * Without the alias half, a repo that writes `@/components/Cart` has every
+ * import classified as external, so nested controls and component trees stop
+ * dead at the first aliased hop even though the file is right there in the
+ * project. Anything landing in `node_modules` is still rejected — an alias into
+ * a dependency is an external module however it is spelled.
+ */
+export function resolveModuleSpecifier(
+	project: Project,
+	fromFile: SourceFile,
+	specifier: string,
+): SourceFile | undefined {
+	if (isRelativeSpecifier(specifier)) {
+		return resolveRelativeModule(project, fromFile, specifier);
+	}
+	for (const base of mappedModuleBases(project, specifier)) {
+		const found = loadFromBase(project, base);
+		if (found && !isInNodeModules(found.getFilePath())) {
+			return found;
 		}
 	}
 	return undefined;
@@ -263,7 +378,7 @@ function resolveDefaultExport(
 				continue;
 			}
 			const target = moduleSpecifier
-				? (resolveRelativeModule(project, sourceFile, moduleSpecifier) ??
+				? (resolveModuleSpecifier(project, sourceFile, moduleSpecifier) ??
 					sourceFile)
 				: sourceFile;
 			// `export { default }` with no module specifier would recurse forever.
@@ -343,7 +458,7 @@ export function resolveExportedName(
 					}
 					continue;
 				}
-				const target = resolveRelativeModule(project, sourceFile, specifier);
+				const target = resolveModuleSpecifier(project, sourceFile, specifier);
 				if (!target) {
 					return undefined;
 				}
@@ -362,7 +477,7 @@ export function resolveExportedName(
 
 		// `export * from "./x"`
 		if (specifier) {
-			const target = resolveRelativeModule(project, sourceFile, specifier);
+			const target = resolveModuleSpecifier(project, sourceFile, specifier);
 			if (target && target !== sourceFile) {
 				const resolved = resolveExportedName(
 					project,
@@ -395,16 +510,17 @@ function resolveThroughImport(
 	if (!binding) {
 		return undefined;
 	}
-	if (!isRelativeSpecifier(binding.specifier)) {
-		return {
-			resolved: false,
-			external: true,
-			module: binding.specifier,
-			name: binding.exportedName === "*" ? localName : binding.exportedName,
-		};
-	}
-	const target = resolveRelativeModule(project, sourceFile, binding.specifier);
+	const target = resolveModuleSpecifier(project, sourceFile, binding.specifier);
 	if (!target) {
+		// A bare specifier the tsconfig does not map is a real dependency.
+		if (!isRelativeSpecifier(binding.specifier)) {
+			return {
+				resolved: false,
+				external: true,
+				module: binding.specifier,
+				name: binding.exportedName === "*" ? localName : binding.exportedName,
+			};
+		}
 		return {
 			resolved: false,
 			external: false,
@@ -460,16 +576,16 @@ function resolveNamespaceMember(
 	if (binding?.exportedName !== "*") {
 		return unresolved;
 	}
-	if (!isRelativeSpecifier(binding.specifier)) {
-		return {
-			resolved: false,
-			external: true,
-			module: binding.specifier,
-			name: memberName,
-		};
-	}
-	const target = resolveRelativeModule(project, sourceFile, binding.specifier);
+	const target = resolveModuleSpecifier(project, sourceFile, binding.specifier);
 	if (!target) {
+		if (!isRelativeSpecifier(binding.specifier)) {
+			return {
+				resolved: false,
+				external: true,
+				module: binding.specifier,
+				name: memberName,
+			};
+		}
 		return unresolved;
 	}
 	return resolveExportedName(project, target, memberName, hops) ?? unresolved;

@@ -97,6 +97,12 @@ export interface MemberEdge {
 export interface MemberRead {
 	member: MemberNode;
 	edges: MemberEdge[];
+	/**
+	 * Declared on a project-local base class rather than on the class itself.
+	 * The member is still part of the subclass's runtime surface; the flag keeps
+	 * the base class's own diagnostics from being re-reported on every subclass.
+	 */
+	inherited?: boolean;
 }
 
 function visibilityOf(member: ClassMemberTypes): MemberNode["visibility"] {

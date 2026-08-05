@@ -7,6 +7,7 @@ import {
 	defaultIncludeGlobs,
 	locateTsConfig,
 	synthesizedCompilerOptions,
+	tsConfigFileNames,
 } from "./config/tsconfig";
 import { AnalysisLimitError, dedupeDiagnostics, info } from "./diagnostics";
 import type {
@@ -16,6 +17,7 @@ import type {
 	TestIdAttributeSource,
 } from "./types";
 import {
+	foldPath,
 	isDeclarationFile,
 	isIgnoredPath,
 	isOutsideRoot,
@@ -69,7 +71,7 @@ function normalizeRoot(projectRoot: string): string {
  */
 function workspaceKey(options: WorkspaceOptions): string {
 	return [
-		normalizeRoot(options.projectRoot).toLowerCase(),
+		foldPath(normalizeRoot(options.projectRoot)),
 		options.tsconfig ?? "",
 		(options.include ?? []).join(","),
 		(options.exclude ?? []).join(","),
@@ -194,6 +196,10 @@ export class Workspace {
 
 		let project: Project;
 		if (located.path) {
+			// Before the parse, not after it: `skipAddingFilesFromTsConfig: false`
+			// reads and parses the whole source set, which is the exact cost the cap
+			// exists to refuse.
+			precheckMaxFiles(root, options, located.path);
 			project = new Project({
 				tsConfigFilePath: located.path,
 				skipAddingFilesFromTsConfig: false,
@@ -271,23 +277,9 @@ export class Workspace {
 		const files: SourceFile[] = [];
 		for (const sourceFile of this.project.getSourceFiles()) {
 			const absolute = sourceFile.getFilePath();
-			if (isDeclarationFile(absolute)) {
-				continue;
+			if (isAnalysable(absolute, this.rel(absolute), include, exclude)) {
+				files.push(sourceFile);
 			}
-			const relative = this.rel(absolute);
-			if (isOutsideRoot(relative)) {
-				continue;
-			}
-			if (isIgnoredPath(relative)) {
-				continue;
-			}
-			if (include.length > 0 && !matchesAnyGlob(relative, include)) {
-				continue;
-			}
-			if (exclude.length > 0 && matchesAnyGlob(relative, exclude)) {
-				continue;
-			}
-			files.push(sourceFile);
 		}
 		files.sort((a, b) => (a.getFilePath() < b.getFilePath() ? -1 : 1));
 		this.fileList = { epoch: this.epoch, value: files };
@@ -481,10 +473,74 @@ export class Workspace {
 	}
 }
 
+/**
+ * Whether one file belongs to the analysed project.
+ *
+ * Shared by `sourceFiles()` and the pre-scan `maxFiles` check so the two count
+ * the same set: a pre-check that counted more than the loaded project would
+ * reject repositories that are actually within the cap.
+ */
+function isAnalysable(
+	absolute: string,
+	relative: string,
+	include: string[],
+	exclude: string[],
+): boolean {
+	if (isDeclarationFile(absolute)) {
+		return false;
+	}
+	if (isOutsideRoot(relative) || isIgnoredPath(relative)) {
+		return false;
+	}
+	if (include.length > 0 && !matchesAnyGlob(relative, include)) {
+		return false;
+	}
+	if (exclude.length > 0 && matchesAnyGlob(relative, exclude)) {
+		return false;
+	}
+	return true;
+}
+
+/**
+ * Refuses an oversized tsconfig before its sources are parsed.
+ *
+ * Silent when the config cannot be read: the constructor's `enforceMaxFiles()`
+ * is still the authority, this only moves the rejection earlier for the common
+ * case. Counting the same filtered set as `sourceFiles()` keeps it from
+ * rejecting a project the real count would have allowed.
+ */
+function precheckMaxFiles(
+	root: string,
+	options: WorkspaceOptions,
+	tsConfigPath: string,
+): void {
+	const fileNames = tsConfigFileNames(tsConfigPath);
+	if (!fileNames) {
+		return;
+	}
+	const include = options.include ?? [];
+	const exclude = options.exclude ?? [];
+	let count = 0;
+	for (const absolute of fileNames) {
+		if (
+			isAnalysable(absolute, toPosixRelative(root, absolute), include, exclude)
+		) {
+			count += 1;
+		}
+	}
+	const limit = options.maxFiles ?? DEFAULT_MAX_FILES;
+	if (count > limit) {
+		throw new AnalysisLimitError(limit, count);
+	}
+}
+
 /** Characters that make a pattern a glob rather than a plain path. */
 const GLOB_MAGIC = /[*?[\]{}]/;
-/** A trailing `.ext` marks a pattern as one file rather than a directory. */
-const FILE_EXTENSION = /\.[A-Za-z0-9]+$/;
+/**
+ * Extensions the scanner can actually select a single file with. A trailing
+ * `.config` or `.partials` is *not* one of them: those are directory names.
+ */
+const SOURCE_FILE_EXTENSION = /\.[cm]?[jt]sx?$/i;
 /** What a bare directory pattern expands to. */
 const DIRECTORY_EXPANSION = "**/*.{ts,tsx,mts,cts}";
 
@@ -504,6 +560,23 @@ function relativizeToRoot(root: string, pattern: string): string {
 }
 
 /**
+ * Whether a scope pattern names one file rather than a directory.
+ *
+ * Disk wins when the path exists, because a directory may perfectly well be
+ * called `foo.config` or `.config` — treating it as a file by its trailing dot
+ * segment left the pattern matching nothing at all and produced a silently
+ * empty project. Only when nothing is there to stat does the extension decide,
+ * and then only for extensions the scanner can really select a file with.
+ */
+function looksLikeSingleFile(root: string, body: string): boolean {
+	try {
+		return fs.statSync(path.resolve(root, body)).isFile();
+	} catch {
+		return SOURCE_FILE_EXTENSION.test(body);
+	}
+}
+
+/**
  * Rewrites a directory into the recursive source glob it stands for.
  *
  * `--src-dir src` is documented as a directory, but include/exclude patterns
@@ -519,7 +592,7 @@ function normalizeScopePattern(root: string, pattern: string): string {
 	let normalized: string;
 	if (body === "" || body === ".") {
 		normalized = DIRECTORY_EXPANSION;
-	} else if (GLOB_MAGIC.test(body) || FILE_EXTENSION.test(body)) {
+	} else if (GLOB_MAGIC.test(body) || looksLikeSingleFile(root, body)) {
 		normalized = body;
 	} else {
 		normalized = `${body}/${DIRECTORY_EXPANSION}`;

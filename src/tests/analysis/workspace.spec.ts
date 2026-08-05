@@ -22,6 +22,11 @@ function write(root: string, relativePath: string, contents: string): void {
 	fs.writeFileSync(absolute, contents, "utf8");
 }
 
+/** Workspace-relative posix paths of everything the workspace analyses. */
+function rels(ws: Workspace): string[] {
+	return ws.sourceFiles().map((file) => ws.rel(file.getFilePath()));
+}
+
 /** mtimeMs has coarse resolution on some filesystems; stamp it explicitly. */
 function touch(root: string, relativePath: string, secondsAhead: number): void {
 	const absolute = path.join(root, relativePath);
@@ -131,6 +136,19 @@ describe("Workspace.revalidate", () => {
 		]);
 	});
 
+	/**
+	 * The guarantee a long-lived MCP session rests on: the throttle window is
+	 * measured from the last re-glob, and a freshly built workspace has never
+	 * globbed, so the first `revalidate()` after `acquire()` always rescans no
+	 * matter how little time has passed since the workspace was created.
+	 */
+	it("re-globs on the first revalidate however young the workspace is", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const ws = Workspace.acquire({ projectRoot: root });
+		write(root, "src/b.ts", "export const b = 1;");
+		expect(ws.revalidate().added).toEqual(["src/b.ts"]);
+	});
+
 	it("bumps the epoch only when something actually changed", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
 		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
@@ -149,10 +167,6 @@ describe("Workspace.revalidate scoping", () => {
 		compilerOptions: { target: "ES2022", noEmit: true },
 		include: ["e2e"],
 	});
-
-	function rels(ws: Workspace): string[] {
-		return ws.sourceFiles().map((file) => ws.rel(file.getFilePath()));
-	}
 
 	it("never widens a tsconfig-scoped project past its include", () => {
 		const root = scratch({
@@ -203,10 +217,6 @@ describe("Workspace include normalization", () => {
 		"src/nested/b.tsx": "export const B = () => null;",
 		"other/c.ts": "export const c = 1;",
 	};
-
-	function rels(ws: Workspace): string[] {
-		return ws.sourceFiles().map((file) => ws.rel(file.getFilePath()));
-	}
 
 	it("expands a bare directory into a recursive source glob", () => {
 		const root = scratch(tree);
@@ -260,6 +270,48 @@ describe("Workspace include normalization", () => {
 		const root = scratch(tree);
 		const ws = Workspace.acquire({ projectRoot: root, exclude: ["src"] });
 		expect(rels(ws)).toEqual(["other/c.ts"]);
+	});
+
+	it("expands a directory whose name ends in a dot segment", () => {
+		const root = scratch({
+			"foo.config/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["foo.config"],
+		});
+		expect(rels(ws)).toEqual(["foo.config/a.ts"]);
+	});
+
+	it("expands a dotfile-style directory", () => {
+		const root = scratch({
+			".config/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, include: [".config"] });
+		expect(rels(ws)).toEqual([".config/a.ts"]);
+	});
+
+	it("excludes a dotted directory instead of matching nothing", () => {
+		const root = scratch({
+			"foo.config/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			exclude: ["foo.config"],
+		});
+		expect(rels(ws)).toEqual(["src/b.ts"]);
+	});
+
+	it("still treats an existing file as one file", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src/a.ts"] });
+		expect(rels(ws)).toEqual(["src/a.ts"]);
 	});
 });
 

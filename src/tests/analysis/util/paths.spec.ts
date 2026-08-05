@@ -4,6 +4,7 @@ import {
 	defKey,
 	escapeRegExp,
 	globToRegExp,
+	isCaseInsensitiveFileSystem,
 	isDeclarationFile,
 	isIgnoredPath,
 	isOutsideRoot,
@@ -13,6 +14,22 @@ import {
 	toPosix,
 	toPosixRelative,
 } from "../../../analysis/util/paths";
+
+/** Runs `body` as if the host were `platform`, then restores the real one. */
+function withPlatform(platform: NodeJS.Platform, body: () => void): void {
+	const original = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", {
+		value: platform,
+		configurable: true,
+	});
+	try {
+		body();
+	} finally {
+		if (original) {
+			Object.defineProperty(process, "platform", original);
+		}
+	}
+}
 
 describe("toPosixRelative", () => {
 	it("normalises separators against the host platform's root", () => {
@@ -64,8 +81,33 @@ describe("defKey / keyFold", () => {
 
 	it("folds the file half for lookups without mangling the display key", () => {
 		const key = defKey("E2E/CheckoutPage.ts", "CheckoutPage");
-		expect(keyFold(key)).toBe("e2e/checkoutpage.ts#CheckoutPage");
+		withPlatform("win32", () => {
+			expect(keyFold(key)).toBe("e2e/checkoutpage.ts#CheckoutPage");
+		});
 		expect(key).toBe("E2E/CheckoutPage.ts#CheckoutPage");
+	});
+
+	it("folds on a case-insensitive filesystem", () => {
+		for (const platform of ["win32", "darwin"] as const) {
+			withPlatform(platform, () => {
+				expect(isCaseInsensitiveFileSystem()).toBe(true);
+				expect(keyFold(defKey("pages/Foo.ts", "Checkout"))).toBe(
+					keyFold(defKey("pages/foo.ts", "Checkout")),
+				);
+			});
+		}
+	});
+
+	it("keeps paths that differ only by case apart on a case-sensitive one", () => {
+		withPlatform("linux", () => {
+			expect(isCaseInsensitiveFileSystem()).toBe(false);
+			expect(keyFold(defKey("pages/Foo.ts", "Checkout"))).toBe(
+				"pages/Foo.ts#Checkout",
+			);
+			expect(keyFold(defKey("pages/Foo.ts", "Checkout"))).not.toBe(
+				keyFold(defKey("pages/foo.ts", "Checkout")),
+			);
+		});
 	});
 
 	it("keeps classes that differ only by case apart", () => {

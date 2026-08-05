@@ -6,7 +6,11 @@ import {
 	resolveIdentifier,
 	resolvesToCallable,
 } from "../../../analysis/util/resolve";
-import { makeWorkspace, memoryPath } from "../helpers/inMemory";
+import {
+	MEMORY_ROOT_POSIX,
+	makeWorkspace,
+	memoryPath,
+} from "../helpers/inMemory";
 
 function resolveIn(
 	files: Record<string, string>,
@@ -233,6 +237,125 @@ describe("resolveIdentifier", () => {
 		expect(result.resolved).toBe(false);
 		if (!result.resolved && !result.external) {
 			expect(result.reason).toBe("identifier-unresolved");
+		}
+	});
+});
+
+describe("resolveIdentifier through tsconfig paths", () => {
+	/** In-memory workspace whose compiler options carry a `paths` table. */
+	function resolveAliased(
+		files: Record<string, string>,
+		paths: Record<string, string[]>,
+		name: string,
+		fromFile = "src/a.ts",
+	) {
+		const ws = makeWorkspace(files);
+		ws.project.compilerOptions.set({ baseUrl: MEMORY_ROOT_POSIX, paths });
+		const sourceFile = ws.project.getSourceFileOrThrow(memoryPath(fromFile));
+		return resolveIdentifier(ws.project, sourceFile, name);
+	}
+
+	it("follows a `@/*` alias instead of declaring it external", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { Cart } from "@/components/Cart";',
+				"src/components/Cart.ts": "export class Cart {}",
+			},
+			{ "@/*": ["src/*"] },
+			"Cart",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.sourceFile.getBaseName()).toBe("Cart.ts");
+		}
+	});
+
+	it("follows an exact (star-free) alias", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { Cart } from "~cart";',
+				"src/components/Cart.ts": "export class Cart {}",
+			},
+			{ "~cart": ["src/components/Cart.ts"] },
+			"Cart",
+		);
+		expect(result.resolved).toBe(true);
+	});
+
+	it("prefers the longest matching pattern, as TypeScript does", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { Cart } from "@/components/Cart";',
+				"src/components/Cart.ts": "export class Cart {}",
+				"other/components/Cart.ts": "export class Cart {}",
+			},
+			{ "@/*": ["other/*"], "@/components/*": ["src/components/*"] },
+			"Cart",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.sourceFile.getDirectoryPath()).toContain("/src/components");
+		}
+	});
+
+	it("resolves a namespace import written through an alias", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import * as pages from "@/pages";',
+				"src/pages.ts": "export class HomePage {}",
+			},
+			{ "@/*": ["src/*"] },
+			"pages.HomePage",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.name).toBe("HomePage");
+		}
+	});
+
+	it("keeps an alias that lands in node_modules external", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { Cart } from "@ui/Cart";',
+				"node_modules/@acme/ui/Cart.ts": "export class Cart {}",
+			},
+			{ "@ui/*": ["node_modules/@acme/ui/*"] },
+			"Cart",
+		);
+		expect(result.resolved).toBe(false);
+		if (!result.resolved) {
+			expect(result.external).toBe(true);
+		}
+	});
+
+	it("still reports an unmapped bare specifier as external", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { PageObject } from "playwright-page-object";',
+				"src/components/Cart.ts": "export class Cart {}",
+			},
+			{ "@/*": ["src/*"] },
+			"PageObject",
+		);
+		expect(result.resolved).toBe(false);
+		if (!result.resolved && result.external) {
+			expect(result.module).toBe("playwright-page-object");
+		}
+	});
+
+	it("follows a barrel re-export written through an alias", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { Widget } from "@/barrel";',
+				"src/barrel.ts": 'export { Widget } from "@/widget";',
+				"src/widget.ts": "export class Widget {}",
+			},
+			{ "@/*": ["src/*"] },
+			"Widget",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.sourceFile.getBaseName()).toBe("widget.ts");
 		}
 	});
 });

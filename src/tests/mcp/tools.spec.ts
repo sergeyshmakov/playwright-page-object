@@ -256,9 +256,15 @@ describe("MCP server over in-memory transport", () => {
 		try {
 			write("FirstPage");
 			const { client } = await connect(projectRoot);
+			// Builds the workspace; `create` does not revalidate, so no re-glob has
+			// happened yet.
 			expect(await names(client)).toEqual(["FirstPage"]);
 
 			write("SecondPage");
+			// Not a race against the 1s new-file throttle: that window is measured
+			// from the last re-glob, and this is the first one this workspace runs,
+			// so it rescans regardless of elapsed time. Locked by "re-globs on the
+			// first revalidate however young the workspace is" in workspace.spec.ts.
 			expect(await names(client)).toEqual(["FirstPage", "SecondPage"]);
 		} finally {
 			rmSync(projectRoot, { recursive: true, force: true });

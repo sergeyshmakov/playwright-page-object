@@ -69,6 +69,36 @@ export function locateTsConfig(
 }
 
 /**
+ * The files a tsconfig selects, without building a project for them.
+ *
+ * This is the glob half of what `new Project({ tsConfigFilePath })` does, minus
+ * the expensive half: reading and parsing every one of those files into an AST.
+ * It exists so the `maxFiles` cap can refuse an oversized repository *before*
+ * that allocation, not after.
+ *
+ * Returns `null` when the config cannot be read, in which case the caller has
+ * to fall back to counting the loaded project.
+ */
+export function tsConfigFileNames(tsConfigFilePath: string): string[] | null {
+	try {
+		const read = ts.readConfigFile(tsConfigFilePath, (file) =>
+			ts.sys.readFile(file),
+		);
+		if (read.error || !read.config) {
+			return null;
+		}
+		const parsed = ts.parseJsonConfigFileContent(
+			read.config,
+			ts.sys,
+			path.dirname(tsConfigFilePath),
+		);
+		return parsed.fileNames;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Compiler options used when no tsconfig exists. Everything the engine needs is
  * syntactic, so these only have to make the parser produce the right AST.
  */
