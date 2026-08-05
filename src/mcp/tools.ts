@@ -3,9 +3,11 @@ import {
 	buildCoverageReport,
 	buildPageObjectTree,
 	buildTestIdTree,
+	type ComponentInfo,
 	discoverPageObjects,
 	type PageObjectSummary,
 	type SelectorInfo,
+	type UiNode,
 	type Workspace,
 } from "../analysis";
 import { ToolError } from "./errors";
@@ -30,6 +32,10 @@ function compactSelector(selector: SelectorInfo): Record<string, unknown> {
 	}
 	if (selector.pattern) {
 		compact.pattern = selector.pattern.source;
+		// Without the flags an agent reads /cart/i as case-sensitive.
+		if (selector.pattern.flags) {
+			compact.patternFlags = selector.pattern.flags;
+		}
 	}
 	if (selector.role !== undefined) {
 		compact.role = selector.role;
@@ -126,6 +132,7 @@ export function handleGetPageObjectTree(
 	const meta = {
 		root: tree.projectRoot,
 		attribute: tree.testIdAttribute,
+		attributeSource: tree.testIdAttributeSource,
 		truncated: tree.truncated,
 		warnings: tree.warnings,
 	};
@@ -175,12 +182,15 @@ export function handleGetTestIdTree(
 	}
 
 	let entry = args.file;
+	let requested: ComponentInfo | undefined;
+	let siblings: ComponentInfo[] = [];
 	if (!entry && args.component) {
 		const probe = buildTestIdTree(workspace, {
 			attribute: args.attribute,
 			maxDepth: 1,
 		});
-		const match = Object.values(probe.components).find(
+		const components = Object.values(probe.components);
+		const match = components.find(
 			(component) => component.name === args.component,
 		);
 		if (!match) {
@@ -193,6 +203,11 @@ export function handleGetTestIdTree(
 			);
 		}
 		entry = match.file;
+		requested = match;
+		siblings = components.filter(
+			(component) =>
+				component.file === match.file && component.name !== match.name,
+		);
 	}
 
 	const tree = buildTestIdTree(workspace, {
@@ -201,7 +216,7 @@ export function handleGetTestIdTree(
 		maxDepth: depth,
 	});
 
-	const meta = {
+	const meta: Record<string, unknown> = {
 		attribute: tree.attribute,
 		attributeSource: tree.attributeSource,
 		fidelity: tree.fidelity,
@@ -210,15 +225,59 @@ export function handleGetTestIdTree(
 		warnings: tree.warnings,
 	};
 
+	// The engine roots a file at its first (or default-exported) component, so a
+	// file declaring several can answer with a component nobody asked for. Never
+	// hand that back as if it were the requested one.
+	let roots = tree.roots;
+	if (requested && siblings.length > 0 && tree.fidelity === "full") {
+		const actual = roots[0]?.component;
+		if (actual === undefined) {
+			meta.hint = `The tree is empty and "${requested.file}" declares ${siblings.length + 1} components; a file is rooted at its first component, so this may not be "${requested.name}".`;
+		} else if (actual !== requested.name) {
+			const subtree = findComponentNode(roots, requested.id);
+			if (!subtree) {
+				throw new ToolError(
+					"ambiguous_component",
+					`"${requested.file}" declares ${siblings.length + 1} components; it is rooted at "${actual}", and "${requested.name}" is not rendered inside it.`,
+					{
+						candidates: [
+							...new Set([actual, ...siblings.map((one) => one.name)]),
+						].sort(),
+						hint: `Request component "${actual}", or pass testId to find where "${requested.name}" is rendered.`,
+					},
+				);
+			}
+			roots = [subtree];
+			meta.rootedAt = `${requested.name}, as rendered inside ${actual}`;
+		}
+	}
+
 	if (args.format === "outline") {
-		return ok(renderTestIdOutline(tree), meta);
+		return ok(renderTestIdOutline({ ...tree, roots }), meta);
 	}
 
 	if (tree.fidelity === "flat") {
 		return ok({ fidelity: "flat", inventory: tree.inventory }, meta);
 	}
 
-	return ok({ fidelity: "full", roots: tree.roots, stats: tree.stats }, meta);
+	return ok({ fidelity: "full", roots, stats: tree.stats }, meta);
+}
+
+/** First node in document order whose expansion is `componentId`. */
+function findComponentNode(
+	nodes: UiNode[],
+	componentId: string,
+): UiNode | null {
+	for (const node of nodes) {
+		if (node.componentRef === componentId) {
+			return node;
+		}
+		const found = findComponentNode(node.children, componentId);
+		if (found) {
+			return found;
+		}
+	}
+	return null;
 }
 
 export function handleMapCoverage(
@@ -226,6 +285,7 @@ export function handleMapCoverage(
 	args: z.infer<typeof mapCoverageInput>,
 ) {
 	let poInclude: string[] | undefined;
+	let alsoIncluded: string[] | undefined;
 	if (args.file) {
 		poInclude = [args.file];
 	} else if (args.class) {
@@ -259,6 +319,18 @@ export function handleMapCoverage(
 			);
 		}
 		poInclude = [matches[0].file];
+		// Scoping happens by path, so page objects sharing the file are analyzed
+		// too and do count towards the totals. Say so rather than imply otherwise.
+		const shared = index.pageObjects
+			.filter(
+				(item) =>
+					item.file === matches[0].file &&
+					item.className !== matches[0].className,
+			)
+			.map((item) => item.className);
+		if (shared.length > 0) {
+			alsoIncluded = shared;
+		}
 	}
 
 	const report = buildCoverageReport(workspace, {
@@ -279,13 +351,22 @@ export function handleMapCoverage(
 		unknownTestIds: cap(report.unknownTestIds),
 	};
 
+	// Every list that ships capped has to count, or a client reads a partial
+	// report as complete. `uncoveredTestIds` only ships when includeUnused is on.
 	const truncated =
 		report.matched.length > args.limit ||
-		report.uncoveredTestIds.length > args.limit ||
-		report.deadSelectors.length > args.limit;
+		(args.includeUnused && report.uncoveredTestIds.length > args.limit) ||
+		report.deadSelectors.length > args.limit ||
+		report.nonTestIdSelectors.length > args.limit ||
+		report.unknownSelectors.length > args.limit ||
+		report.unknownTestIds.length > args.limit;
 
 	return ok(capped, {
 		attribute: report.attribute,
+		attributeSource: args.attribute
+			? "param"
+			: workspace.testIdAttribute().source,
+		alsoIncluded,
 		warnings: report.warnings,
 		truncated,
 	});

@@ -1,4 +1,4 @@
-import { AnalysisTargetError } from "../analysis";
+import { AnalysisLimitError, AnalysisTargetError } from "../analysis";
 import { ToolError, type ToolErrorCode } from "./errors";
 import { logger } from "./logger";
 
@@ -102,6 +102,11 @@ function toToolError(thrown: unknown): ToolError {
 				thrown.code === "ambiguous_class"
 					? "Re-call with `file` set to one of the candidates."
 					: "Call list_page_objects to see every page object and its file.",
+		});
+	}
+	if (thrown instanceof AnalysisLimitError) {
+		return new ToolError("max_files_exceeded", thrown.message, {
+			hint: "Restart the server with a higher --max-files, or narrow the scan with --src-dir / --tsconfig.",
 		});
 	}
 	const message = thrown instanceof Error ? thrown.message : String(thrown);

@@ -2,9 +2,11 @@ export type ToolErrorCode =
 	| "invalid_input"
 	| "class_not_found"
 	| "ambiguous_class"
+	| "ambiguous_component"
 	| "file_not_found"
 	| "parse_error"
 	| "too_large"
+	| "max_files_exceeded"
 	| "internal_error";
 
 /**

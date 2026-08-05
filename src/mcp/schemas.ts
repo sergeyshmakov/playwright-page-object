@@ -25,7 +25,7 @@ export const getPageObjectTreeInput = z.object({
 		.string()
 		.optional()
 		.describe(
-			"Path to the file, relative to the project root. Use with class when a name is ambiguous; alone it returns the page objects declared in the file.",
+			"Path to the file, relative to the project root. Use with class when a name is ambiguous; alone it resolves to the file's default-exported (else first root) page object, and errors with candidates when neither applies.",
 		),
 	depth: z
 		.number()
@@ -78,7 +78,9 @@ export const mapCoverageInput = z.object({
 	class: z
 		.string()
 		.optional()
-		.describe("Limit the page-object side to one class."),
+		.describe(
+			"Narrow the page-object side to the file that declares this class. Page objects sharing that file are included too; meta.alsoIncluded names them.",
+		),
 	file: z
 		.string()
 		.optional()

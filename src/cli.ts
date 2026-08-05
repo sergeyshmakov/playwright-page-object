@@ -68,6 +68,7 @@ function runMcp(argv: string[]): number {
 				attribute: { type: "string" },
 				"max-files": { type: "string" },
 				"log-level": { type: "string" },
+				help: { type: "boolean", short: "h" },
 			},
 			strict: true,
 			allowPositionals: false,
@@ -76,7 +77,16 @@ function runMcp(argv: string[]): number {
 		return fail(error instanceof Error ? error.message : String(error));
 	}
 
-	const values = parsed.values as Record<string, string | string[] | undefined>;
+	const values = parsed.values as Record<
+		string,
+		string | string[] | boolean | undefined
+	>;
+
+	// `mcp --help` is the documented startup check; it must print usage, not fail.
+	if (values.help === true) {
+		process.stdout.write(HELP);
+		return 0;
+	}
 
 	const logLevel = (values["log-level"] as string | undefined) ?? "error";
 	if (!["silent", "error", "info", "debug"].includes(logLevel)) {

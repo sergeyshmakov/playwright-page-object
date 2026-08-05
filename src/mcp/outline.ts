@@ -66,7 +66,7 @@ function resultLabel(member: MemberNode): string {
 		case "pageObject":
 			return result.className;
 		case "list":
-			return `ListPageObject<${result.itemClassName ?? "PageObject"}>`;
+			return `${result.listClassName}<${result.itemClassName ?? "PageObject"}>`;
 		case "control":
 			return result.className ?? "control(dynamic)";
 		default:
@@ -74,17 +74,30 @@ function resultLabel(member: MemberNode): string {
 	}
 }
 
-function memberRef(member: MemberNode): string | null {
+/** Mirrors the engine's `isDynamicMember`: a resolved-looking label can still be a guess. */
+function isDynamic(member: MemberNode): boolean {
+	return (
+		member.selector.dynamic ||
+		member.result.kind === "unknown" ||
+		(member.result.kind === "control" && member.result.dynamic === true)
+	);
+}
+
+function memberRefs(member: MemberNode): string[] {
 	const result = member.result;
 	switch (result.kind) {
 		case "pageObject":
-			return result.ref;
+			return result.ref ? [result.ref] : [];
 		case "control":
-			return result.ref;
+			return result.ref ? [result.ref] : [];
 		case "list":
-			return result.itemRef;
+			// A user-defined list subclass carries its own selectors and methods;
+			// the library's own ListPageObject stub is noise on every list member.
+			return [result.listRef, result.itemRef].filter(
+				(ref): ref is string => ref !== null,
+			);
 		default:
-			return null;
+			return [];
 	}
 }
 
@@ -112,12 +125,14 @@ export function renderPageObjectOutline(tree: PageObjectTree): string {
 		);
 
 		for (const member of def.members) {
-			const dynamicMark = member.selector.dynamic ? " [dynamic]" : "";
+			const dynamicMark = isDynamic(member) ? " [dynamic]" : "";
 			lines.push(
 				`${indent}  ${member.name} -> ${resultLabel(member)}  ${selectorLabel(member.selector)}${dynamicMark}`,
 			);
-			const ref = memberRef(member);
-			if (ref) {
+			for (const ref of memberRefs(member)) {
+				if (tree.defs[ref]?.external) {
+					continue;
+				}
 				renderDef(ref, `${indent}    `);
 			}
 		}
@@ -171,7 +186,25 @@ export function renderTestIdOutline(tree: TestIdTree): string {
 				occurrence.value.kind === "pattern"
 					? `${occurrence.value.prefix ?? ""}*`
 					: (occurrence.value.value ?? occurrence.value.raw);
-			lines.push(`${id}  ${occurrence.file}:${occurrence.loc.line}`);
+			// Flat is the fallback fidelity, so it is exactly when the per-occurrence
+			// metadata the full tree carries matters most.
+			const flags: string[] = [];
+			if (occurrence.value.kind !== "static") {
+				flags.push(`dynamic ${occurrence.value.raw}`);
+			}
+			if (occurrence.conditional) {
+				flags.push("conditional");
+			}
+			if (occurrence.repeated) {
+				flags.push("repeated");
+			}
+			if (occurrence.viaProp) {
+				flags.push(`viaProp ${occurrence.viaProp}`);
+			}
+			const flagText = flags.length > 0 ? ` (${flags.join(", ")})` : "";
+			lines.push(
+				`${id}  ${occurrence.tag}  ${occurrence.file}:${occurrence.loc.line}${flagText}`,
+			);
 		}
 		return lines.join("\n");
 	}

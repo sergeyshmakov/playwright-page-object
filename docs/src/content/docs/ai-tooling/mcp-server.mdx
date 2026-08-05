@@ -127,6 +127,8 @@ Results reflect the files on disk at the moment of each call — the server re-c
 - Responses are capped (~40 KB). Oversized results return a `too_large` error with a hint to reduce `depth` or narrow the target.
 - Anything not statically resolvable — computed selector arguments, `@SelectorBy(fn)`, spread props, two-hop prop forwarding — is marked `dynamic`/`unresolved` with its source text, never guessed.
 - Role/text selectors can't be checked against the DOM statically; `map_coverage` reports them separately and never counts them as dead.
+- `map_coverage` scopes by file, so `{"class":"CheckoutPage"}` narrows to the file that declares `CheckoutPage` — other page objects in that file are analyzed with it and do count towards the totals. When that happens the response lists them in `meta.alsoIncluded`.
+- `get_testid_tree` roots a file at its first (or default-exported) component. Asking for a `component` that shares a file with others returns that component's subtree from where it is rendered; if it is not rendered under the file's entry component, the call fails with `ambiguous_component` rather than returning a different tree.
 
 ## Troubleshooting
 
