@@ -343,6 +343,13 @@ export interface UiNode {
 	/** Rendered inside a `.map(...)` callback. */
 	repeated?: boolean;
 	componentRef?: string;
+	/**
+	 * Set on a component node whose subtree was already expanded at an earlier
+	 * render site in this same tree, pointing at that site's `loc`. `children` is
+	 * empty: read the subtree there instead. Only ever set when the two sites
+	 * would have produced identical subtrees.
+	 */
+	expandedAt?: SourceLoc;
 	viaProp?: string;
 	viaSpread?: boolean;
 	unresolved?: { reason: string };

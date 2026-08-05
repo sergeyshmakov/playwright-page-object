@@ -2,6 +2,7 @@ import { Node, type SourceFile, SyntaxKind } from "ts-morph";
 import { dedupeDiagnostics, info } from "../diagnostics";
 import type {
 	Diagnostic,
+	SourceLoc,
 	TestIdOccurrence,
 	TestIdTree,
 	TestIdValue,
@@ -53,6 +54,45 @@ const EMPTY_STATE: ExpandState = {
 	conditional: false,
 	repeated: false,
 };
+
+/** Field separators that cannot occur in an identifier or in source text. */
+const FIELD = "\u0000";
+const ITEM = "\u0001";
+const PART = "\u0002";
+
+function valueSignature(value: TestIdValue): string {
+	return [value.kind, value.value ?? "", value.prefix ?? "", value.raw].join(
+		FIELD,
+	);
+}
+
+/**
+ * Identity of a component expansion: the component plus everything the call
+ * site contributes to it.
+ *
+ * A component's subtree is site-independent *except* for the prop values that
+ * flow into it and the conditional/repeated context it inherits — those three
+ * are exactly the `ExpandState` fields the walk reads. Two sites that agree on
+ * all of them produce byte-identical subtrees, so the second can reference the
+ * first. Two sites that differ on any of them are expanded separately.
+ *
+ * JSX children are deliberately absent: the walk does not expand them (every
+ * such site is marked `children-composition`), so they cannot change the
+ * subtree. Whoever lifts that limitation must add them to this key.
+ */
+function expansionKey(componentRef: string, state: ExpandState): string {
+	const bindings = [...state.bindings]
+		.map(([name, value]) => `${name}=${valueSignature(value)}`)
+		.sort()
+		.join(ITEM);
+	return [
+		componentRef,
+		bindings,
+		state.directAttribute ? valueSignature(state.directAttribute) : "",
+		state.conditional ? "conditional" : "",
+		state.repeated ? "repeated" : "",
+	].join(PART);
+}
 
 function selectFiles(ws: Workspace, options: TestIdTreeOptions): SourceFile[] {
 	const include = options.include ?? [];
@@ -271,6 +311,13 @@ export function buildTestIdTree(
 /**
  * Folds ids that only became knowable through one-hop prop forwarding back into
  * the flat inventory, and drops the `dynamic` placeholder they replace.
+ *
+ * Indistinguishable occurrences are collapsed: one source location reached from
+ * two render sites that bound the same value with the same flags is one fact,
+ * and collapsing it keeps the inventory identical whether or not the tree
+ * de-duplicated those sites. Sites that bind *different* values at the same
+ * location still contribute one occurrence each — that is exactly the set
+ * coverage needs.
  */
 function mergeResolvedOccurrences(
 	inventory: TestIdOccurrence[],
@@ -278,6 +325,7 @@ function mergeResolvedOccurrences(
 ): void {
 	const resolved: TestIdOccurrence[] = [];
 	const resolvedLocs = new Set<string>();
+	const seen = new Set<string>();
 
 	const visit = (node: UiNode) => {
 		if (node.testId && (node.viaProp || node.viaSpread)) {
@@ -299,7 +347,17 @@ function mergeResolvedOccurrences(
 			if (node.viaProp) {
 				occurrence.viaProp = node.viaProp;
 			}
-			resolved.push(occurrence);
+			const identity = [
+				key,
+				valueSignature(node.testId),
+				occurrence.conditional ? "conditional" : "",
+				occurrence.repeated ? "repeated" : "",
+				occurrence.viaProp ?? "",
+			].join(PART);
+			if (!seen.has(identity)) {
+				seen.add(identity);
+				resolved.push(occurrence);
+			}
 		}
 		for (const child of node.children) {
 			visit(child);
@@ -328,6 +386,24 @@ function mergeResolvedOccurrences(
 class TreeBuilder {
 	/** Per-file element index, keyed by node start offset. */
 	private readonly scanCache = new Map<string, Map<number, ScannedElement>>();
+
+	/**
+	 * Expansion key to the render site that already expanded it in full.
+	 *
+	 * Only *self-contained* expansions are recorded — see {@link boundaries}.
+	 */
+	private readonly expansions = new Map<string, SourceLoc>();
+
+	/**
+	 * Count of places the walk stopped early for a reason that depends on where
+	 * it was, rather than on what it was expanding: the recursion guard, the
+	 * depth limit and the node budget.
+	 *
+	 * An expansion that bumped this counter is only valid at the site that
+	 * produced it — a different site has a different ancestor path, a different
+	 * depth and a different amount of budget left — so it is never memoized.
+	 */
+	private boundaries = 0;
 
 	constructor(
 		private readonly ws: Workspace,
@@ -363,6 +439,7 @@ class TreeBuilder {
 		state: ExpandState,
 	): UiNode[] {
 		if (path.has(definition.id)) {
+			this.boundaries += 1;
 			return [];
 		}
 		const nextPath = new Set(path);
@@ -527,6 +604,7 @@ class TreeBuilder {
 			return [];
 		}
 		if (!this.budget.spend()) {
+			this.boundaries += 1;
 			return [];
 		}
 
@@ -581,11 +659,41 @@ class TreeBuilder {
 			return [node];
 		}
 		node.componentRef = resolution.definition.id;
+		// Recursion on the current path stays a `repeated` leaf: this is the
+		// component rendering itself, not a second independent render site.
 		if (path.has(resolution.definition.id)) {
+			this.boundaries += 1;
 			node.repeated = true;
 			return [node];
 		}
+
+		// Children passed through JSX composition are out of scope for v1.
+		if (children.length > 0) {
+			node.unresolved = { reason: "children-composition" };
+		}
+
+		const childState: ExpandState = {
+			bindings: this.callSiteBindings(scanned, resolution.definition),
+			directAttribute: scanned?.testIds[0] ?? null,
+			conditional,
+			repeated,
+		};
+		const key = expansionKey(resolution.definition.id, childState);
+
+		// Second and later sites of an identical expansion become references.
+		// This is checked *before* the depth limit on purpose: emitting a
+		// reference expands nothing, so it consumes no depth and no nodes beyond
+		// the one already spent on this element. The referenced expansion is
+		// known to be complete, so pointing a deep site at it reports strictly
+		// more than the `depth-limit-reached` stub it replaces.
+		const expandedAt = this.expansions.get(key);
+		if (expandedAt) {
+			node.expandedAt = expandedAt;
+			return [node];
+		}
+
 		if (!this.budget.allowsDepth(depth + 1)) {
+			this.boundaries += 1;
 			node.unresolved = { reason: "depth-limit-reached" };
 			this.warnings.push(
 				info(
@@ -597,20 +705,15 @@ class TreeBuilder {
 			return [node];
 		}
 
+		const boundariesBefore = this.boundaries;
 		node.children = this.expandComponent(
 			resolution.definition,
 			depth + 1,
 			path,
-			{
-				bindings: this.callSiteBindings(scanned, resolution.definition),
-				directAttribute: scanned?.testIds[0] ?? null,
-				conditional,
-				repeated,
-			},
+			childState,
 		);
-		// Children passed through JSX composition are out of scope for v1.
-		if (children.length > 0) {
-			node.unresolved = { reason: "children-composition" };
+		if (this.boundaries === boundariesBefore && node.children.length > 0) {
+			this.expansions.set(key, node.loc);
 		}
 		return [node];
 	}

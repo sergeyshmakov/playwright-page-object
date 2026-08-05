@@ -164,6 +164,10 @@ function renderUiNode(node: UiNode, indent: string, lines: string[]): void {
 		flags.push(`unresolved: ${node.unresolved.reason}`);
 	}
 
+	if (node.expandedAt) {
+		flags.push(`see ${node.expandedAt.file}:${node.expandedAt.line}`);
+	}
+
 	const id =
 		node.testId?.kind === "pattern"
 			? `${node.testId.prefix ?? ""}*`
