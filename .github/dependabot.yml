@@ -12,6 +12,11 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    # Production-dep bumps must publish (semantic-release ignores `chore:`), so
+    # security fixes to runtime deps reach npm. Dev-dep bumps stay release-free.
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "chore(deps-dev)"
     groups:
       npm-production:
         dependency-type: "production"
