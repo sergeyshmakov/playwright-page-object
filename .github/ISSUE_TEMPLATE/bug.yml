@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for taking the time to file a bug. Please fill out the form below so we can reproduce and fix it quickly.
 
-        Before opening, please check the [troubleshooting guide](https://sergeyshmakov.github.io/playwright-page-object/reference/troubleshooting/) — your issue may already be covered.
+        Before opening, please check the [troubleshooting guide](https://pom.shmakov.tools/reference/troubleshooting/) — your issue may already be covered.
 
   - type: textarea
     id: description

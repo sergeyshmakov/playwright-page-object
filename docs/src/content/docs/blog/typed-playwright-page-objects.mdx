@@ -97,17 +97,17 @@ test("apply promo, then remove an item", async ({ page }) => {
 
 `PromoCodeInput` is a real `Locator`, so the full Playwright API is available with no wrapper to learn. The `accessor` keyword is what makes this typed and lazy: the decorator intercepts the getter and returns a freshly built chain each time. When `CheckoutPage` becomes `CheckoutShell`, you change one string in one place.
 
-The decorator picks the output shape from how you declare the property. Type it as `Locator` for a raw locator. Initialize it with `new PageObject()` when you want wait helpers and `.expect()`. Pass a control class as the second argument when you already have one. All three styles coexist in the same class, covered in [Choosing a Style](/playwright-page-object/getting-started/choosing-a-style/).
+The decorator picks the output shape from how you declare the property. Type it as `Locator` for a raw locator. Initialize it with `new PageObject()` when you want wait helpers and `.expect()`. Pass a control class as the second argument when you already have one. All three styles coexist in the same class, covered in [Choosing a Style](/getting-started/choosing-a-style/).
 
 ## Do I have to rewrite my whole test suite to adopt this?
 
 No. The page object is a plain class, so you introduce it in one spec file and leave the rest of the suite untouched. There's no global config, no custom test runner, and no base class every page must inherit. Migrate the noisiest page first, measure whether it pays back, then move on.
 
-A practical three-step adoption path, taken from the [incremental adoption guide](/playwright-page-object/guides/incremental-adoption/):
+A practical three-step adoption path, taken from the [incremental adoption guide](/guides/incremental-adoption/):
 
 1. **Duplicate locator chains across tests** — wrap them in a plain class with `@RootSelector` and raw `Locator` accessors. Stop here for most pages.
-2. **The same methods called on the same accessor** (`fill`, `click`, `expect`) — extract a [custom control](/playwright-page-object/guides/custom-controls/) so the calls live in one place.
-3. **The same wait or assertion code repeating** — switch that accessor to the built-in [`PageObject`](/playwright-page-object/guides/built-in-pom/) for `waitVisible()`, soft assertions, and list filters.
+2. **The same methods called on the same accessor** (`fill`, `click`, `expect`) — extract a [custom control](/guides/custom-controls/) so the calls live in one place.
+3. **The same wait or assertion code repeating** — switch that accessor to the built-in [`PageObject`](/guides/built-in-pom/) for `waitVisible()`, soft assertions, and list filters.
 
 Setup is one dev dependency and a TypeScript target of `ES2015` or higher. No `experimentalDecorators` flag, because the library uses standard [ECMAScript decorators](https://github.com/tc39/proposal-decorators) and the [TypeScript 5.0 `accessor` keyword](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html):
 
@@ -144,11 +144,11 @@ test("apply promo code", async ({ checkoutPage }) => {
 });
 ```
 
-See the [Fixtures guide](/playwright-page-object/guides/fixtures/) for factory functions and shared configuration. One more thing worth mentioning: the package ships an [Agent Skill and a Context7 entry](/playwright-page-object/ai-tooling/agent-skills/) so AI coding assistants generate correct page objects against the current API instead of guessing at the decorator names.
+See the [Fixtures guide](/guides/fixtures/) for factory functions and shared configuration. One more thing worth mentioning: the package ships an [Agent Skill and a Context7 entry](/ai-tooling/agent-skills/) so AI coding assistants generate correct page objects against the current API instead of guessing at the decorator names.
 
 ## Try it
 
-The [Quick Start](/playwright-page-object/getting-started/quick-start/) is a complete working example in under five minutes. If it saves you an afternoon of selector wrangling, the easiest way to say thanks is a star on [GitHub](https://github.com/sergeyshmakov/playwright-page-object) and `npm i -D playwright-page-object`.
+The [Quick Start](/getting-started/quick-start/) is a complete working example in under five minutes. If it saves you an afternoon of selector wrangling, the easiest way to say thanks is a star on [GitHub](https://github.com/sergeyshmakov/playwright-page-object) and `npm i -D playwright-page-object`.
 
 ## FAQ
 
@@ -166,7 +166,7 @@ Yes. Page objects are plain TypeScript classes. Instantiate one with `new Checko
 
 ### Do I need `experimentalDecorators` in my tsconfig?
 
-No. The library uses standard ECMAScript decorators, supported natively in TypeScript 5.0+, so the legacy `experimentalDecorators` flag stays off. Target `ES2015` or higher (`ES2022` is a good default) and you're set. See [Installation](/playwright-page-object/getting-started/installation/) for the full requirements.
+No. The library uses standard ECMAScript decorators, supported natively in TypeScript 5.0+, so the legacy `experimentalDecorators` flag stays off. Target `ES2015` or higher (`ES2022` is a good default) and you're set. See [Installation](/getting-started/installation/) for the full requirements.
 
 ### Can I use Playwright page objects without inheritance?
 

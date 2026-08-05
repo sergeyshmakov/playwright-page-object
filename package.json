@@ -48,7 +48,7 @@
 	"bugs": {
 		"url": "https://github.com/sergeyshmakov/playwright-page-object/issues"
 	},
-	"homepage": "https://sergeyshmakov.github.io/playwright-page-object/",
+	"homepage": "https://pom.shmakov.tools/",
 	"release": {
 		"branches": [
 			"main"

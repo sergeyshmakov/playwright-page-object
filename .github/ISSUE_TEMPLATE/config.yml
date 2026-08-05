@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Documentation
-    url: https://sergeyshmakov.github.io/playwright-page-object/
+    url: https://pom.shmakov.tools/
     about: Read the guides, API reference, and troubleshooting before opening an issue.
   - name: Questions and discussions
     url: https://github.com/sergeyshmakov/playwright-page-object/discussions

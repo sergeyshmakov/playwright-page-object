@@ -32,7 +32,7 @@ The first argument must be a Playwright `Page`. The root decorator wires the res
 
 ## Inherited members
 
-`RootPageObject` extends `PageObject`, so all the [`PageObject` members](/playwright-page-object/api/page-object/) are available:
+`RootPageObject` extends `PageObject`, so all the [`PageObject` members](/api/page-object/) are available:
 
 - `.$` — raw `Locator` for the root.
 - `.page` — getter for the underlying `Page`.
@@ -50,7 +50,7 @@ const page = checkout.page;
 - You want wait helpers and `.expect()` on the page itself.
 - The class has nested `PageObject` accessors that rely on the root decorator's scope.
 
-For plain page objects without those needs, use a plain class with `@RootSelector(...)`. See [Plain Classes](/playwright-page-object/guides/plain-classes/).
+For plain page objects without those needs, use a plain class with `@RootSelector(...)`. See [Plain Classes](/guides/plain-classes/).
 
 ## Constraint: must pair with a root decorator
 
@@ -81,6 +81,6 @@ Used internally to distinguish `RootPageObject` subclasses from generic `PageObj
 
 ## See also
 
-- [PageObject](/playwright-page-object/api/page-object/) — the base class.
-- [Decorator API](/playwright-page-object/api/decorators/) — all root decorators.
-- [Built-In POM guide](/playwright-page-object/guides/built-in-pom/) — walkthrough.
+- [PageObject](/api/page-object/) — the base class.
+- [Decorator API](/api/decorators/) — all root decorators.
+- [Built-In POM guide](/guides/built-in-pom/) — walkthrough.

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://sergeyshmakov.github.io/playwright-page-object/sitemap-index.xml
+Sitemap: https://pom.shmakov.tools/sitemap-index.xml

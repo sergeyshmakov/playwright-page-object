@@ -3,7 +3,7 @@ title: Built-In POM
 description: Use RootPageObject and PageObject for wait helpers, assertions, and structured child controls.
 ---
 
-The built-in POM layer adds wait helpers, soft assertions, and a typed `.expect()` API on top of the locator-composition primitives. Use it when these helpers save real code; use [plain classes](/playwright-page-object/guides/plain-classes/) when they do not.
+The built-in POM layer adds wait helpers, soft assertions, and a typed `.expect()` API on top of the locator-composition primitives. Use it when these helpers save real code; use [plain classes](/guides/plain-classes/) when they do not.
 
 ## Root: `RootPageObject`
 
@@ -101,21 +101,21 @@ class CartPage extends RootPageObject {
 }
 ```
 
-For subclasses with custom constructor arguments, implement `cloneWithContext()` — see the [PageObject API reference](/playwright-page-object/api/page-object/).
+For subclasses with custom constructor arguments, implement `cloneWithContext()` — see the [PageObject API reference](/api/page-object/).
 
 ## When to pick this style
 
 - You want wait helpers and `.expect()` on accessors without writing them yourself.
-- You're working with lists and want `filterByText`, `getItemByTestId`, async iteration — see [Lists](/playwright-page-object/guides/lists/).
+- You're working with lists and want `filterByText`, `getItemByTestId`, async iteration — see [Lists](/guides/lists/).
 - The page object has enough nested structure that the helpers pay back.
 
 ## When to skip it
 
 - Test ids are mostly raw — `Locator` accessors are enough.
-- You already have a control library — see [Custom Controls](/playwright-page-object/guides/custom-controls/).
+- You already have a control library — see [Custom Controls](/guides/custom-controls/).
 
 ## See also
 
-- [PageObject API](/playwright-page-object/api/page-object/) — full method reference.
-- [RootPageObject API](/playwright-page-object/api/root-page-object/) — root-only methods and constructor contract.
-- [Lists](/playwright-page-object/guides/lists/) — `ListPageObject` for repeated controls.
+- [PageObject API](/api/page-object/) — full method reference.
+- [RootPageObject API](/api/root-page-object/) — root-only methods and constructor contract.
+- [Lists](/guides/lists/) — `ListPageObject` for repeated controls.
