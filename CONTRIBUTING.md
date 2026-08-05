@@ -19,10 +19,17 @@ This prevents the painful case of a large PR being rejected because of a directi
 
 ```bash
 npm ci
-npm run dev      # tsup watch mode
-npm test         # vitest
-npm run lint     # biome check
+npm run dev       # tsup watch mode
+npm test          # vitest
+npm run lint      # biome check
+npm run lint:pkg  # publint + arethetypeswrong against the built dist
+npm run test:cli  # packs the tarball and smoke-tests the CLI + exports map
 ```
+
+`npm run test:cli` installs the packed tarball into a temp directory and
+asserts the `playwright-page-object` bin, the `require`/`import` resolution,
+and cross-copy identity — run it after touching `package.json` exports, the
+CLI, or the build config.
 
 ## Code style
 

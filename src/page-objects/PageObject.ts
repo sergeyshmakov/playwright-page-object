@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { LOCATOR_SYMBOL } from "../protocol";
+import { LOCATOR_SYMBOL, PAGE_OBJECT_BRAND } from "../protocol";
 
 /**
  * Function type that derives a {@link Locator} from a root locator.
@@ -59,6 +59,11 @@ export class PageObject {
 		return this.locator;
 	}
 
+	/** Cross-copy brand: lives on the prototype, inherited by all subclasses. */
+	get [PAGE_OBJECT_BRAND](): true {
+		return true;
+	}
+
 	get page(): Page {
 		if (!this.root) {
 			throw new Error(
@@ -106,9 +111,16 @@ export class PageObject {
 	): value is new (
 		...args: TArgs
 	) => PageObject {
+		if (typeof value !== "function") {
+			return false;
+		}
+		if (value === PageObject || value.prototype instanceof PageObject) {
+			return true;
+		}
+		// Fallback for classes from another loaded copy of the library.
+		const proto: unknown = value.prototype;
 		return (
-			typeof value === "function" &&
-			(value === PageObject || value.prototype instanceof PageObject)
+			typeof proto === "object" && proto !== null && PAGE_OBJECT_BRAND in proto
 		);
 	}
 
@@ -119,7 +131,13 @@ export class PageObject {
 	 * @returns `true` if value is a PageObject instance
 	 */
 	static isInstance(value?: unknown): value is PageObject {
-		return value instanceof PageObject;
+		if (value instanceof PageObject) {
+			return true;
+		}
+		// Fallback for instances from another loaded copy of the library.
+		return (
+			typeof value === "object" && value !== null && PAGE_OBJECT_BRAND in value
+		);
 	}
 
 	/**

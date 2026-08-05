@@ -45,6 +45,9 @@ jobs:
       - name: Typecheck Example
         run: npm run typecheck:example
 
+      - name: Smoke Test CLI
+        run: npm run test:cli
+
       - name: Semantic Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
