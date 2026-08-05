@@ -118,6 +118,14 @@ describe("splitFactoryArg — variadic decorators", () => {
 		).toBe(true);
 	});
 
+	it("marks an inline arrow constructing an unresolvable class as dynamic", () => {
+		const { result } = split(
+			'@SelectorByRole("button", { name: "A" }, (l) => new MissingCtrl(l))',
+		);
+		expect(result.factory?.viaInlineFactory).toBe(true);
+		expect(result.factory?.dynamic).toBe(true);
+	});
+
 	it("treats an unresolvable capitalised trailing identifier as a factory", () => {
 		const { result } = split('@SelectorByRole("button", {}, Unknown)');
 		expect(result.factory?.className).toBe("Unknown");
@@ -149,6 +157,30 @@ describe("splitFactoryArg — failure modes", () => {
 				(diag) => diag.code === "page-object-passed-as-factory",
 			),
 		).toBe(true);
+	});
+
+	it("warns for a PageObject subclass held in a class expression", () => {
+		const { result } = split('@Selector("x", Ctrl)', {
+			"src/Ctrl.ts": [
+				'import { PageObject } from "playwright-page-object";',
+				"export const Ctrl = class extends PageObject {};",
+			].join("\n"),
+		});
+		expect(
+			result.warnings.some(
+				(diag) => diag.code === "page-object-passed-as-factory",
+			),
+		).toBe(true);
+	});
+
+	it("does not name a function factory as the control class", () => {
+		const { result } = split('@Selector("x", Ctrl)', {
+			"src/Ctrl.ts":
+				"export function Ctrl(locator: unknown) { return locator; }",
+		});
+		expect(result.factory?.className).toBeNull();
+		expect(result.factory?.dynamic).toBe(true);
+		expect(result.notes.join(" ")).toContain("not a class");
 	});
 });
 

@@ -66,6 +66,12 @@ export function toInlineTree(
 		if (depth >= maxDepth) {
 			return { ...base, truncated: true };
 		}
+		// The extractor stopped at this definition (depth or node budget), so its
+		// members' classes were never analysed. Expanding it here would present a
+		// stub as a complete subtree.
+		if (def.expanded === false) {
+			return { ...base, truncated: true };
+		}
 		emitted.add(ref);
 
 		const nextPath = new Set(path);

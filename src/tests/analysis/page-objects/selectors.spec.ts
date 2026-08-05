@@ -49,6 +49,15 @@ describe("readSelector — kinds", () => {
 		expect(selector.testId).toBeUndefined();
 	});
 
+	it("maps a statically falsy @Selector id to `self` like the runtime does", () => {
+		for (const source of ['@Selector("")', "@Selector(undefined)"]) {
+			const selector = readMemberSelector(source);
+			expect(selector.kind).toBe("self");
+			expect(selector.dynamic).toBe(false);
+			expect(selector.testId).toBeUndefined();
+		}
+	});
+
 	it("maps @Selector(id) to a testId selector", () => {
 		const selector = readMemberSelector('@Selector("PromoCodeInput")');
 		expect(selector).toMatchObject({

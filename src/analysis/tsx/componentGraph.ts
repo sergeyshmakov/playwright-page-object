@@ -31,6 +31,8 @@ export interface ComponentDefinition {
 	loc: SourceLoc;
 	/** Destructured prop names, `[]` when the parameter is a plain identifier. */
 	propNames: string[];
+	/** Local binding name to prop name for `({ testId: id })`-style aliases. */
+	propAliases: Map<string, string>;
 	/** `rest` in `({ a, ...rest })`, or the whole parameter name (`props`). */
 	spreadSourceNames: string[];
 	forwardsSpread: boolean;
@@ -62,32 +64,52 @@ function componentFunctionOf(node: Node): ComponentFunction | null {
 	return null;
 }
 
-function readProps(fn: ComponentFunction): {
+interface PropsRead {
 	propNames: string[];
 	spreadSourceNames: string[];
-} {
+	propAliases: Map<string, string>;
+}
+
+/**
+ * Reads the component's props parameter.
+ *
+ * `propNames` holds the *prop* names as a caller writes them in JSX. For
+ * `({ testId: id })` that is `testId`, while the body refers to `id` — the
+ * alias map carries that hop so a call-site value can still be bound.
+ */
+function readProps(fn: ComponentFunction): PropsRead {
+	const empty: PropsRead = {
+		propNames: [],
+		spreadSourceNames: [],
+		propAliases: new Map(),
+	};
 	const [parameter] = fn.getParameters();
 	if (!parameter) {
-		return { propNames: [], spreadSourceNames: [] };
+		return empty;
 	}
 	const nameNode = parameter.getNameNode();
 	if (Node.isObjectBindingPattern(nameNode)) {
 		const propNames: string[] = [];
 		const spreadSourceNames: string[] = [];
+		const propAliases = new Map<string, string>();
 		for (const element of nameNode.getElements()) {
-			const name = element.getName();
+			const local = element.getName();
 			if (element.getDotDotDotToken()) {
-				spreadSourceNames.push(name);
-			} else {
-				propNames.push(name);
+				spreadSourceNames.push(local);
+				continue;
+			}
+			const propName = element.getPropertyNameNode()?.getText() ?? local;
+			propNames.push(propName);
+			if (propName !== local) {
+				propAliases.set(local, propName);
 			}
 		}
-		return { propNames, spreadSourceNames };
+		return { propNames, spreadSourceNames, propAliases };
 	}
 	if (Node.isIdentifier(nameNode)) {
-		return { propNames: [], spreadSourceNames: [nameNode.getText()] };
+		return { ...empty, spreadSourceNames: [nameNode.getText()] };
 	}
-	return { propNames: [], spreadSourceNames: [] };
+	return empty;
 }
 
 function forwardsSpread(fn: ComponentFunction, sources: string[]): boolean {
@@ -135,7 +157,7 @@ function buildDefinition(
 	}
 	const sourceFile = declaration.getSourceFile();
 	const file = ws.rel(sourceFile.getFilePath());
-	const { propNames, spreadSourceNames } = readProps(fn);
+	const { propNames, spreadSourceNames, propAliases } = readProps(fn);
 	// Prefer the declared name over the local alias at the import site, so
 	// `import CartItemComponent from "./CartItem"` still reports `CartItem`.
 	const declaredName =
@@ -153,6 +175,7 @@ function buildDefinition(
 		fn,
 		loc: { file, line: position.line, column: position.column },
 		propNames,
+		propAliases,
 		spreadSourceNames,
 		forwardsSpread: forwardsSpread(fn, spreadSourceNames),
 		exportKind,

@@ -8,7 +8,7 @@ import { info } from "../diagnostics";
 import type { Diagnostic, FixtureBinding } from "../types";
 import { rawText } from "../util/literal";
 import { defKey, keyFold } from "../util/paths";
-import { resolveClassRef } from "../util/resolve";
+import { type NameRef, readNameRef, resolveClassRef } from "../util/resolve";
 import {
 	type AnalysisContext,
 	canonicalLocalName,
@@ -26,25 +26,73 @@ export interface FixtureMap {
 	warnings: Diagnostic[];
 }
 
-function findNewExpressionClass(node: Node): string | null {
-	let found: string | null = null;
-	node.forEachDescendant((descendant, traversal) => {
-		if (found) {
-			traversal.stop();
-			return;
-		}
-		if (Node.isNewExpression(descendant)) {
-			const expression = descendant.getExpression();
-			if (Node.isIdentifier(expression)) {
-				found = expression.getText();
-				traversal.stop();
-			} else if (Node.isPropertyAccessExpression(expression)) {
-				found = expression.getName();
-				traversal.stop();
+/**
+ * The class a `createFixtures` factory hands to the test.
+ *
+ * `createFixtures` calls the entry as `(page) => instance` and uses whatever it
+ * *returns*, so the value is read off the return expression — never off the
+ * first `new` anywhere in the body, which in
+ * `(page) => { const helper = new Helper(); return new HomePage(page, helper); }`
+ * is the wrong class entirely. A returned local is followed one hop to its
+ * initializer; anything else is reported as dynamic.
+ */
+function factoryClass(fn: Node): NameRef | null {
+	if (!Node.isArrowFunction(fn) && !Node.isFunctionExpression(fn)) {
+		return null;
+	}
+	let body: Node = fn.getBody();
+	if (Node.isParenthesizedExpression(body)) {
+		body = body.getExpression();
+	}
+	if (!Node.isBlock(body)) {
+		return constructedClass(body, null);
+	}
+	const returns = body
+		.getDescendantsOfKind(SyntaxKind.ReturnStatement)
+		.filter((statement) => statement.getFirstAncestor(isFunctionLike) === fn);
+	if (returns.length !== 1) {
+		return null;
+	}
+	const returned = returns[0].getExpression();
+	return returned ? constructedClass(returned, body) : null;
+}
+
+function isFunctionLike(node: Node): boolean {
+	return (
+		Node.isArrowFunction(node) ||
+		Node.isFunctionExpression(node) ||
+		Node.isFunctionDeclaration(node) ||
+		Node.isMethodDeclaration(node)
+	);
+}
+
+/** `new X(…)`, or an identifier initialised from one in the same block. */
+function constructedClass(
+	expression: Node,
+	scope: Node | null,
+): NameRef | null {
+	if (Node.isParenthesizedExpression(expression)) {
+		return constructedClass(expression.getExpression(), scope);
+	}
+	if (Node.isAwaitExpression(expression)) {
+		return constructedClass(expression.getExpression(), scope);
+	}
+	if (Node.isNewExpression(expression)) {
+		return readNameRef(expression.getExpression());
+	}
+	if (scope && Node.isIdentifier(expression)) {
+		const name = expression.getText();
+		for (const declaration of scope.getDescendantsOfKind(
+			SyntaxKind.VariableDeclaration,
+		)) {
+			if (declaration.getName() !== name) {
+				continue;
 			}
+			const initializer = declaration.getInitializer();
+			return initializer ? constructedClass(initializer, null) : null;
 		}
-	});
-	return found;
+	}
+	return null;
 }
 
 /**
@@ -130,15 +178,18 @@ export function readFixtureMaps(
 					form: "dynamic",
 				};
 
-				let className: string | null = null;
-				if (Node.isIdentifier(value)) {
-					className = value.getText();
+				let className: NameRef | null = null;
+				if (
+					Node.isIdentifier(value) ||
+					Node.isPropertyAccessExpression(value)
+				) {
+					className = readNameRef(value);
 					binding.form = "constructor";
 				} else if (
 					Node.isArrowFunction(value) ||
 					Node.isFunctionExpression(value)
 				) {
-					className = findNewExpressionClass(value);
+					className = factoryClass(value);
 					binding.form = "factory";
 				}
 
@@ -156,15 +207,18 @@ export function readFixtureMaps(
 				const resolution = resolveClassRef(
 					ctx.project,
 					sourceFile,
-					className,
+					className.qualified,
 					ctx.resolveOptions,
 				);
-				const ref = refFromResolution(resolution, ctx, className);
-				if (!ref.ref || ref.external) {
+				const ref = refFromResolution(resolution, ctx, className.simple);
+				// `refFromResolution` keys an unresolved or non-class binding under
+				// the name as written, which would put a page object in the map that
+				// no declaration backs.
+				if (!ref.ref || ref.external || !ref.declaration) {
 					warnings.push(
 						info(
 							"fixture-entry-dynamic",
-							`Fixture "${fixtureName}" refers to "${className}", which could not be resolved to a project class.`,
+							`Fixture "${fixtureName}" refers to "${className.simple}", which could not be resolved to a project class.`,
 							ctx.ws.loc(value),
 						),
 					);
@@ -178,10 +232,20 @@ export function readFixtureMaps(
 				} else {
 					byClass.set(key, [binding]);
 				}
-				byName.set(fixtureName, key);
-				if (ref.declaration) {
-					declarations.set(key, ref.declaration);
+				const claimed = byName.get(fixtureName);
+				if (claimed !== undefined && claimed !== key) {
+					// `fixture:name` can only point at one class; say which one won
+					// rather than letting file order decide silently.
+					warnings.push(
+						info(
+							"fixture-name-ambiguous",
+							`Fixture "${fixtureName}" is bound to more than one page object ("${claimed}" and "${key}"); "fixture:${fixtureName}" resolves to the last one discovered.`,
+							ctx.ws.loc(property),
+						),
+					);
 				}
+				byName.set(fixtureName, key);
+				declarations.set(key, ref.declaration);
 			}
 		}
 	}

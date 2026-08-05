@@ -265,4 +265,29 @@ describe("inline projection", () => {
 		const apply = inline.members?.find((member) => member.name === "Apply");
 		expect(apply?.child).toMatchObject({ truncated: true });
 	});
+
+	it("marks a budget stub as truncated rather than as a complete leaf", () => {
+		const tree = buildPageObjectTree(makeWorkspace(SHARED), "HomePage", {
+			maxNodes: 2,
+		});
+		const inline = toInlineTree(tree, { maxDepth: 10 });
+		const stubs: string[] = [];
+		const walk = (node: typeof inline): void => {
+			if (tree.defs[node.ref]?.expanded === false) {
+				stubs.push(node.ref);
+				expect(node.truncated).toBe(true);
+				expect(node.members).toBeUndefined();
+			}
+			for (const member of node.members ?? []) {
+				if (member.child) {
+					walk(member.child);
+				}
+				if (member.item) {
+					walk(member.item);
+				}
+			}
+		};
+		walk(inline);
+		expect(stubs.length).toBeGreaterThan(0);
+	});
 });

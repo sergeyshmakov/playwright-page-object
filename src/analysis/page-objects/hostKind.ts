@@ -1,5 +1,6 @@
 import {
 	type ClassDeclaration,
+	type ClassExpression,
 	type Decorator,
 	Node,
 	type ParameterDeclaration,
@@ -7,7 +8,7 @@ import {
 } from "ts-morph";
 import { error, warn } from "../diagnostics";
 import type { Diagnostic, HostKind, HostScope } from "../types";
-import { resolveClassRef } from "../util/resolve";
+import { type NameRef, readNameRef, resolveClassRef } from "../util/resolve";
 import {
 	type AnalysisContext,
 	canonicalDecoratorName,
@@ -23,12 +24,15 @@ const MAX_HERITAGE_DEPTH = 5;
 
 export type InheritedApi = "PageObject" | "ListPageObject" | "RootPageObject";
 
+/** `const Ctrl = class extends PageObject {}` is a page object too. */
+export type ClassLike = ClassDeclaration | ClassExpression;
+
 export interface HeritageInfo {
 	/** Base class names from the immediate base upward. */
 	chain: string[];
 	inheritedApi: InheritedApi | null;
 	/** Project-local base classes, nearest first. */
-	localBases: ClassDeclaration[];
+	localBases: ClassLike[];
 	/** `true` when the walk stopped at the depth cap rather than at a root. */
 	truncated: boolean;
 }
@@ -44,19 +48,12 @@ function syntheticChain(api: InheritedApi): string[] {
 	}
 }
 
-function heritageName(classDeclaration: ClassDeclaration): string | undefined {
+function heritageName(classDeclaration: ClassLike): NameRef | undefined {
 	const extendsClause = classDeclaration.getExtends();
 	if (!extendsClause) {
 		return undefined;
 	}
-	const expression = extendsClause.getExpression();
-	if (Node.isIdentifier(expression)) {
-		return expression.getText();
-	}
-	if (Node.isPropertyAccessExpression(expression)) {
-		return expression.getName();
-	}
-	return undefined;
+	return readNameRef(extendsClause.getExpression()) ?? undefined;
 }
 
 /**
@@ -65,13 +62,13 @@ function heritageName(classDeclaration: ClassDeclaration): string | undefined {
  * syntax layer.
  */
 export function readHeritage(
-	classDeclaration: ClassDeclaration,
+	classDeclaration: ClassLike,
 	imports: LibraryImports,
 	ctx: AnalysisContext,
 ): HeritageInfo {
 	const chain: string[] = [];
-	const localBases: ClassDeclaration[] = [];
-	let current = classDeclaration;
+	const localBases: ClassLike[] = [];
+	let current: ClassLike = classDeclaration;
 	let currentImports = imports;
 
 	for (let depth = 0; depth < MAX_HERITAGE_DEPTH; depth += 1) {
@@ -80,24 +77,27 @@ export function readHeritage(
 			return { chain, inheritedApi: null, localBases, truncated: false };
 		}
 
-		const canonical = canonicalLocalName(baseName, currentImports);
+		const canonical = canonicalLocalName(baseName.qualified, currentImports);
 		if (canonical && LIBRARY_BASE_CLASSES.has(canonical)) {
 			const api = canonical as InheritedApi;
 			chain.push(...syntheticChain(api));
 			return { chain, inheritedApi: api, localBases, truncated: false };
 		}
 
-		chain.push(baseName);
+		chain.push(baseName.simple);
 
 		const resolution = resolveClassRef(
 			ctx.project,
 			current.getSourceFile(),
-			baseName,
+			baseName.qualified,
 			ctx.resolveOptions,
 		);
 		if (
 			!resolution.resolved ||
-			!Node.isClassDeclaration(resolution.declaration)
+			!(
+				Node.isClassDeclaration(resolution.declaration) ||
+				Node.isClassExpression(resolution.declaration)
+			)
 		) {
 			return { chain, inheritedApi: null, localBases, truncated: false };
 		}

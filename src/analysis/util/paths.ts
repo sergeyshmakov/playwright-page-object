@@ -14,10 +14,21 @@ export function toPosixRelative(root: string, abs: string): string {
 	if (rel === "") {
 		return ".";
 	}
-	if (rel.startsWith("..") || path.isAbsolute(rel)) {
+	if (escapesRoot(rel) || path.isAbsolute(rel)) {
 		return toPosix(abs);
 	}
 	return toPosix(rel);
+}
+
+/**
+ * True when a relative path steps out of its base.
+ *
+ * `..` has to be a whole segment: a directory named `..config` is inside the
+ * root even though the string starts with two dots.
+ */
+function escapesRoot(rel: string): boolean {
+	const posix = toPosix(rel);
+	return posix === ".." || posix.startsWith("../");
 }
 
 /** Canonical definition key: `"e2e/page-objects/CheckoutPage.ts#CheckoutPage"`. */
@@ -29,9 +40,17 @@ export function defKey(relFile: string, className: string): string {
  * Case-folded lookup key. Windows paths are case-insensitive, so two spellings
  * of the same file must collapse to one entry — but the displayed key keeps the
  * original casing.
+ *
+ * Only the *file* half is folded. Class names are case-sensitive in every
+ * language the engine reads, so folding them would merge two distinct page
+ * objects into one entry and let a lookup return the wrong class.
  */
 export function keyFold(key: string): string {
-	return key.toLowerCase();
+	const hash = key.lastIndexOf("#");
+	if (hash < 0) {
+		return key.toLowerCase();
+	}
+	return `${key.slice(0, hash).toLowerCase()}${key.slice(hash)}`;
 }
 
 export function splitDefKey(key: string): { file: string; name: string } {
@@ -54,6 +73,21 @@ const IGNORED_SEGMENTS = new Set([
 	".next",
 	".astro",
 ]);
+
+/**
+ * True when a path produced by {@link toPosixRelative} did not stay inside the
+ * root. `toPosixRelative` falls back to the absolute path, which on Windows is
+ * drive-prefixed (`C:/…`) rather than slash-rooted — so both forms are checked,
+ * and `..` is matched as a whole segment.
+ */
+export function isOutsideRoot(relPosix: string): boolean {
+	return (
+		relPosix === ".." ||
+		relPosix.startsWith("../") ||
+		relPosix.startsWith("/") ||
+		/^[A-Za-z]:\//.test(relPosix)
+	);
+}
 
 /** True when the posix path crosses a directory the engine never wants to read. */
 export function isIgnoredPath(relPosix: string): boolean {

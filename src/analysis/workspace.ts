@@ -8,7 +8,7 @@ import {
 	locateTsConfig,
 	synthesizedCompilerOptions,
 } from "./config/tsconfig";
-import { AnalysisLimitError, info } from "./diagnostics";
+import { AnalysisLimitError, dedupeDiagnostics, info } from "./diagnostics";
 import type {
 	Diagnostic,
 	PlaywrightConfigInfo,
@@ -18,14 +18,15 @@ import type {
 import {
 	isDeclarationFile,
 	isIgnoredPath,
-	keyFold,
+	isOutsideRoot,
 	matchesAnyGlob,
 	toPosix,
 	toPosixRelative,
 } from "./util/paths";
 
 export const DEFAULT_TEST_ID_ATTRIBUTE = "data-testid";
-const DEFAULT_MAX_FILES = 5000;
+/** Matches the documented `--max-files` default in `src/cli.ts` and the docs. */
+const DEFAULT_MAX_FILES = 2000;
 const DEFAULT_STALE_AFTER_MS = 1000;
 const LRU_SIZE = 2;
 
@@ -61,16 +62,22 @@ function normalizeRoot(projectRoot: string): string {
 	return path.resolve(projectRoot);
 }
 
+/**
+ * Cache identity. Every option that changes what the workspace *contains* or
+ * how it is analysed belongs here: reusing a workspace built with a laxer
+ * `maxFiles` would silently defeat a later caller's safety cap.
+ */
 function workspaceKey(options: WorkspaceOptions): string {
-	return keyFold(
-		[
-			normalizeRoot(options.projectRoot),
-			options.tsconfig ?? "",
-			(options.include ?? []).join(","),
-			(options.exclude ?? []).join(","),
-			options.attribute ?? "",
-		].join("::"),
-	);
+	return [
+		normalizeRoot(options.projectRoot).toLowerCase(),
+		options.tsconfig ?? "",
+		(options.include ?? []).join(","),
+		(options.exclude ?? []).join(","),
+		options.attribute ?? "",
+		options.maxFiles ?? "",
+		(options.libraryModules ?? []).join(","),
+		options.preferSyntacticResolution ?? "",
+	].join("::");
 }
 
 /**
@@ -268,7 +275,7 @@ export class Workspace {
 				continue;
 			}
 			const relative = this.rel(absolute);
-			if (relative.startsWith("/") || relative.startsWith("..")) {
+			if (isOutsideRoot(relative)) {
 				continue;
 			}
 			if (isIgnoredPath(relative)) {
@@ -302,6 +309,15 @@ export class Workspace {
 		}
 		const value = readPlaywrightConfig(this);
 		this.playwrightInfo = { epoch: this.epoch, value };
+		// A config that could not be read statically silently downgrades the
+		// test-id attribute to `data-testid`; surface why, so consumers can say so
+		// instead of reporting a confidently wrong attribute. "No config at all"
+		// is not news and stays out of the workspace warnings.
+		if (value.configFile !== null && value.notes.length > 0) {
+			const merged = dedupeDiagnostics([...this.warnings, ...value.notes]);
+			this.warnings.length = 0;
+			this.warnings.push(...merged);
+		}
 		return value;
 	}
 

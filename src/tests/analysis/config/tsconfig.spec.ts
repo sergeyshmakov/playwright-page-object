@@ -62,6 +62,29 @@ describe("locateTsConfig", () => {
 		expect(located.path).toBe(path.join(root, "e2e/tsconfig.json"));
 	});
 
+	it("walks up from a testDir nested far below the tsconfig", () => {
+		const root = scratch({ "packages/app/e2e/tsconfig.json": "{}" });
+		const located = locateTsConfig(
+			root,
+			undefined,
+			"packages/app/e2e/tests/suites/smoke/specs",
+		);
+		expect(located.source).toBe("test-dir");
+		expect(located.path).toBe(
+			path.join(root, "packages/app/e2e/tsconfig.json"),
+		);
+	});
+
+	it("stops at the project root instead of climbing out of it", () => {
+		const outer = scratch({ "tsconfig.json": "{}" });
+		const root = path.join(outer, "inner");
+		fs.mkdirSync(path.join(root, "e2e"), { recursive: true });
+		expect(locateTsConfig(root, undefined, "e2e")).toEqual({
+			path: null,
+			source: "none",
+		});
+	});
+
 	it("reports `none` when nothing is found", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
 		expect(locateTsConfig(root)).toEqual({ path: null, source: "none" });
@@ -78,6 +101,7 @@ describe("synthesised options", () => {
 	it("builds absolute include and negated exclude globs", () => {
 		const includes = defaultIncludeGlobs("/repo");
 		expect(includes).toContain("/repo/**/*.tsx");
+		expect(includes).toContain("/repo/**/*.jsx");
 		expect(defaultExcludeGlobs("/repo")).toContain("!/repo/**/node_modules/**");
 	});
 });

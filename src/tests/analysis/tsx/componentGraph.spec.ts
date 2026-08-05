@@ -110,6 +110,24 @@ describe("resolveComponentRef", () => {
 		expect(resolution.definition.spreadSourceNames).toEqual(["rest"]);
 		expect(resolution.definition.forwardsSpread).toBe(true);
 	});
+
+	it("reports the prop name, not the local alias, and records the hop", () => {
+		const { resolution } = resolve(
+			{
+				"src/App.tsx":
+					'import Card from "./Card";\nexport default function App() { return <Card />; }',
+				"src/Card.tsx":
+					"export default function Card({ testId: id }: { testId: string }) { return <div data-testid={id} />; }",
+			},
+			"src/App.tsx",
+			"Card",
+		);
+		if (resolution.kind !== "local") {
+			throw new Error("expected a local component");
+		}
+		expect(resolution.definition.propNames).toEqual(["testId"]);
+		expect([...resolution.definition.propAliases]).toEqual([["id", "testId"]]);
+	});
 });
 
 describe("componentReturnExpressions", () => {

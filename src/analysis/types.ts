@@ -42,6 +42,7 @@ export type DiagnosticCode =
 	| "unresolved-class-reference"
 	| "fixtures-argument-dynamic"
 	| "fixture-entry-dynamic"
+	| "fixture-name-ambiguous"
 	// budgets
 	| "depth-limit-reached"
 	| "node-budget-reached"
@@ -398,6 +399,7 @@ export interface TestIdTree {
 export interface PlaywrightConfigInfo {
 	configFile: string | null;
 	testIdAttribute: string | undefined;
+	/** Workspace-relative posix dir, already resolved against the config's own directory. */
 	testDir: string | undefined;
 	projectOverrides: Array<{
 		project: string | null;

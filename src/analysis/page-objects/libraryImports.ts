@@ -160,11 +160,20 @@ export function collectLibraryImports(
 		if (!isLibrarySpecifier(specifier, ctx)) {
 			continue;
 		}
+		// `import type { Selector }` is erased before runtime: it can never be a
+		// decorator or a base class, so treating it as one would report page
+		// objects and selectors that do not exist.
+		if (declaration.isTypeOnly()) {
+			continue;
+		}
 		const namespaceImport = declaration.getNamespaceImport();
 		if (namespaceImport) {
 			namespaces.add(namespaceImport.getText());
 		}
 		for (const named of declaration.getNamedImports()) {
+			if (named.isTypeOnly()) {
+				continue;
+			}
 			const canonical = named.getName();
 			if (!CANONICAL_EXPORTS.has(canonical)) {
 				continue;
@@ -186,23 +195,29 @@ export function canonicalDecoratorName(
 	decorator: Decorator,
 	imports: LibraryImports,
 ): string | undefined {
-	const fullName = decorator.getFullName();
-	const dot = fullName.indexOf(".");
+	return canonicalLocalName(decorator.getFullName(), imports);
+}
+
+/**
+ * Canonical library name behind an identifier reference.
+ *
+ * Accepts the qualified `ns.PageObject` form as well as a bare local name, so
+ * base classes and built-in controls reached through
+ * `import * as po from "playwright-page-object"` are recognised exactly like
+ * the decorators already were.
+ */
+export function canonicalLocalName(
+	localName: string,
+	imports: LibraryImports,
+): string | undefined {
+	const dot = localName.indexOf(".");
 	if (dot > 0) {
-		const namespace = fullName.slice(0, dot);
-		const member = fullName.slice(dot + 1);
+		const namespace = localName.slice(0, dot);
+		const member = localName.slice(dot + 1);
 		if (imports.namespaces.has(namespace) && CANONICAL_EXPORTS.has(member)) {
 			return member;
 		}
 		return undefined;
 	}
-	return imports.aliases.get(fullName);
-}
-
-/** Canonical library name behind a plain identifier reference. */
-export function canonicalLocalName(
-	localName: string,
-	imports: LibraryImports,
-): string | undefined {
 	return imports.aliases.get(localName);
 }

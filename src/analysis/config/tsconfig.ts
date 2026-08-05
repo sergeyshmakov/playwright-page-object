@@ -46,14 +46,19 @@ export function locateTsConfig(
 	}
 
 	if (testDir) {
+		// Walks up to the project root, however deep `testDir` sits: a fixed hop
+		// cap would silently analyse a deep monorepo e2e package as if it had no
+		// tsconfig. The root itself was already checked above, so the walk stops
+		// there rather than escaping into unrelated ancestors.
+		const stopAt = path.resolve(projectRoot);
 		let current = path.resolve(projectRoot, testDir);
-		for (let hop = 0; hop < 6; hop += 1) {
+		while (true) {
 			const candidate = path.join(current, "tsconfig.json");
 			if (existsFile(candidate)) {
 				return { path: candidate, source: "test-dir" };
 			}
 			const parent = path.dirname(current);
-			if (parent === current) {
+			if (parent === current || current === stopAt) {
 				break;
 			}
 			current = parent;
@@ -71,14 +76,26 @@ export function synthesizedCompilerOptions(): CompilerOptions {
 	return {
 		target: ts.ScriptTarget.ES2022,
 		jsx: ts.JsxEmit.ReactJSX,
-		allowJs: false,
+		// `.jsx` sources are in the fallback scan below, so the parser has to
+		// accept them; nothing here is ever type-checked.
+		allowJs: true,
+		checkJs: false,
 		noEmit: true,
 		skipLibCheck: true,
 		strict: false,
 	};
 }
 
-/** Default globs used when the workspace has no tsconfig to enumerate files. */
+/**
+ * Default globs used when the workspace has no tsconfig to enumerate files.
+ *
+ * `.jsx` is included because the JSX scanner, the entry-point heuristic
+ * (`main.jsx` / `index.jsx`) and the module resolver all support it — omitting
+ * it here would make a JavaScript React app silently unanalysable. Plain `.js`
+ * is not swept: it would pull in build output and tooling config for every
+ * repo, and any `.js` module actually imported from analysed code is added on
+ * demand by the resolver.
+ */
 export function defaultIncludeGlobs(projectRoot: string): string[] {
 	const root = toPosix(projectRoot).replace(/\/$/, "");
 	return [
@@ -86,6 +103,7 @@ export function defaultIncludeGlobs(projectRoot: string): string[] {
 		`${root}/**/*.tsx`,
 		`${root}/**/*.mts`,
 		`${root}/**/*.cts`,
+		`${root}/**/*.jsx`,
 	];
 }
 

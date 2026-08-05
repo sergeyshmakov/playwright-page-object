@@ -195,6 +195,30 @@ describe("readHeritage", () => {
 		expect(result.hostKind).toBe("nestedPageObject");
 	});
 
+	it("recognises a base class reached through a namespace import", () => {
+		const result = classify(
+			[
+				'import * as po from "playwright-page-object";',
+				"export class Child extends po.RootPageObject {}",
+			].join("\n"),
+			"Child",
+		);
+		expect(result.heritage.chain).toEqual(["RootPageObject", "PageObject"]);
+		expect(result.heritage.inheritedApi).toBe("RootPageObject");
+		expect(result.hostKind).toBe("rootPageObject");
+	});
+
+	it("ignores a type-only import of a library base class", () => {
+		const result = classify(
+			[
+				'import type { PageObject } from "playwright-page-object";',
+				"export class Child implements PageObject {}",
+			].join("\n"),
+			"Child",
+		);
+		expect(result.heritage.inheritedApi).toBeNull();
+	});
+
 	it("expands ListPageObject into its own chain", () => {
 		const result = classify(
 			[

@@ -45,7 +45,7 @@ describe("readPlaywrightConfig", () => {
 		});
 		const info = readPlaywrightConfig(ws);
 		expect(info.configFile).toBe("playwright.config.ts");
-		expect(info.testDir).toBe("./e2e");
+		expect(info.testDir).toBe("e2e");
 		expect(info.testIdAttribute).toBe("data-qa");
 		expect(info.notes).toEqual([]);
 	});
@@ -56,7 +56,7 @@ describe("readPlaywrightConfig", () => {
 				'export default { testDir: "./tests", use: { testIdAttribute: "qa-id" } };',
 		});
 		const info = readPlaywrightConfig(ws);
-		expect(info.testDir).toBe("./tests");
+		expect(info.testDir).toBe("tests");
 		expect(info.testIdAttribute).toBe("qa-id");
 	});
 
@@ -74,7 +74,7 @@ describe("readPlaywrightConfig", () => {
 		const info = readPlaywrightConfig(exampleWorkspace());
 		expect(info.configFile).toBe("playwright.config.ts");
 		expect(info.testIdAttribute).toBeUndefined();
-		expect(info.testDir).toBe("./e2e");
+		expect(info.testDir).toBe("e2e");
 		expect(info.projectOverrides).toEqual([]);
 		expect(exampleWorkspace().testIdAttribute()).toEqual({
 			attribute: "data-testid",
@@ -171,7 +171,60 @@ describe("readPlaywrightConfig", () => {
 		const ws = workspaceWithConfig({
 			"config/pw.ts": 'export default { testDir: "./explicit" };',
 		});
-		expect(readPlaywrightConfig(ws, "config/pw.ts").testDir).toBe("./explicit");
+		expect(readPlaywrightConfig(ws, "config/pw.ts").testDir).toBe(
+			"config/explicit",
+		);
+	});
+
+	it("reads a CommonJS `module.exports = defineConfig(...)` config", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.js": [
+				'const { defineConfig } = require("@playwright/test");',
+				"module.exports = defineConfig({",
+				'  testDir: "./e2e",',
+				'  use: { testIdAttribute: "data-cjs" },',
+				"});",
+			].join("\n"),
+		});
+		const info = readPlaywrightConfig(ws);
+		expect(info.configFile).toBe("playwright.config.js");
+		expect(info.testIdAttribute).toBe("data-cjs");
+		expect(info.testDir).toBe("e2e");
+		expect(info.notes).toEqual([]);
+	});
+
+	it("reads a bare `module.exports = { … }` config", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.cjs":
+				'module.exports = { use: { testIdAttribute: "qa-cjs" } };',
+		});
+		expect(readPlaywrightConfig(ws).testIdAttribute).toBe("qa-cjs");
+	});
+
+	it("resolves a nested config's testDir against the config's own directory", () => {
+		const ws = workspaceWithConfig({
+			"e2e/playwright.config.ts": 'export default { testDir: "./specs" };',
+		});
+		expect(readPlaywrightConfig(ws).testDir).toBe("e2e/specs");
+	});
+
+	it("surfaces an unresolvable testIdAttribute as a workspace warning", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts":
+				"export default { use: { testIdAttribute: process.env.ATTR } };",
+		});
+		expect(ws.testIdAttribute().attribute).toBe("data-testid");
+		expect(ws.warnings.map((diagnostic) => diagnostic.code)).toContain(
+			"testid-attribute-unresolved",
+		);
+	});
+
+	it("keeps a missing config out of the workspace warnings", () => {
+		const ws = workspaceWithConfig({ "src/a.ts": "export const a = 1;" });
+		ws.playwright();
+		expect(ws.warnings.map((diagnostic) => diagnostic.code)).not.toContain(
+			"playwright-config-not-found",
+		);
 	});
 
 	it("reports an unrecognised default export shape", () => {

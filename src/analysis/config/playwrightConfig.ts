@@ -4,6 +4,7 @@ import {
 	type ObjectLiteralExpression,
 	type PropertyAssignment,
 	type SourceFile,
+	SyntaxKind,
 } from "ts-morph";
 import { info, warn } from "../diagnostics";
 import type { Diagnostic, PlaywrightConfigInfo } from "../types";
@@ -104,13 +105,60 @@ function isDefineConfigCall(node: Node): boolean {
 	return false;
 }
 
-/** Unwraps `export default …` down to the config object literal. */
+/**
+ * `module.exports = …` in a CommonJS config.
+ *
+ * `.js` / `.cjs` are advertised config extensions, and a CommonJS config has no
+ * `ExportAssignment` at all — without this the file is found, reported as
+ * "shape unrecognized" and its `testIdAttribute` silently lost.
+ */
+function commonJsExports(sourceFile: SourceFile): Node[] {
+	const out: Node[] = [];
+	for (const statement of sourceFile.getStatements()) {
+		if (!Node.isExpressionStatement(statement)) {
+			continue;
+		}
+		const expression = statement.getExpression();
+		if (
+			!Node.isBinaryExpression(expression) ||
+			expression.getOperatorToken().getKind() !== SyntaxKind.EqualsToken
+		) {
+			continue;
+		}
+		const left = expression.getLeft();
+		if (!Node.isPropertyAccessExpression(left)) {
+			continue;
+		}
+		const target = left.getExpression();
+		const isModuleExports =
+			Node.isIdentifier(target) &&
+			target.getText() === "module" &&
+			left.getName() === "exports";
+		const isExportsDefault =
+			Node.isIdentifier(target) &&
+			target.getText() === "exports" &&
+			left.getName() === "default";
+		if (isModuleExports || isExportsDefault) {
+			out.push(expression.getRight());
+		}
+	}
+	return out;
+}
+
+/** Unwraps `export default …` / `module.exports = …` to the config object. */
 function resolveConfigObject(sourceFile: SourceFile): {
 	object: ObjectLiteralExpression | null;
 	reasonNode: Node | null;
 } {
-	for (const assignment of sourceFile.getExportAssignments()) {
-		let expression: Node = assignment.getExpression();
+	const candidates: Node[] = [
+		...sourceFile
+			.getExportAssignments()
+			.map((assignment) => assignment.getExpression()),
+		...commonJsExports(sourceFile),
+	];
+
+	for (const candidate of candidates) {
+		let expression: Node = candidate;
 		for (let hop = 0; hop < 3; hop += 1) {
 			if (
 				Node.isAsExpression(expression) ||
@@ -197,9 +245,18 @@ export function readPlaywrightConfig(
 		};
 	}
 
-	const testDir = stringLiteralValue(
+	// Playwright resolves a relative `testDir` against the directory holding the
+	// config, not against the repo root — a nested `e2e/playwright.config.ts`
+	// with `testDir: "./specs"` means `e2e/specs`.
+	const rawTestDir = stringLiteralValue(
 		getProperty(object, "testDir")?.getInitializer(),
 	);
+	const testDir =
+		rawTestDir === undefined
+			? undefined
+			: workspace.rel(
+					path.resolve(path.dirname(sourceFile.getFilePath()), rawTestDir),
+				);
 
 	let testIdAttribute: string | undefined;
 	const useProperty = getProperty(object, "use");

@@ -6,6 +6,7 @@ import {
 	globToRegExp,
 	isDeclarationFile,
 	isIgnoredPath,
+	isOutsideRoot,
 	keyFold,
 	matchesAnyGlob,
 	splitDefKey,
@@ -31,6 +32,27 @@ describe("toPosixRelative", () => {
 		const root = path.resolve("/repo");
 		expect(toPosixRelative(root, root)).toBe(".");
 	});
+
+	it("keeps a directory whose name merely starts with dots", () => {
+		const root = path.resolve("/repo");
+		const inside = path.join(root, "..config", "a.ts");
+		expect(toPosixRelative(root, inside)).toBe("..config/a.ts");
+		expect(isOutsideRoot(toPosixRelative(root, inside))).toBe(false);
+	});
+});
+
+describe("isOutsideRoot", () => {
+	it("treats `..` as a whole segment", () => {
+		expect(isOutsideRoot("..")).toBe(true);
+		expect(isOutsideRoot("../sibling/a.ts")).toBe(true);
+		expect(isOutsideRoot("..config/a.ts")).toBe(false);
+	});
+
+	it("recognises absolute paths in both posix and Windows form", () => {
+		expect(isOutsideRoot("/elsewhere/a.ts")).toBe(true);
+		expect(isOutsideRoot("C:/elsewhere/a.ts")).toBe(true);
+		expect(isOutsideRoot("src/a.ts")).toBe(false);
+	});
 });
 
 describe("defKey / keyFold", () => {
@@ -40,10 +62,16 @@ describe("defKey / keyFold", () => {
 		);
 	});
 
-	it("folds case for lookups without mangling the display key", () => {
+	it("folds the file half for lookups without mangling the display key", () => {
 		const key = defKey("E2E/CheckoutPage.ts", "CheckoutPage");
-		expect(keyFold(key)).toBe("e2e/checkoutpage.ts#checkoutpage");
+		expect(keyFold(key)).toBe("e2e/checkoutpage.ts#CheckoutPage");
 		expect(key).toBe("E2E/CheckoutPage.ts#CheckoutPage");
+	});
+
+	it("keeps classes that differ only by case apart", () => {
+		expect(keyFold(defKey("src/a.ts", "Panel"))).not.toBe(
+			keyFold(defKey("src/a.ts", "panel")),
+		);
 	});
 
 	it("splits on the last hash so paths containing one still work", () => {

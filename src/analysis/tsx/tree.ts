@@ -602,7 +602,7 @@ class TreeBuilder {
 			depth + 1,
 			path,
 			{
-				bindings: this.callSiteBindings(scanned),
+				bindings: this.callSiteBindings(scanned, resolution.definition),
 				directAttribute: scanned?.testIds[0] ?? null,
 				conditional,
 				repeated,
@@ -615,8 +615,16 @@ class TreeBuilder {
 		return [node];
 	}
 
+	/**
+	 * Call-site attribute values, keyed by the name the callee's *body* uses.
+	 *
+	 * `<Card testId="x" />` reaching `function Card({ testId: id })` has to bind
+	 * under `id`, or the `data-testid={id}` inside would be reported dynamic even
+	 * though its value is right there at the call site.
+	 */
 	private callSiteBindings(
 		scanned: ScannedElement | undefined,
+		definition: ComponentDefinition,
 	): Map<string, TestIdValue> {
 		const bindings = new Map<string, TestIdValue>();
 		if (!scanned) {
@@ -626,6 +634,12 @@ class TreeBuilder {
 			const [first] = values;
 			if (first && first.kind !== "dynamic") {
 				bindings.set(name, first);
+			}
+		}
+		for (const [local, propName] of definition.propAliases) {
+			const value = bindings.get(propName);
+			if (value) {
+				bindings.set(local, value);
 			}
 		}
 		return bindings;

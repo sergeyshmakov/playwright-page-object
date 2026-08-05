@@ -69,6 +69,31 @@ describe("Workspace.acquire", () => {
 		});
 		expect(second).not.toBe(first);
 	});
+
+	it("does not let a cached workspace bypass a tighter maxFiles", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		Workspace.acquire({ projectRoot: root });
+		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 1 })).toThrow(
+			/exceeds the 1 file limit/,
+		);
+	});
+
+	it("treats different analysis options as different workspaces", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const first = Workspace.acquire({ projectRoot: root });
+		expect(
+			Workspace.acquire({ projectRoot: root, libraryModules: ["@acme/po"] }),
+		).not.toBe(first);
+		expect(
+			Workspace.acquire({
+				projectRoot: root,
+				preferSyntacticResolution: false,
+			}),
+		).not.toBe(first);
+	});
 });
 
 describe("Workspace.revalidate", () => {
@@ -306,6 +331,17 @@ describe("Workspace paths and attribute resolution", () => {
 		expect(
 			makeWorkspace({}, { attribute: "data-qa" }).testIdAttribute(),
 		).toEqual({ attribute: "data-qa", source: "param" });
+	});
+
+	it("scans .jsx sources when the project has no tsconfig", () => {
+		const root = scratch({
+			"src/App.jsx": "export const App = () => null;",
+			"src/a.ts": "export const a = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root });
+		expect(ws.jsxFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
+			"src/App.jsx",
+		]);
 	});
 
 	it("separates .ts sources from .tsx sources", () => {

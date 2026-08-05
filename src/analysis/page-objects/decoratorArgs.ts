@@ -3,11 +3,13 @@ import { warn } from "../diagnostics";
 import type { Diagnostic } from "../types";
 import { rawText } from "../util/literal";
 import {
+	type NameRef,
 	type RefResolution,
+	readNameRef,
 	resolveClassRef,
 	resolvesToCallable,
 } from "../util/resolve";
-import { readHeritage } from "./hostKind";
+import { type ClassLike, readHeritage } from "./hostKind";
 import {
 	type AnalysisContext,
 	collectLibraryImports,
@@ -38,22 +40,15 @@ export interface SplitArgs {
 	warnings: Diagnostic[];
 }
 
-function newExpressionName(node: Node): string | null {
+function newExpressionName(node: Node): NameRef | null {
 	if (!Node.isNewExpression(node)) {
 		return null;
 	}
-	const expression = node.getExpression();
-	if (Node.isIdentifier(expression)) {
-		return expression.getText();
-	}
-	if (Node.isPropertyAccessExpression(expression)) {
-		return expression.getName();
-	}
-	return null;
+	return readNameRef(node.getExpression());
 }
 
 /** `(l) => new X(l)` and `(l) => { return new X(l); }` both yield `"X"`. */
-function inlineFactoryClassName(node: Node): string | null {
+function inlineFactoryClassName(node: Node): NameRef | null {
 	if (!Node.isArrowFunction(node) && !Node.isFunctionExpression(node)) {
 		return null;
 	}
@@ -76,35 +71,45 @@ function inlineFactoryClassName(node: Node): string | null {
 	return newExpressionName(body);
 }
 
-function identifierName(node: Node): string | null {
-	if (Node.isIdentifier(node)) {
-		return node.getText();
-	}
-	if (Node.isPropertyAccessExpression(node)) {
-		return node.getName();
-	}
-	return null;
-}
-
-/** True when `name` resolves to a class extending the library `PageObject`. */
+/**
+ * True when `name` resolves to a class extending the library `PageObject`.
+ *
+ * `const Ctrl = class extends PageObject {}` throws at decoration time exactly
+ * like the declaration form, so the class-expression shape has to be checked
+ * too — the runtime's `PageObject.isClass` does not care how it was written.
+ */
 export function resolvesToPageObjectSubclass(
 	resolution: RefResolution,
 	ctx: AnalysisContext,
 ): boolean {
-	if (
-		!resolution.resolved ||
-		!Node.isClassDeclaration(resolution.declaration)
-	) {
+	if (!resolution.resolved) {
 		return false;
 	}
-	const declaration = resolution.declaration;
+	const declaration = heritageBearingClass(resolution.declaration);
+	if (!declaration) {
+		return false;
+	}
 	const imports = collectLibraryImports(declaration.getSourceFile(), ctx);
 	return readHeritage(declaration, imports, ctx).inheritedApi !== null;
 }
 
+/** The class node whose `extends` clause can be walked, if there is one. */
+function heritageBearingClass(node: Node): ClassLike | null {
+	if (Node.isClassDeclaration(node) || Node.isClassExpression(node)) {
+		return node;
+	}
+	if (Node.isVariableDeclaration(node)) {
+		const initializer = node.getInitializer();
+		if (initializer && Node.isClassExpression(initializer)) {
+			return initializer;
+		}
+	}
+	return null;
+}
+
 function buildIdentifierFactory(
 	node: Node,
-	name: string,
+	name: NameRef,
 	sourceFile: SourceFile,
 	ctx: AnalysisContext,
 	notes: string[],
@@ -113,7 +118,7 @@ function buildIdentifierFactory(
 	const resolution = resolveClassRef(
 		ctx.project,
 		sourceFile,
-		name,
+		name.qualified,
 		ctx.resolveOptions,
 	);
 	if (resolvesToPageObjectSubclass(resolution, ctx)) {
@@ -121,7 +126,7 @@ function buildIdentifierFactory(
 		warnings.push(
 			warn(
 				"page-object-passed-as-factory",
-				`"${name}" extends PageObject and cannot be passed as a factory argument; the decorator throws at class definition time. Use the accessor initializer instead: \`accessor X = new ${name}()\`.`,
+				`"${name.simple}" extends PageObject and cannot be passed as a factory argument; the decorator throws at class definition time. Use the accessor initializer instead: \`accessor X = new ${name.simple}()\`.`,
 				ctx.ws.loc(node),
 			),
 		);
@@ -129,13 +134,29 @@ function buildIdentifierFactory(
 	const resolved = resolution.resolved;
 	if (!resolved) {
 		notes.push(
-			`Factory argument "${name}" could not be resolved statically; treated as a constructor because it starts with an uppercase letter.`,
+			`Factory argument "${name.simple}" could not be resolved statically; treated as a constructor because it starts with an uppercase letter.`,
 		);
+	}
+	// A plain function factory (`function makeControl(l) { … }`) is callable but
+	// is not a class: naming it as the control type would invent a
+	// `file#makeControl` graph node for something the runtime only ever calls.
+	if (resolved && resolution.kind !== "class") {
+		notes.push(
+			`Factory argument "${name.simple}" resolves to a ${resolution.kind}, not a class, so the control type it returns is not statically known.`,
+		);
+		return {
+			form: "identifier",
+			node,
+			className: null,
+			resolution: null,
+			viaInlineFactory: false,
+			dynamic: true,
+		};
 	}
 	return {
 		form: "identifier",
 		node,
-		className: name,
+		className: name.simple,
 		resolution,
 		viaInlineFactory: false,
 		dynamic: !resolved,
@@ -243,14 +264,14 @@ function looksLikeFactory(
 	if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
 		return true;
 	}
-	const name = identifierName(node);
+	const name = readNameRef(node);
 	if (!name) {
 		return false;
 	}
 	const resolution = resolveClassRef(
 		ctx.project,
 		sourceFile,
-		name,
+		name.qualified,
 		ctx.resolveOptions,
 	);
 	if (resolvesToCallable(resolution)) {
@@ -261,10 +282,10 @@ function looksLikeFactory(
 	}
 	// Documented heuristic: an unresolvable trailing identifier is a factory
 	// when it is capitalised (constructor convention), a value otherwise.
-	const isUppercase = /^[A-Z]/.test(name);
+	const isUppercase = /^[A-Z]/.test(name.simple);
 	if (!isUppercase) {
 		notes.push(
-			`Trailing identifier "${name}" could not be resolved; treated as a selector value because it starts with a lowercase letter.`,
+			`Trailing identifier "${name.simple}" could not be resolved; treated as a selector value because it starts with a lowercase letter.`,
 		);
 	}
 	return isUppercase;
@@ -283,16 +304,18 @@ function readFactory(
 			const resolution = resolveClassRef(
 				ctx.project,
 				sourceFile,
-				className,
+				className.qualified,
 				ctx.resolveOptions,
 			);
 			return {
 				form: "arrow",
 				node,
-				className,
+				className: className.simple,
 				resolution,
+				// `(l) => new MissingControl(l)` names a class that does not exist:
+				// the graph node would be a fiction, so say so.
 				viaInlineFactory: true,
-				dynamic: false,
+				dynamic: !resolution.resolved,
 			};
 		}
 		warnings.push(
@@ -312,7 +335,7 @@ function readFactory(
 		};
 	}
 
-	const name = identifierName(node);
+	const name = readNameRef(node);
 	if (name) {
 		return buildIdentifierFactory(node, name, sourceFile, ctx, notes, warnings);
 	}

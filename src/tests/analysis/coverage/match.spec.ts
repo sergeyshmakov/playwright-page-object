@@ -112,6 +112,30 @@ describe("matchSelectorToUi", () => {
 		expect(withPrefix).toEqual({ confidence: "prefix" });
 	});
 
+	it("honours the `i` flag in the literal-prefix fallback", () => {
+		const insensitive = matchSelectorToUi(
+			{
+				pattern: {
+					...fromRegex("^row_\\d{4}$", "i"),
+					literalPrefix: "row_",
+				},
+			},
+			patternUi("^Row_.+$", "Row_"),
+		);
+		expect(insensitive).toEqual({ confidence: "prefix" });
+
+		const sensitive = matchSelectorToUi(
+			{
+				pattern: {
+					...fromRegex("^row_\\d{4}$"),
+					literalPrefix: "row_",
+				},
+			},
+			patternUi("^Row_.+$", "Row_"),
+		);
+		expect(sensitive).toBeNull();
+	});
+
 	it("returns null for an unmatchable selector shape", () => {
 		expect(matchSelectorToUi({}, staticUi("X"))).toBeNull();
 	});

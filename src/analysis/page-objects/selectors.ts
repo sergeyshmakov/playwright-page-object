@@ -129,6 +129,12 @@ export function readSelector(
 				break;
 			}
 			const testId = toMaybeStatic(evaluateStatic(values[0]));
+			// `Selector`/`RootSelector` run `id ? p.getByTestId(id) : p`, so a
+			// statically falsy id is the identity selector, not a lookup for "".
+			if (!isDynamicValue(testId) && !testId) {
+				selector.kind = "self";
+				break;
+			}
 			selector.testId = testId;
 			selector.dynamic = anyDynamic([testId]);
 			break;

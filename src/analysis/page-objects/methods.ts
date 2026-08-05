@@ -6,7 +6,7 @@ import {
 	renderReturnType,
 	type SignatureMode,
 } from "../util/signature";
-import { readHeritage } from "./hostKind";
+import { type ClassLike, readHeritage } from "./hostKind";
 import type { AnalysisContext, LibraryImports } from "./libraryImports";
 import { collectLibraryImports } from "./libraryImports";
 import { findSelectorDecorator } from "./members";
@@ -34,10 +34,7 @@ export function readMethods(
 	const seen = new Set<string>();
 	const out: MethodInfo[] = [];
 
-	const collect = (
-		declaration: ClassDeclaration,
-		ownImports: LibraryImports,
-	) => {
+	const collect = (declaration: ClassLike, ownImports: LibraryImports) => {
 		for (const member of declaration.getMembers()) {
 			if (Node.isConstructorDeclaration(member)) {
 				continue;

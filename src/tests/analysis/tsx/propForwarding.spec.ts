@@ -34,6 +34,23 @@ describe("one-hop prop forwarding", () => {
 		expect(button?.viaProp).toBe("testId");
 	});
 
+	it("binds a prop destructured under a different local name", () => {
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Btn from "./Btn";',
+				'export default function App() { return <Btn testId="Aliased" />; }',
+			].join("\n"),
+			"src/Btn.tsx": [
+				"export default function Btn({ testId: id }: { testId: string }) {",
+				"  return <button data-testid={id} />;",
+				"}",
+			].join("\n"),
+		});
+		const button = nodes.find((node) => node.tag === "button");
+		expect(button?.testId).toMatchObject({ kind: "static", value: "Aliased" });
+		expect(button?.viaProp).toBe("id");
+	});
+
 	it("binds `props.testId` as well as the destructured form", () => {
 		const { nodes } = treeFor({
 			"src/App.tsx": [

@@ -31,6 +31,33 @@ export interface UnresolvedRef {
 
 export type RefResolution = ResolvedRef | ExternalRef | UnresolvedRef;
 
+/**
+ * A name as written (`pages.HomePage`) next to the bare identifier it ends in
+ * (`HomePage`).
+ *
+ * Resolution and library-alias lookup need the qualified form so a namespace
+ * import stays analysable; everything user-facing reports the simple name.
+ */
+export interface NameRef {
+	qualified: string;
+	simple: string;
+}
+
+/** Reads `X` or `ns.X` from an expression position. */
+export function readNameRef(node: Node): NameRef | null {
+	if (Node.isIdentifier(node)) {
+		const text = node.getText();
+		return { qualified: text, simple: text };
+	}
+	if (Node.isPropertyAccessExpression(node)) {
+		return {
+			qualified: `${node.getExpression().getText()}.${node.getName()}`,
+			simple: node.getName(),
+		};
+	}
+	return null;
+}
+
 export interface ResolveOptions {
 	/** Set to `false` to keep the type checker out of the hot path entirely. */
 	preferSyntacticResolution?: boolean;
@@ -155,7 +182,11 @@ function classifyDeclaration(node: Node): RefKind {
 	if (Node.isClassDeclaration(node) || Node.isClassExpression(node)) {
 		return "class";
 	}
-	if (Node.isFunctionDeclaration(node) || Node.isArrowFunction(node)) {
+	if (
+		Node.isFunctionDeclaration(node) ||
+		Node.isArrowFunction(node) ||
+		Node.isFunctionExpression(node)
+	) {
 		return "function";
 	}
 	if (Node.isVariableDeclaration(node)) {
@@ -214,23 +245,34 @@ function resolveDefaultExport(
 		if (Node.isClassExpression(expression)) {
 			return asResolved(expression, sourceFile, expression.getName());
 		}
+		// `export default () => <div/>` / `export default function () {}`.
+		if (Node.isArrowFunction(expression)) {
+			return asResolved(expression, sourceFile, undefined);
+		}
+		if (Node.isFunctionExpression(expression)) {
+			return asResolved(expression, sourceFile, expression.getName());
+		}
 	}
-	// `export { X as default }`
+	// `export { X as default }` and `export { default } from "./X"`.
 	for (const declaration of sourceFile.getExportDeclarations()) {
+		const moduleSpecifier = declaration.getModuleSpecifierValue();
 		for (const specifier of declaration.getNamedExports()) {
 			const alias = specifier.getAliasNode();
-			if (alias?.getText() !== "default") {
+			const exposed = alias ? alias.getText() : specifier.getName();
+			if (exposed !== "default") {
+				continue;
+			}
+			const target = moduleSpecifier
+				? (resolveRelativeModule(project, sourceFile, moduleSpecifier) ??
+					sourceFile)
+				: sourceFile;
+			// `export { default }` with no module specifier would recurse forever.
+			if (target === sourceFile && specifier.getName() === "default") {
 				continue;
 			}
 			const resolved = resolveExportedName(
 				project,
-				declaration.getModuleSpecifierValue()
-					? (resolveRelativeModule(
-							project,
-							sourceFile,
-							declaration.getModuleSpecifierValue() ?? "",
-						) ?? sourceFile)
-					: sourceFile,
+				target,
 				specifier.getName(),
 				hops - 1,
 			);
@@ -286,9 +328,22 @@ export function resolveExportedName(
 				if (exposed !== exportName) {
 					continue;
 				}
-				const target = specifier
-					? resolveRelativeModule(project, sourceFile, specifier)
-					: sourceFile;
+				if (!specifier) {
+					// `import { Card } from "./Card"; export { Card };` — a local
+					// re-export of an imported binding. Recursing into this same file
+					// would just re-run the failed local lookup.
+					const viaImport = resolveThroughImport(
+						project,
+						sourceFile,
+						named.getName(),
+						hops - 1,
+					);
+					if (viaImport?.resolved) {
+						return viaImport;
+					}
+					continue;
+				}
+				const target = resolveRelativeModule(project, sourceFile, specifier);
 				if (!target) {
 					return undefined;
 				}
@@ -382,6 +437,45 @@ function resolveThroughImport(
 }
 
 /**
+ * `ns.Member` where `ns` came from `import * as ns from "…"`.
+ *
+ * Without this, `new pages.HomePage(page)` and `class X extends po.PageObject`
+ * lose the qualifier before resolution and are reported as unresolvable, even
+ * though the namespace form is fully static.
+ */
+function resolveNamespaceMember(
+	project: Project,
+	sourceFile: SourceFile,
+	namespaceName: string,
+	memberName: string,
+	hops: number,
+): RefResolution {
+	const unresolved: UnresolvedRef = {
+		resolved: false,
+		external: false,
+		name: memberName,
+		reason: "identifier-unresolved",
+	};
+	const binding = findImportBinding(sourceFile, namespaceName);
+	if (binding?.exportedName !== "*") {
+		return unresolved;
+	}
+	if (!isRelativeSpecifier(binding.specifier)) {
+		return {
+			resolved: false,
+			external: true,
+			module: binding.specifier,
+			name: memberName,
+		};
+	}
+	const target = resolveRelativeModule(project, sourceFile, binding.specifier);
+	if (!target) {
+		return unresolved;
+	}
+	return resolveExportedName(project, target, memberName, hops) ?? unresolved;
+}
+
+/**
  * Syntax-first identifier resolution.
  *
  * 1. Local declaration in the same file.
@@ -397,6 +491,17 @@ export function resolveIdentifier(
 	options: ResolveOptions = {},
 ): RefResolution {
 	const hops = options.maxHops ?? DEFAULT_HOPS;
+
+	const dot = localName.indexOf(".");
+	if (dot > 0) {
+		return resolveNamespaceMember(
+			project,
+			sourceFile,
+			localName.slice(0, dot),
+			localName.slice(dot + 1),
+			hops,
+		);
+	}
 
 	const local = localDeclaration(sourceFile, localName);
 	if (local) {

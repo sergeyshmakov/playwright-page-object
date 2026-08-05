@@ -31,8 +31,8 @@ describe("readFixtureMaps", () => {
 				"export const fixtures = createFixtures({ homePage: HomePage });",
 			].join("\n"),
 		});
-		expect(map.byName.get("homePage")).toBe("src/homepage.ts#homepage");
-		const bindings = map.byClass.get("src/homepage.ts#homepage");
+		expect(map.byName.get("homePage")).toBe("src/homepage.ts#HomePage");
+		const bindings = map.byClass.get("src/homepage.ts#HomePage");
 		expect(bindings).toHaveLength(1);
 		expect(bindings?.[0]).toMatchObject({
 			name: "homePage",
@@ -51,7 +51,7 @@ describe("readFixtureMaps", () => {
 				"});",
 			].join("\n"),
 		});
-		const bindings = map.byClass.get("src/authpage.ts#authpage");
+		const bindings = map.byClass.get("src/authpage.ts#AuthPage");
 		expect(bindings?.[0]).toMatchObject({
 			name: "authPage",
 			form: "factory",
@@ -82,7 +82,87 @@ describe("readFixtureMaps", () => {
 				"export const b = createFixtures({ landing: HomePage });",
 			].join("\n"),
 		});
-		expect(map.byClass.get("src/homepage.ts#homepage")).toHaveLength(2);
+		expect(map.byClass.get("src/homepage.ts#HomePage")).toHaveLength(2);
+	});
+
+	it("binds a multi-statement factory to the class it returns", () => {
+		const map = readFixtures({
+			"src/helper.ts": "export class Helper {}",
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { AuthPage } from "./AuthPage";',
+				'import { Helper } from "./helper";',
+				"export const fixtures = createFixtures({",
+				"  authPage: (page) => {",
+				"    const helper = new Helper();",
+				"    return new AuthPage(page, helper);",
+				"  },",
+				"});",
+			].join("\n"),
+		});
+		expect(map.byName.get("authPage")).toBe("src/authpage.ts#AuthPage");
+		expect(map.byClass.has("src/helper.ts#Helper")).toBe(false);
+	});
+
+	it("follows a returned local one hop to its constructor", () => {
+		const map = readFixtures({
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				"export const fixtures = createFixtures({",
+				"  homePage: (page) => {",
+				"    const home = new HomePage(page);",
+				"    return home;",
+				"  },",
+				"});",
+			].join("\n"),
+		});
+		expect(map.byName.get("homePage")).toBe("src/homepage.ts#HomePage");
+	});
+
+	it("resolves a constructor reached through a namespace import", () => {
+		const map = readFixtures({
+			"src/pages.ts": 'export { HomePage } from "./HomePage";',
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import * as pages from "./pages";',
+				"export const fixtures = createFixtures({",
+				"  homePage: (page) => new pages.HomePage(page),",
+				"});",
+			].join("\n"),
+		});
+		expect(map.byName.get("homePage")).toBe("src/homepage.ts#HomePage");
+	});
+
+	it("does not key a binding under an alias with no class declaration", () => {
+		const map = readFixtures({
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				"const Alias = HomePage;",
+				"export const fixtures = createFixtures({ homePage: Alias });",
+			].join("\n"),
+		});
+		expect(map.byName.has("homePage")).toBe(false);
+		expect(map.byClass.has("src/fixtures.ts#Alias")).toBe(false);
+		expect(map.warnings.map((diagnostic) => diagnostic.code)).toContain(
+			"fixture-entry-dynamic",
+		);
+	});
+
+	it("reports one fixture name bound to two different page objects", () => {
+		const map = readFixtures({
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { AuthPage } from "./AuthPage";',
+				'import { HomePage } from "./HomePage";',
+				"export const a = createFixtures({ page: HomePage });",
+				"export const b = createFixtures({ page: AuthPage });",
+			].join("\n"),
+		});
+		expect(map.warnings.map((diagnostic) => diagnostic.code)).toContain(
+			"fixture-name-ambiguous",
+		);
 	});
 
 	it("reports a non-literal argument instead of guessing", () => {

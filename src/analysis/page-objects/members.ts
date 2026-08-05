@@ -11,7 +11,12 @@ import type { Diagnostic, MemberNode, MemberResult } from "../types";
 import { docSummary } from "../util/jsdoc";
 import { rawText } from "../util/literal";
 import { defKey } from "../util/paths";
-import { type RefResolution, resolveClassRef } from "../util/resolve";
+import {
+	type NameRef,
+	type RefResolution,
+	readNameRef,
+	resolveClassRef,
+} from "../util/resolve";
 import type { FactoryArg } from "./decoratorArgs";
 import { readHeritage } from "./hostKind";
 import {
@@ -124,18 +129,11 @@ function heritageApiOf(
 	return readHeritage(declaration, imports, ctx).inheritedApi;
 }
 
-function newExpressionClassName(node: Node): string | null {
+function newExpressionClassName(node: Node): NameRef | null {
 	if (!Node.isNewExpression(node)) {
 		return null;
 	}
-	const expression = node.getExpression();
-	if (Node.isIdentifier(expression)) {
-		return expression.getText();
-	}
-	if (Node.isPropertyAccessExpression(expression)) {
-		return expression.getName();
-	}
-	return null;
+	return readNameRef(node.getExpression());
 }
 
 function pushEdge(edges: MemberEdge[], ref: ClassRef, viaFactoryArg: boolean) {
@@ -189,7 +187,7 @@ export function inferResult(
 	if (initializer && newClassName && Node.isNewExpression(initializer)) {
 		const sourceFile = property.getSourceFile();
 		const isLibraryList = isLibraryClassName(
-			newClassName,
+			newClassName.qualified,
 			imports,
 			"ListPageObject",
 		);
@@ -198,7 +196,7 @@ export function inferResult(
 			: resolveClassRef(
 					ctx.project,
 					sourceFile,
-					newClassName,
+					newClassName.qualified,
 					ctx.resolveOptions,
 				);
 		const listRef: ClassRef = isLibraryList
@@ -208,7 +206,7 @@ export function inferResult(
 					declaration: null,
 					external: true,
 				}
-			: refFromResolution(resolution, ctx, newClassName);
+			: refFromResolution(resolution, ctx, newClassName.simple);
 
 		const isUserList =
 			!isLibraryList &&
@@ -224,7 +222,7 @@ export function inferResult(
 			}
 			const result: MemberResult = {
 				kind: "list",
-				listClassName: listRef.className ?? newClassName,
+				listClassName: listRef.className ?? newClassName.simple,
 				listRef: listRef.ref,
 				itemClassName: item.ref?.className ?? null,
 				itemRef: item.ref?.ref ?? null,
@@ -238,11 +236,11 @@ export function inferResult(
 		// Any other `new X()` where X is a PageObject subclass, or the library
 		// PageObject itself.
 		const isLibraryPageObject =
-			isLibraryClassName(newClassName, imports, "PageObject") ||
-			isLibraryClassName(newClassName, imports, "RootPageObject");
+			isLibraryClassName(newClassName.qualified, imports, "PageObject") ||
+			isLibraryClassName(newClassName.qualified, imports, "RootPageObject");
 		if (isLibraryPageObject) {
 			const canonical =
-				canonicalLocalName(newClassName, imports) ?? "PageObject";
+				canonicalLocalName(newClassName.qualified, imports) ?? "PageObject";
 			return {
 				result: {
 					kind: "pageObject",
@@ -267,7 +265,7 @@ export function inferResult(
 			result: {
 				kind: "pageObject",
 				ref: listRef.ref,
-				className: listRef.className ?? newClassName,
+				className: listRef.className ?? newClassName.simple,
 			},
 			edges,
 			warnings,
@@ -280,7 +278,10 @@ export function inferResult(
 		if (/^Locator(\s*\|\s*undefined)?$/.test(typeText.trim())) {
 			return { result: { kind: "locator" }, edges, warnings };
 		}
-		const bareName = /^([A-Za-z_$][\w$]*)/.exec(typeText.trim())?.[1];
+		// A qualified `po.PageObject` annotation counts too.
+		const bareName = /^([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)/.exec(
+			typeText.trim(),
+		)?.[1];
 		if (bareName && bareName !== "Locator") {
 			const isLibraryBase = LIBRARY_BASE_CLASSES.has(
 				canonicalLocalName(bareName, imports) ?? "",
@@ -338,14 +339,12 @@ function readListItem(
 
 	const name = Node.isNewExpression(itemArgument)
 		? newExpressionClassName(itemArgument)
-		: Node.isIdentifier(itemArgument)
-			? itemArgument.getText()
-			: null;
+		: readNameRef(itemArgument);
 
 	if (!name) {
 		return { ref: null, defaulted: false };
 	}
-	const canonical = canonicalLocalName(name, imports);
+	const canonical = canonicalLocalName(name.qualified, imports);
 	if (canonical && LIBRARY_BASE_CLASSES.has(canonical)) {
 		return {
 			ref: {
@@ -360,10 +359,13 @@ function readListItem(
 	const resolution = resolveClassRef(
 		ctx.project,
 		sourceFile,
-		name,
+		name.qualified,
 		ctx.resolveOptions,
 	);
-	return { ref: refFromResolution(resolution, ctx, name), defaulted: false };
+	return {
+		ref: refFromResolution(resolution, ctx, name.simple),
+		defaulted: false,
+	};
 }
 
 /** The library selector decorator on a class member, if there is one. */

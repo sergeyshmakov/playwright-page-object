@@ -102,12 +102,19 @@ export function matchSelectorToUi(
 
 	// Last resort: literal-prefix containment in either direction. Catches
 	// patterns whose holes the probes could not satisfy (digits-only, say).
+	// The prefixes are stripped of their regex flags, so an `i` on either side
+	// has to be re-applied here or `/cartitem_/i` misses `CartItem_1`.
+	const insensitive =
+		(selector.pattern.flags ?? "").includes("i") ||
+		(ui.patternFlags ?? "").includes("i");
+	const fold = (value: string) => (insensitive ? value.toLowerCase() : value);
 	const selectorPrefix = selector.pattern.literalPrefix;
 	const uiPrefix = ui.prefix ?? null;
 	if (
 		selectorPrefix &&
 		uiPrefix &&
-		(uiPrefix.includes(selectorPrefix) || selectorPrefix.includes(uiPrefix))
+		(fold(uiPrefix).includes(fold(selectorPrefix)) ||
+			fold(selectorPrefix).includes(fold(uiPrefix)))
 	) {
 		return { confidence: "prefix" };
 	}

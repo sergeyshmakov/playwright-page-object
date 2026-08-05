@@ -109,6 +109,96 @@ describe("resolveIdentifier", () => {
 		}
 	});
 
+	it("follows a barrel that re-exports a local import", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import { Card } from "./barrel";',
+				"src/barrel.ts": 'import { Card } from "./card";\nexport { Card };',
+				"src/card.ts": "export class Card {}",
+			},
+			"src/a.ts",
+			"Card",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.sourceFile.getBaseName()).toBe("card.ts");
+		}
+	});
+
+	it("follows `export { default } from` without an alias", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import Card from "./barrel";',
+				"src/barrel.ts": 'export { default } from "./card";',
+				"src/card.tsx": "export default function Card() { return null; }",
+			},
+			"src/a.ts",
+			"Card",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.sourceFile.getBaseName()).toBe("card.tsx");
+		}
+	});
+
+	it("still rejects `export { default as Other }` as the default export", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import Card from "./barrel";',
+				"src/barrel.ts": 'export { default as Other } from "./card";',
+				"src/card.tsx": "const Card = 1;",
+			},
+			"src/a.ts",
+			"Card",
+		);
+		expect(result.resolved).toBe(false);
+	});
+
+	it("resolves a directly default-exported arrow component", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import Card from "./card";',
+				"src/card.tsx": "export default () => null;",
+			},
+			"src/a.ts",
+			"Card",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.kind).toBe("function");
+			expect(Node.isArrowFunction(result.declaration)).toBe(true);
+		}
+	});
+
+	it("resolves a member of a relative namespace import", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import * as pages from "./pages";',
+				"src/pages.ts": "export class HomePage {}",
+			},
+			"src/a.ts",
+			"pages.HomePage",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.name).toBe("HomePage");
+			expect(result.sourceFile.getBaseName()).toBe("pages.ts");
+		}
+	});
+
+	it("reports a member of a bare-specifier namespace as external", () => {
+		const result = resolveIn(
+			{ "src/a.ts": 'import * as po from "playwright-page-object";' },
+			"src/a.ts",
+			"po.PageObject",
+		);
+		expect(result.resolved).toBe(false);
+		if (!result.resolved && result.external) {
+			expect(result.module).toBe("playwright-page-object");
+			expect(result.name).toBe("PageObject");
+		}
+	});
+
 	it("resolves an `index.ts` directory specifier", () => {
 		const result = resolveIn(
 			{
