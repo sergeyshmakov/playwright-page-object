@@ -22,6 +22,10 @@ const artifacts = [
 	"dist/index.d.ts",
 	"dist/index.d.mts",
 	"dist/cli.js",
+	"dist/mcp.js",
+	"dist/mcp.mjs",
+	"dist/mcp.d.ts",
+	"dist/mcp.d.mts",
 ];
 
 const contents = new Map();
@@ -42,9 +46,11 @@ if (cli !== undefined && !cli.startsWith("#!")) {
 }
 
 // The library entry must stay free of the CLI/MCP dependency graph so
-// decorator-only consumers never load it.
+// decorator-only consumers never load it. dist/cli.js reaches the MCP
+// module only through the external self-reference, so it must not inline
+// the SDK or ts-morph either.
 const forbidden = ["ts-morph", "@modelcontextprotocol", "zod"];
-for (const artifact of ["dist/index.js", "dist/index.mjs"]) {
+for (const artifact of ["dist/index.js", "dist/index.mjs", "dist/cli.js"]) {
 	const source = contents.get(artifact);
 	if (source === undefined) {
 		continue;

@@ -1,0 +1,142 @@
+---
+title: MCP Server
+description: Static analysis of your page objects and rendered test ids, exposed to AI coding agents over the Model Context Protocol.
+---
+
+`playwright-page-object` ships a local [MCP](https://modelcontextprotocol.io/) server. One command gives AI coding agents four read-only tools that statically analyze your test suite — so agents stop reading every page-object file transitively, stop grepping components for test ids, and stop inventing selectors that don't exist.
+
+```bash
+npx playwright-page-object mcp
+```
+
+Everything is static analysis of your source code. No browser, no code execution, no network.
+
+## What the tools do
+
+| Tool | Call it when | Returns |
+| --- | --- | --- |
+| `list_page_objects` | You need to know what page objects exist (instead of globbing) | Every decorated class with file, host kind, root selector, fixture bindings |
+| `get_page_object_tree` | Before writing or editing a test that touches a page object | The full selector tree of one class: members, selector values, nested controls, method signatures |
+| `get_testid_tree` | Before writing any selector | The tree of test ids the app actually renders, with dynamic/conditional/repeated flags |
+| `map_coverage` | After renaming test ids, or when a locator times out | Matched pairs, rendered ids no page object uses, and selectors whose id is rendered nowhere |
+
+## Setup
+
+The package must be installed for `npx` to resolve the local bin:
+
+```bash
+npm install -D playwright-page-object
+```
+
+Verify it starts: `npx playwright-page-object mcp --help`.
+
+### Claude Code
+
+Committed, project-scoped (`.mcp.json` at the repo root — the whole team gets it):
+
+```json
+{
+	"mcpServers": {
+		"playwright-page-object": {
+			"command": "npx",
+			"args": ["playwright-page-object", "mcp"]
+		}
+	}
+}
+```
+
+Or as a one-liner:
+
+```bash
+claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
+```
+
+### Cursor
+
+`.cursor/mcp.json`:
+
+```json
+{
+	"mcpServers": {
+		"playwright-page-object": {
+			"command": "npx",
+			"args": ["playwright-page-object", "mcp"]
+		}
+	}
+}
+```
+
+### VS Code
+
+`.vscode/mcp.json` (note the different top-level key and explicit `type`):
+
+```json
+{
+	"servers": {
+		"playwright-page-object": {
+			"type": "stdio",
+			"command": "npx",
+			"args": ["playwright-page-object", "mcp"]
+		}
+	}
+}
+```
+
+### Other clients
+
+Any stdio MCP client works the same way — for example Codex CLI (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.playwright-page-object]
+command = "npx"
+args = ["playwright-page-object", "mcp"]
+```
+
+To run without installing first, use `npx -y playwright-page-object mcp` — the `-y` matters, because a stdio server has no TTY to answer npx's install prompt. On Windows, clients that spawn without a shell may need `"command": "cmd", "args": ["/c", "npx", "playwright-page-object", "mcp"]`.
+
+## A worked example
+
+Against the [example checkout app](https://github.com/sergeyshmakov/playwright-page-object/tree/main/example) in this repository, an agent asked to "add a test for removing a cart item" would:
+
+1. **`list_page_objects`** — sees five classes, including `CheckoutPage` (root, fixture `checkoutPage`) and `CartItemControl` (nested control). No need to glob `**/page-objects/*.ts`.
+2. **`get_page_object_tree {"class":"CheckoutPage"}`** — sees `CartItems` is a `ListPageObject<CartItemControl>` matching test-id pattern `CartItem_`, whose items expose a `RemoveButton`, and that helper methods like `applyPromoCode(code: string)` already exist. The chain `checkoutPage.CartItems.first().RemoveButton` comes straight from the response — no files read.
+3. **`get_testid_tree {"file":"src/components/CheckoutPage.tsx"}`** — confirms the app renders `CartItem_*` (dynamic, repeated — exactly why `@ListSelector("CartItem_")` is the right decorator) with children `CartItemName`, `CartItemPrice`, `Remove`, and that `EmptyCart` is conditional.
+4. **`map_coverage`** — notices `ApplyPromoButton` is rendered but no page object references it by test id (both page objects reach that button by role) — the kind of fact that prevents an agent from writing a fifth way to click Apply.
+
+## Configuration
+
+Zero-config works for common layouts. Flags for the rest:
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--project-root <dir>` | cwd | Repository root to analyze |
+| `--tsconfig <file>` | discovered | Explicit tsconfig |
+| `--src-dir <dir>` | tsconfig include | Restrict scanning (repeatable) |
+| `--attribute <name>` | see below | Test-id attribute |
+| `--max-files <n>` | 2000 | Cap on files parsed |
+| `--log-level <level>` | `error` | stderr verbosity (`silent`/`error`/`info`/`debug`) |
+
+The test-id attribute resolves in this order: `--attribute` flag → `use.testIdAttribute` in your `playwright.config.*` (read statically — a computed value falls through) → Playwright's default `data-testid`. Every response reports which source won via `meta.attributeSource`.
+
+## How fresh are the results
+
+Results reflect the files on disk at the moment of each call — the server re-checks modification times per request, so your edits are visible to the next tool call without a restart. A restart is only needed after changing `use.testIdAttribute` or moving page objects outside the scanned directories.
+
+## Guardrails and limits
+
+- Responses are capped (~40 KB). Oversized results return a `too_large` error with a hint to reduce `depth` or narrow the target.
+- Anything not statically resolvable — computed selector arguments, `@SelectorBy(fn)`, spread props, two-hop prop forwarding — is marked `dynamic`/`unresolved` with its source text, never guessed.
+- Role/text selectors can't be checked against the DOM statically; `map_coverage` reports them separately and never counts them as dead.
+
+## Troubleshooting
+
+- **"No page objects found"** — check that your page objects import from `playwright-page-object`, or pass `--src-dir` if they live outside the tsconfig include.
+- **Wrong test-id attribute** — a computed `testIdAttribute` in the Playwright config can't be read statically; pass `--attribute` explicitly.
+- **Monorepo** — point the server at one app: `npx playwright-page-object mcp --project-root apps/web`.
+- **"Server failed to start"** — run `npx playwright-page-object mcp` manually in a terminal and read stderr; the server never logs to stdout.
+
+## See also
+
+- [Agent Skills](/playwright-page-object/ai-tooling/agent-skills/)
+- [Context7](/playwright-page-object/ai-tooling/context7/)
+- [Cubic Wiki](/playwright-page-object/ai-tooling/cubic-wiki/)

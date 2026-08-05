@@ -142,7 +142,15 @@ The full documentation site covers every guide, the API reference, and the v1 â†
 
 ## AI tooling
 
-This package ships an [Agent Skills](https://agentskills.io/)-compatible skill so AI assistants load library-specific guidance on demand:
+**MCP server.** The package ships a local MCP server that gives AI coding agents static analysis of your page objects and rendered test ids â€” no grepping, no invented selectors:
+
+```bash
+claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
+```
+
+Four read-only tools: `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, `map_coverage`. See [MCP Server](https://sergeyshmakov.github.io/playwright-page-object/ai-tooling/mcp-server/) in the docs.
+
+This package also ships an [Agent Skills](https://agentskills.io/)-compatible skill so AI assistants load library-specific guidance on demand:
 
 ```bash
 npx ctx7 skills install /sergeyshmakov/playwright-page-object playwright-page-object

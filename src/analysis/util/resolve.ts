@@ -1,0 +1,488 @@
+import * as path from "node:path";
+import { Node, type Project, type SourceFile, SyntaxKind } from "ts-morph";
+import type { DynamicReason } from "../types";
+import { toPosix } from "./paths";
+
+export type RefKind = "class" | "function" | "variable" | "other";
+
+export interface ResolvedRef {
+	resolved: true;
+	kind: RefKind;
+	/** Declared name, which may differ from the local alias used at the call site. */
+	name: string;
+	declaration: Node;
+	sourceFile: SourceFile;
+}
+
+export interface ExternalRef {
+	resolved: false;
+	external: true;
+	module: string;
+	/** Exported name in the external module (`"default"` for a default import). */
+	name: string;
+}
+
+export interface UnresolvedRef {
+	resolved: false;
+	external: false;
+	name: string;
+	reason: DynamicReason;
+}
+
+export type RefResolution = ResolvedRef | ExternalRef | UnresolvedRef;
+
+export interface ResolveOptions {
+	/** Set to `false` to keep the type checker out of the hot path entirely. */
+	preferSyntacticResolution?: boolean;
+	/** Re-export hops (`export { X } from`, `export *`) to follow. */
+	maxHops?: number;
+}
+
+const DEFAULT_HOPS = 4;
+
+const EXTENSION_CANDIDATES = [
+	".ts",
+	".tsx",
+	".mts",
+	".cts",
+	".d.ts",
+	".js",
+	".jsx",
+];
+
+export function isInNodeModules(filePath: string): boolean {
+	return toPosix(filePath).includes("/node_modules/");
+}
+
+export function isRelativeSpecifier(specifier: string): boolean {
+	return specifier.startsWith("./") || specifier.startsWith("../");
+}
+
+/**
+ * Resolves a relative module specifier to a file already in — or addable to —
+ * the project. Bare specifiers deliberately return `undefined`: library base
+ * classes are identified by *name plus import source*, never by walking into
+ * `node_modules`. That is what lets the engine work on a freshly cloned repo
+ * with no install.
+ */
+export function resolveRelativeModule(
+	project: Project,
+	fromFile: SourceFile,
+	specifier: string,
+): SourceFile | undefined {
+	if (!isRelativeSpecifier(specifier)) {
+		return undefined;
+	}
+	const base = path.posix.join(
+		toPosix(fromFile.getDirectoryPath()),
+		toPosix(specifier),
+	);
+	const bases = [base];
+	// NodeNext ESM style: `./x.js` on disk is `./x.ts`.
+	const jsExt = /\.([cm]?)js$/.exec(base);
+	if (jsExt) {
+		bases.push(base.replace(/\.([cm]?)js$/, `.${jsExt[1]}ts`));
+		bases.push(base.replace(/\.[cm]?js$/, ".ts"));
+		bases.push(base.replace(/\.[cm]?js$/, ".tsx"));
+	}
+
+	const candidates: string[] = [];
+	for (const candidateBase of bases) {
+		candidates.push(candidateBase);
+		for (const ext of EXTENSION_CANDIDATES) {
+			candidates.push(candidateBase + ext);
+		}
+		for (const ext of EXTENSION_CANDIDATES) {
+			candidates.push(path.posix.join(candidateBase, `index${ext}`));
+		}
+	}
+
+	for (const candidate of candidates) {
+		const existing = project.getSourceFile(candidate);
+		if (existing) {
+			return existing;
+		}
+	}
+	for (const candidate of candidates) {
+		if (!/\.[cm]?[jt]sx?$/.test(candidate)) {
+			continue;
+		}
+		try {
+			const added = project.addSourceFileAtPathIfExists(candidate);
+			if (added) {
+				return added;
+			}
+		} catch {
+			// A path that cannot be stat'ed is simply not a candidate.
+		}
+	}
+	return undefined;
+}
+
+interface ImportBinding {
+	specifier: string;
+	/** Name as exported by the target module; `"default"` / `"*"` are special. */
+	exportedName: string;
+}
+
+/** Finds the import that introduces `localName` into `sourceFile`. */
+export function findImportBinding(
+	sourceFile: SourceFile,
+	localName: string,
+): ImportBinding | undefined {
+	for (const declaration of sourceFile.getImportDeclarations()) {
+		const specifier = declaration.getModuleSpecifierValue();
+		const defaultImport = declaration.getDefaultImport();
+		if (defaultImport && defaultImport.getText() === localName) {
+			return { specifier, exportedName: "default" };
+		}
+		const namespaceImport = declaration.getNamespaceImport();
+		if (namespaceImport && namespaceImport.getText() === localName) {
+			return { specifier, exportedName: "*" };
+		}
+		for (const named of declaration.getNamedImports()) {
+			const alias = named.getAliasNode();
+			const local = alias ? alias.getText() : named.getName();
+			if (local === localName) {
+				return { specifier, exportedName: named.getName() };
+			}
+		}
+	}
+	return undefined;
+}
+
+function classifyDeclaration(node: Node): RefKind {
+	if (Node.isClassDeclaration(node) || Node.isClassExpression(node)) {
+		return "class";
+	}
+	if (Node.isFunctionDeclaration(node) || Node.isArrowFunction(node)) {
+		return "function";
+	}
+	if (Node.isVariableDeclaration(node)) {
+		return "variable";
+	}
+	return "other";
+}
+
+function localDeclaration(
+	sourceFile: SourceFile,
+	name: string,
+): Node | undefined {
+	return (
+		sourceFile.getClass(name) ??
+		sourceFile.getFunction(name) ??
+		sourceFile.getVariableDeclaration(name) ??
+		sourceFile.getEnum(name)
+	);
+}
+
+function resolveDefaultExport(
+	project: Project,
+	sourceFile: SourceFile,
+	hops: number,
+): ResolvedRef | undefined {
+	for (const declaration of sourceFile.getClasses()) {
+		if (declaration.isDefaultExport()) {
+			return asResolved(declaration, sourceFile, declaration.getName());
+		}
+	}
+	for (const declaration of sourceFile.getFunctions()) {
+		if (declaration.isDefaultExport()) {
+			return asResolved(declaration, sourceFile, declaration.getName());
+		}
+	}
+	for (const assignment of sourceFile.getExportAssignments()) {
+		if (assignment.isExportEquals()) {
+			continue;
+		}
+		const expression = assignment.getExpression();
+		if (Node.isIdentifier(expression)) {
+			const local = localDeclaration(sourceFile, expression.getText());
+			if (local) {
+				return asResolved(local, sourceFile, expression.getText());
+			}
+			const viaImport = resolveThroughImport(
+				project,
+				sourceFile,
+				expression.getText(),
+				hops,
+			);
+			if (viaImport?.resolved) {
+				return viaImport;
+			}
+		}
+		if (Node.isClassExpression(expression)) {
+			return asResolved(expression, sourceFile, expression.getName());
+		}
+	}
+	// `export { X as default }`
+	for (const declaration of sourceFile.getExportDeclarations()) {
+		for (const specifier of declaration.getNamedExports()) {
+			const alias = specifier.getAliasNode();
+			if (alias?.getText() !== "default") {
+				continue;
+			}
+			const resolved = resolveExportedName(
+				project,
+				declaration.getModuleSpecifierValue()
+					? (resolveRelativeModule(
+							project,
+							sourceFile,
+							declaration.getModuleSpecifierValue() ?? "",
+						) ?? sourceFile)
+					: sourceFile,
+				specifier.getName(),
+				hops - 1,
+			);
+			if (resolved?.resolved) {
+				return resolved;
+			}
+		}
+	}
+	return undefined;
+}
+
+function asResolved(
+	declaration: Node,
+	sourceFile: SourceFile,
+	name: string | undefined,
+): ResolvedRef {
+	return {
+		resolved: true,
+		kind: classifyDeclaration(declaration),
+		name: name ?? "default",
+		declaration,
+		sourceFile,
+	};
+}
+
+/** Looks up `exportName` in `sourceFile`, following re-export hops. */
+export function resolveExportedName(
+	project: Project,
+	sourceFile: SourceFile,
+	exportName: string,
+	hops = DEFAULT_HOPS,
+): ResolvedRef | undefined {
+	if (hops < 0) {
+		return undefined;
+	}
+	if (exportName === "default") {
+		return resolveDefaultExport(project, sourceFile, hops);
+	}
+
+	const local = localDeclaration(sourceFile, exportName);
+	if (local) {
+		return asResolved(local, sourceFile, exportName);
+	}
+
+	for (const declaration of sourceFile.getExportDeclarations()) {
+		const specifier = declaration.getModuleSpecifierValue();
+		const namedExports = declaration.getNamedExports();
+
+		if (namedExports.length > 0) {
+			for (const named of namedExports) {
+				const alias = named.getAliasNode();
+				const exposed = alias ? alias.getText() : named.getName();
+				if (exposed !== exportName) {
+					continue;
+				}
+				const target = specifier
+					? resolveRelativeModule(project, sourceFile, specifier)
+					: sourceFile;
+				if (!target) {
+					return undefined;
+				}
+				const resolved = resolveExportedName(
+					project,
+					target,
+					named.getName(),
+					hops - 1,
+				);
+				if (resolved) {
+					return resolved;
+				}
+			}
+			continue;
+		}
+
+		// `export * from "./x"`
+		if (specifier) {
+			const target = resolveRelativeModule(project, sourceFile, specifier);
+			if (target && target !== sourceFile) {
+				const resolved = resolveExportedName(
+					project,
+					target,
+					exportName,
+					hops - 1,
+				);
+				if (resolved) {
+					return resolved;
+				}
+			}
+		}
+	}
+
+	// Fall back to a non-exported local declaration: an intermediate base class
+	// does not have to be exported to be part of the inheritance chain.
+	const anyLocal = sourceFile
+		.getClasses()
+		.find((declaration) => declaration.getName() === exportName);
+	return anyLocal ? asResolved(anyLocal, sourceFile, exportName) : undefined;
+}
+
+function resolveThroughImport(
+	project: Project,
+	sourceFile: SourceFile,
+	localName: string,
+	hops: number,
+): RefResolution | undefined {
+	const binding = findImportBinding(sourceFile, localName);
+	if (!binding) {
+		return undefined;
+	}
+	if (!isRelativeSpecifier(binding.specifier)) {
+		return {
+			resolved: false,
+			external: true,
+			module: binding.specifier,
+			name: binding.exportedName === "*" ? localName : binding.exportedName,
+		};
+	}
+	const target = resolveRelativeModule(project, sourceFile, binding.specifier);
+	if (!target) {
+		return {
+			resolved: false,
+			external: false,
+			name: localName,
+			reason: "identifier-unresolved",
+		};
+	}
+	if (binding.exportedName === "*") {
+		return {
+			resolved: false,
+			external: false,
+			name: localName,
+			reason: "unsupported-syntax",
+		};
+	}
+	const resolved = resolveExportedName(
+		project,
+		target,
+		binding.exportedName,
+		hops,
+	);
+	return (
+		resolved ?? {
+			resolved: false,
+			external: false,
+			name: localName,
+			reason: "identifier-unresolved",
+		}
+	);
+}
+
+/**
+ * Syntax-first identifier resolution.
+ *
+ * 1. Local declaration in the same file.
+ * 2. Import declaration in the same file, resolved by hand against the
+ *    filesystem (relative specifiers only).
+ * 3. Type-checker fallback, and only then — instantiating the checker is the
+ *    single most expensive thing this engine can do.
+ */
+export function resolveIdentifier(
+	project: Project,
+	sourceFile: SourceFile,
+	localName: string,
+	options: ResolveOptions = {},
+): RefResolution {
+	const hops = options.maxHops ?? DEFAULT_HOPS;
+
+	const local = localDeclaration(sourceFile, localName);
+	if (local) {
+		return asResolved(local, sourceFile, localName);
+	}
+
+	const viaImport = resolveThroughImport(project, sourceFile, localName, hops);
+	if (viaImport) {
+		return viaImport;
+	}
+
+	if (options.preferSyntacticResolution === false) {
+		return checkerFallback(sourceFile, localName);
+	}
+
+	return {
+		resolved: false,
+		external: false,
+		name: localName,
+		reason: "identifier-unresolved",
+	};
+}
+
+function checkerFallback(
+	sourceFile: SourceFile,
+	localName: string,
+): RefResolution {
+	const identifier = sourceFile
+		.getDescendantsOfKind(SyntaxKind.Identifier)
+		.find((node) => node.getText() === localName);
+	if (identifier) {
+		for (const definition of identifier.getDefinitionNodes()) {
+			const definitionFile = definition.getSourceFile();
+			if (isInNodeModules(definitionFile.getFilePath())) {
+				continue;
+			}
+			return asResolved(definition, definitionFile, localName);
+		}
+	}
+	return {
+		resolved: false,
+		external: false,
+		name: localName,
+		reason: "identifier-unresolved",
+	};
+}
+
+/**
+ * Resolves the class an identifier refers to, rejecting anything that is not a
+ * class declaration (a function of the same name is not a page object).
+ */
+export function resolveClassRef(
+	project: Project,
+	sourceFile: SourceFile,
+	localName: string,
+	options?: ResolveOptions,
+): RefResolution {
+	const resolution = resolveIdentifier(project, sourceFile, localName, options);
+	if (resolution.resolved && resolution.kind !== "class") {
+		// A variable holding a class expression still counts.
+		if (Node.isVariableDeclaration(resolution.declaration)) {
+			const initializer = resolution.declaration.getInitializer();
+			if (initializer && Node.isClassExpression(initializer)) {
+				return asResolved(initializer, resolution.sourceFile, resolution.name);
+			}
+		}
+	}
+	return resolution;
+}
+
+/** True when the identifier resolves to something callable as a factory. */
+export function resolvesToCallable(resolution: RefResolution): boolean {
+	if (!resolution.resolved) {
+		return false;
+	}
+	if (resolution.kind === "class" || resolution.kind === "function") {
+		return true;
+	}
+	if (Node.isVariableDeclaration(resolution.declaration)) {
+		const initializer = resolution.declaration.getInitializer();
+		return (
+			!!initializer &&
+			(Node.isArrowFunction(initializer) ||
+				Node.isFunctionExpression(initializer) ||
+				Node.isClassExpression(initializer))
+		);
+	}
+	return false;
+}

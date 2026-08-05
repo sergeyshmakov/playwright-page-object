@@ -18,7 +18,24 @@
 				"default": "./dist/index.js"
 			}
 		},
+		"./mcp": {
+			"import": {
+				"types": "./dist/mcp.d.mts",
+				"default": "./dist/mcp.mjs"
+			},
+			"require": {
+				"types": "./dist/mcp.d.ts",
+				"default": "./dist/mcp.js"
+			}
+		},
 		"./package.json": "./package.json"
+	},
+	"typesVersions": {
+		"*": {
+			"mcp": [
+				"./dist/mcp.d.ts"
+			]
+		}
 	},
 	"bin": {
 		"playwright-page-object": "./dist/cli.js"
@@ -60,7 +77,10 @@
 		"e2e-testing",
 		"test-automation",
 		"testing",
-		"qa"
+		"qa",
+		"mcp",
+		"model-context-protocol",
+		"ai-agents"
 	],
 	"author": {
 		"name": "Sergei Shmakov",
@@ -108,6 +128,7 @@
 		"@biomejs/biome": "^2.4.15",
 		"@commitlint/cli": "^21.0.1",
 		"@commitlint/config-conventional": "^21.0.1",
+		"@modelcontextprotocol/client": "^2.0.0",
 		"@playwright/test": "^1.60.0",
 		"@rolldown/plugin-babel": "^0.2.3",
 		"@semantic-release/changelog": "^6.0.3",
@@ -135,5 +156,10 @@
 	},
 	"volta": {
 		"node": "24.14.0"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/server": "^2.0.0",
+		"ts-morph": "^28.0.0",
+		"zod": "^4.2.0"
 	}
 }

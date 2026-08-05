@@ -71,6 +71,152 @@ function assert(condition, message) {
 	}
 }
 
+/**
+ * Spawns `<bin> mcp` and drives a real JSON-RPC session over stdio:
+ * initialize -> tools/list. Proves the runtime deps installed from the
+ * tarball, the CJS require of the SDK resolves, and - critically - that
+ * stdout carries nothing but parseable JSON-RPC frames.
+ */
+function smokeMcpHandshake(tempDir) {
+	return new Promise((resolvePromise, rejectPromise) => {
+		// Spawn node directly (not the .cmd shim): kill() must reach the actual
+		// server process, or its cwd keeps the temp dir locked on Windows. The
+		// shim itself is already exercised by the --version/--help checks.
+		const cliPath = path.join(
+			tempDir,
+			"node_modules",
+			"playwright-page-object",
+			"dist",
+			"cli.js",
+		);
+		const child = spawn(process.execPath, [cliPath, "mcp"], {
+			cwd: tempDir,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+
+		const timeout = setTimeout(() => {
+			child.kill();
+			rejectPromise(new Error("smoke-cli: MCP handshake timed out (30s)"));
+		}, 30_000);
+
+		let buffer = "";
+		let stderr = "";
+		const responses = [];
+		let settled = false;
+
+		const finish = (error) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			clearTimeout(timeout);
+			// Wait for the child to actually exit so it releases its cwd —
+			// otherwise the temp-dir cleanup hits EPERM on Windows.
+			const settle = () => {
+				if (error) {
+					rejectPromise(error);
+				} else {
+					resolvePromise();
+				}
+			};
+			if (child.exitCode !== null) {
+				settle();
+				return;
+			}
+			const exitGuard = setTimeout(settle, 3_000);
+			child.once("exit", () => {
+				clearTimeout(exitGuard);
+				settle();
+			});
+			child.kill();
+		};
+
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk.toString();
+		});
+
+		child.stdout.on("data", (chunk) => {
+			buffer += chunk.toString();
+			let newlineIndex = buffer.indexOf("\n");
+			while (newlineIndex !== -1) {
+				const line = buffer.slice(0, newlineIndex).trim();
+				buffer = buffer.slice(newlineIndex + 1);
+				newlineIndex = buffer.indexOf("\n");
+				if (line.length === 0) {
+					continue;
+				}
+				let message;
+				try {
+					message = JSON.parse(line);
+				} catch {
+					finish(
+						new Error(
+							`smoke-cli: MCP stdout emitted a non-JSON line: ${line.slice(0, 200)}`,
+						),
+					);
+					return;
+				}
+				responses.push(message);
+
+				if (message.id === 1) {
+					if (!message.result?.serverInfo) {
+						finish(
+							new Error(
+								`smoke-cli: initialize response lacks serverInfo: ${line.slice(0, 200)}`,
+							),
+						);
+						return;
+					}
+					child.stdin.write(
+						`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+					);
+					child.stdin.write(
+						`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`,
+					);
+				}
+
+				if (message.id === 2) {
+					const tools = message.result?.tools;
+					if (!Array.isArray(tools) || tools.length !== 4) {
+						finish(
+							new Error(
+								`smoke-cli: tools/list returned ${Array.isArray(tools) ? tools.length : "no"} tools, expected 4`,
+							),
+						);
+						return;
+					}
+					finish();
+					return;
+				}
+			}
+		});
+
+		child.on("error", (error) => finish(error));
+		child.on("exit", (code) => {
+			if (!settled) {
+				finish(
+					new Error(
+						`smoke-cli: MCP server exited early (code ${code}):\n${stderr}`,
+					),
+				);
+			}
+		});
+
+		child.stdin.write(
+			`${JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "initialize",
+				params: {
+					protocolVersion: "2025-06-18",
+					capabilities: {},
+					clientInfo: { name: "smoke-cli", version: "0.0.0" },
+				},
+			})}\n`,
+		);
+	});
+}
+
 async function main() {
 	if (!existsSync(tarballPath)) {
 		console.log("smoke-cli: tarball missing, running pack:example first");
@@ -193,9 +339,22 @@ if (cjs.RootPageObject.isRootClass(EsmRootPageObject)) {
 			`dual-package identity check failed:\n${dualResult.stderr}`,
 		);
 
+		await smokeMcpHandshake(tempDir);
+
 		console.log("smoke-cli: all assertions passed");
 	} finally {
-		rmSync(tempDir, { recursive: true, force: true });
+		try {
+			rmSync(tempDir, {
+				recursive: true,
+				force: true,
+				maxRetries: 10,
+				retryDelay: 100,
+			});
+		} catch (cleanupError) {
+			console.warn(
+				`smoke-cli: temp dir cleanup failed (non-fatal): ${cleanupError.message}`,
+			);
+		}
 	}
 }
 

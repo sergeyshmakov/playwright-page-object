@@ -79,6 +79,7 @@ export default defineConfig({
 				{
 					label: "AI Tooling",
 					items: [
+						"ai-tooling/mcp-server",
 						"ai-tooling/agent-skills",
 						"ai-tooling/context7",
 						"ai-tooling/cubic-wiki",
