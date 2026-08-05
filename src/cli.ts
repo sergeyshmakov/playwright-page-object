@@ -39,7 +39,7 @@ Examples:
   npx playwright-page-object mcp
   npx playwright-page-object mcp --project-root apps/web --attribute data-qa
 
-Documentation: https://sergeyshmakov.github.io/playwright-page-object/
+Documentation: https://pom.shmakov.tools/
 `;
 
 function readVersion(): string {

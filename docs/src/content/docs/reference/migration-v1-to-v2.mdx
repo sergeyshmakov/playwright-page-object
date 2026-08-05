@@ -71,7 +71,7 @@ The rename clarifies the self-vs-descendant distinction. The behavior is unchang
 + const item = list.filterByItemTestId("CartItem_2");
 ```
 
-The companion `filterByHasTestId(id)` matches rows that *contain* a descendant with `data-testid={id}`. See [Lists](/playwright-page-object/guides/lists/) for the full distinction.
+The companion `filterByHasTestId(id)` matches rows that *contain* a descendant with `data-testid={id}`. See [Lists](/guides/lists/) for the full distinction.
 
 ### `getItemByIdMask` → `getItemByTestId(new RegExp(...))`
 
@@ -115,7 +115,7 @@ In v1, `@Selector("X", MyPageObjectSubclass)` silently produced broken instances
 + accessor PromoCode = new PromoPageObject();
 ```
 
-Use the *initializer form* for `PageObject` subclasses. The factory-argument form is reserved for plain classes whose constructor accepts a `Locator` (see [Custom Controls](/playwright-page-object/guides/custom-controls/)).
+Use the *initializer form* for `PageObject` subclasses. The factory-argument form is reserved for plain classes whose constructor accepts a `Locator` (see [Custom Controls](/guides/custom-controls/)).
 
 ### `ListPageObject` constructor validates `itemType`
 
@@ -141,6 +141,6 @@ new ListPageObject(new CartItemControl()); // ok
 
 ## See also
 
-- [Lists](/playwright-page-object/guides/lists/) — `filterByItemTestId` vs `filterByHasTestId`.
-- [Custom Controls](/playwright-page-object/guides/custom-controls/) — factory-argument form.
-- [Built-In POM](/playwright-page-object/guides/built-in-pom/) — initializer form for `PageObject`.
+- [Lists](/guides/lists/) — `filterByItemTestId` vs `filterByHasTestId`.
+- [Custom Controls](/guides/custom-controls/) — factory-argument form.
+- [Built-In POM](/guides/built-in-pom/) — initializer form for `PageObject`.

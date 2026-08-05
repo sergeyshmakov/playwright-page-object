@@ -3,7 +3,7 @@ title: Decorators
 description: Complete reference for root and child decorators.
 ---
 
-Every decorator returns a Playwright locator built from the host's resolved root. See [Context Resolution](/playwright-page-object/reference/context-resolution/) for how the root is determined.
+Every decorator returns a Playwright locator built from the host's resolved root. See [Context Resolution](/reference/context-resolution/) for how the root is determined.
 
 ## Root decorators
 
@@ -51,7 +51,7 @@ Each child decorator returns one of:
 - A custom control instance (when a second-argument constructor or factory is passed).
 - A `PageObject` / `ListPageObject` instance (when the accessor is initialized with `= new ...`).
 
-See [Custom Controls](/playwright-page-object/guides/custom-controls/) and [Built-In POM](/playwright-page-object/guides/built-in-pom/) for the two non-raw forms.
+See [Custom Controls](/guides/custom-controls/) and [Built-In POM](/guides/built-in-pom/) for the two non-raw forms.
 
 ### Factory argument (second argument)
 
@@ -92,6 +92,6 @@ accessor DisabledItem!: Locator;
 
 ## See also
 
-- [Context Resolution](/playwright-page-object/reference/context-resolution/) — root resolution priority.
-- [PageObject](/playwright-page-object/api/page-object/) — methods on `PageObject` accessors.
-- [ListPageObject](/playwright-page-object/api/list-page-object/) — methods on `ListPageObject` accessors.
+- [Context Resolution](/reference/context-resolution/) — root resolution priority.
+- [PageObject](/api/page-object/) — methods on `PageObject` accessors.
+- [ListPageObject](/api/list-page-object/) — methods on `ListPageObject` accessors.

@@ -7,7 +7,7 @@ Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Documentation:** [https://sergeyshmakov.github.io/playwright-page-object/](https://sergeyshmakov.github.io/playwright-page-object/)
+**Documentation:** [https://pom.shmakov.tools/](https://pom.shmakov.tools/)
 
 ---
 
@@ -77,7 +77,7 @@ test("apply promo code", async ({ page }) => {
 });
 ```
 
-See the [Quick Start guide](https://sergeyshmakov.github.io/playwright-page-object/getting-started/quick-start/) for fixtures, page-only hosts, and the next steps.
+See the [Quick Start guide](https://pom.shmakov.tools/getting-started/quick-start/) for fixtures, page-only hosts, and the next steps.
 
 ## Output styles
 
@@ -92,7 +92,7 @@ Minimal abstraction. Typed accessor, no helpers.
 accessor PromoCodeInput!: Locator;
 ```
 
-[Plain Classes guide →](https://sergeyshmakov.github.io/playwright-page-object/guides/plain-classes/)
+[Plain Classes guide →](https://pom.shmakov.tools/guides/plain-classes/)
 
 ### Custom controls
 
@@ -103,7 +103,7 @@ Pass any class whose constructor accepts a `Locator`. Reuse your existing contro
 accessor PromoCode!: InputControl;
 ```
 
-[Custom Controls guide →](https://sergeyshmakov.github.io/playwright-page-object/guides/custom-controls/)
+[Custom Controls guide →](https://pom.shmakov.tools/guides/custom-controls/)
 
 ### Built-in POM
 
@@ -121,24 +121,24 @@ class CheckoutPage extends RootPageObject {
 }
 ```
 
-[Built-In POM guide →](https://sergeyshmakov.github.io/playwright-page-object/guides/built-in-pom/)
+[Built-In POM guide →](https://pom.shmakov.tools/guides/built-in-pom/)
 
 ## Context resolution
 
 Child decorators resolve in this order: a `@RootSelector`-managed locator, then a `locator` property on the host, then `page.locator("body")` if `page` is present. The first match wins.
 
-[Context Resolution reference →](https://sergeyshmakov.github.io/playwright-page-object/reference/context-resolution/)
+[Context Resolution reference →](https://pom.shmakov.tools/reference/context-resolution/)
 
 ## Documentation
 
 The full documentation site covers every guide, the API reference, and the v1 → v2 migration:
 
-**[https://sergeyshmakov.github.io/playwright-page-object/](https://sergeyshmakov.github.io/playwright-page-object/)**
+**[https://pom.shmakov.tools/](https://pom.shmakov.tools/)**
 
-- [Getting Started](https://sergeyshmakov.github.io/playwright-page-object/getting-started/installation/) — install, quick start, choosing a style
-- [Guides](https://sergeyshmakov.github.io/playwright-page-object/guides/plain-classes/) — plain classes, fragments, custom controls, built-in POM, lists, fixtures, incremental adoption
-- [Reference](https://sergeyshmakov.github.io/playwright-page-object/reference/context-resolution/) — context resolution, migration v1 → v2, troubleshooting
-- [API](https://sergeyshmakov.github.io/playwright-page-object/api/decorators/) — decorators, `PageObject`, `RootPageObject`, `ListPageObject`, `createFixtures`
+- [Getting Started](https://pom.shmakov.tools/getting-started/installation/) — install, quick start, choosing a style
+- [Guides](https://pom.shmakov.tools/guides/plain-classes/) — plain classes, fragments, custom controls, built-in POM, lists, fixtures, incremental adoption
+- [Reference](https://pom.shmakov.tools/reference/context-resolution/) — context resolution, migration v1 → v2, troubleshooting
+- [API](https://pom.shmakov.tools/api/decorators/) — decorators, `PageObject`, `RootPageObject`, `ListPageObject`, `createFixtures`
 
 ## AI tooling
 
@@ -148,7 +148,7 @@ The full documentation site covers every guide, the API reference, and the v1 �
 claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
 ```
 
-Four read-only tools: `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, `map_coverage`. See [MCP Server](https://sergeyshmakov.github.io/playwright-page-object/ai-tooling/mcp-server/) in the docs.
+Four read-only tools: `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, `map_coverage`. See [MCP Server](https://pom.shmakov.tools/ai-tooling/mcp-server/) in the docs.
 
 This package also ships an [Agent Skills](https://agentskills.io/)-compatible skill so AI assistants load library-specific guidance on demand:
 
@@ -156,11 +156,11 @@ This package also ships an [Agent Skills](https://agentskills.io/)-compatible sk
 npx ctx7 skills install /sergeyshmakov/playwright-page-object playwright-page-object
 ```
 
-It is also indexed in [Context7](https://context7.com/) and documented in a [Cubic wiki](https://www.cubic.dev/wikis/sergeyshmakov/playwright-page-object). See [AI Tooling](https://sergeyshmakov.github.io/playwright-page-object/ai-tooling/agent-skills/) in the docs.
+It is also indexed in [Context7](https://context7.com/) and documented in a [Cubic wiki](https://www.cubic.dev/wikis/sergeyshmakov/playwright-page-object). See [AI Tooling](https://pom.shmakov.tools/ai-tooling/agent-skills/) in the docs.
 
 ## Migrating from v1
 
-See the [migration guide](https://sergeyshmakov.github.io/playwright-page-object/reference/migration-v1-to-v2/). Most changes are mechanical renames.
+See the [migration guide](https://pom.shmakov.tools/reference/migration-v1-to-v2/). Most changes are mechanical renames.
 
 ## Contributing
 

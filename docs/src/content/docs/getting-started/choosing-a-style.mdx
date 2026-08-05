@@ -27,9 +27,9 @@ That's the whole pattern. No inheritance, no fixtures, no extra abstractions. If
 | Situation | What to do | Why |
 |---|---|---|
 | The page has no container `data-testid` | Drop `@RootSelector` — keep the plain class | Chains from `page.locator("body")` automatically |
-| A UI section repeats across pages | Make it a [fragment](/playwright-page-object/guides/fragments/) | Constructor takes `locator: Locator`; nested decorators chain from it |
+| A UI section repeats across pages | Make it a [fragment](/guides/fragments/) | Constructor takes `locator: Locator`; nested decorators chain from it |
 | You already have a control library | Pass it as the second arg to `@Selector(...)` | The decorator wraps the resolved locator in your class |
-| You want `waitVisible()`, `.expect()`, filter chains | Use [`PageObject`](/playwright-page-object/api/page-object/) / [`ListPageObject`](/playwright-page-object/api/list-page-object/) | Built-in wait helpers and assertions |
+| You want `waitVisible()`, `.expect()`, filter chains | Use [`PageObject`](/api/page-object/) / [`ListPageObject`](/api/list-page-object/) | Built-in wait helpers and assertions |
 
 Each row is a small change to the default, not a different framework. Mix freely.
 
@@ -63,11 +63,11 @@ Pick the simplest thing that works. Evolve only when a real pain shows up:
 - **Same methods called on the same accessor** (`fill`, `click`, `expect`) — extract a custom control.
 - **Same wait or assertion code repeating** — switch that accessor to `PageObject`.
 
-Three similar `.fill()` calls is not duplication; five matching wait blocks across files is. See [Incremental Adoption](/playwright-page-object/guides/incremental-adoption/) for a longer walkthrough.
+Three similar `.fill()` calls is not duplication; five matching wait blocks across files is. See [Incremental Adoption](/guides/incremental-adoption/) for a longer walkthrough.
 
 ## Next
 
-- [Plain Classes](/playwright-page-object/guides/plain-classes/) — the default pattern in depth.
-- [Fragments](/playwright-page-object/guides/fragments/) — reusable sub-trees.
-- [Custom Controls](/playwright-page-object/guides/custom-controls/) — integrating existing control classes.
-- [Built-In POM](/playwright-page-object/guides/built-in-pom/) — when wait helpers and `.expect()` pay back.
+- [Plain Classes](/guides/plain-classes/) — the default pattern in depth.
+- [Fragments](/guides/fragments/) — reusable sub-trees.
+- [Custom Controls](/guides/custom-controls/) — integrating existing control classes.
+- [Built-In POM](/guides/built-in-pom/) — when wait helpers and `.expect()` pay back.

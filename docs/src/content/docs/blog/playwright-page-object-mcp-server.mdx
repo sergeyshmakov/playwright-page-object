@@ -15,7 +15,7 @@ tags:
 
 `playwright-page-object` now ships a local [MCP](https://modelcontextprotocol.io/) server. Run `npx playwright-page-object mcp` and any MCP client (Claude Code, Cursor, VS Code, Codex CLI) gets four read-only tools that statically analyze your test suite: the full graph of your Playwright page objects, and the tree of test ids your app actually renders. The agent stops reading page-object files one by one, and it stops inventing selectors that don't exist.
 
-Everything is static analysis of source code. No browser, no code execution, no network. Setup is one JSON block, and the whole thing is part of the same MIT-licensed package you already install for the [decorators](/playwright-page-object/getting-started/quick-start/).
+Everything is static analysis of source code. No browser, no code execution, no network. Setup is one JSON block, and the whole thing is part of the same MIT-licensed package you already install for the [decorators](/getting-started/quick-start/).
 
 ## Why do AI agents write bad Playwright tests?
 
@@ -55,7 +55,7 @@ Or the committed file version:
 }
 ```
 
-Zero-config covers the common layout: the server walks up for your `tsconfig.json`, finds `playwright.config.ts`, and scans from there. Monorepos point it at one app with `--project-root apps/web`. The full flag list is in the [MCP server docs](/playwright-page-object/ai-tooling/mcp-server/).
+Zero-config covers the common layout: the server walks up for your `tsconfig.json`, finds `playwright.config.ts`, and scans from there. Monorepos point it at one app with `--project-root apps/web`. The full flag list is in the [MCP server docs](/ai-tooling/mcp-server/).
 
 ## What does an agent actually get back?
 
@@ -85,7 +85,7 @@ Anything not statically resolvable is reported as `dynamic` with its source text
 
 In practice the honest-uncertainty design matters more than the coverage number. An agent told "this test id is `dynamic: CartItem_${item.id}`" writes a regex selector; an agent silently given a wrong answer writes a broken test. If your suite leans heavily on computed selectors, the trees will contain more `dynamic` nodes and fewer exact values, and the file-reading fallback stays available.
 
-The server also isn't a substitute for knowing the library. Pair it with the [Agent Skill](/playwright-page-object/ai-tooling/agent-skills/), which teaches agents the decorator semantics; the MCP server supplies the project-specific facts.
+The server also isn't a substitute for knowing the library. Pair it with the [Agent Skill](/ai-tooling/agent-skills/), which teaches agents the decorator semantics; the MCP server supplies the project-specific facts.
 
 ## FAQ
 
@@ -103,7 +103,7 @@ The page-object tools (`list_page_objects`, `get_page_object_tree`) need the dec
 
 ### Which MCP clients does it support?
 
-Any stdio MCP client: Claude Code, Cursor, VS Code, Codex CLI, and others. The server speaks the standard protocol over stdin/stdout. Registration snippets for each client are in the [docs](/playwright-page-object/ai-tooling/mcp-server/).
+Any stdio MCP client: Claude Code, Cursor, VS Code, Codex CLI, and others. The server speaks the standard protocol over stdin/stdout. Registration snippets for each client are in the [docs](/ai-tooling/mcp-server/).
 
 ### Does it work in a monorepo?
 
