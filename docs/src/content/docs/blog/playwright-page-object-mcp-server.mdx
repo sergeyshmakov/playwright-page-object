@@ -13,7 +13,7 @@ tags:
 
 *Last updated: 2026-08-06 · by Sergei Shmakov*
 
-`playwright-page-object` now ships a local [MCP](https://modelcontextprotocol.io/) server. Run `npx playwright-page-object mcp` and any MCP client (Claude Code, Cursor, VS Code) gets four read-only tools that statically analyze your test suite: the full graph of your Playwright page objects, and the tree of test ids your app actually renders. The agent stops reading page-object files one by one, and it stops inventing selectors that don't exist.
+`playwright-page-object` now ships a local [MCP](https://modelcontextprotocol.io/) server. Run `npx playwright-page-object mcp` and any MCP client (Claude Code, Cursor, VS Code, Codex CLI) gets four read-only tools that statically analyze your test suite: the full graph of your Playwright page objects, and the tree of test ids your app actually renders. The agent stops reading page-object files one by one, and it stops inventing selectors that don't exist.
 
 Everything is static analysis of source code. No browser, no code execution, no network. Setup is one JSON block, and the whole thing is part of the same MIT-licensed package you already install for the [decorators](/playwright-page-object/getting-started/quick-start/).
 

@@ -142,7 +142,7 @@ The full documentation site covers every guide, the API reference, and the v1 â†
 
 ## AI tooling
 
-**MCP server.** The package ships a local MCP server that gives AI coding agents static analysis of your page objects and rendered test ids â€” no grepping, no invented selectors:
+**MCP server.** The package ships a local MCP server that gives AI coding agents static analysis of your page objects and rendered test ids: no grepping, no invented selectors. Works with any stdio MCP client (Claude Code, Cursor, VS Code, Codex CLI). For Claude Code:
 
 ```bash
 claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
