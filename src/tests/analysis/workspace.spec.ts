@@ -119,6 +119,125 @@ describe("Workspace.revalidate", () => {
 	});
 });
 
+describe("Workspace.revalidate scoping", () => {
+	const scopedTsConfig = JSON.stringify({
+		compilerOptions: { target: "ES2022", noEmit: true },
+		include: ["e2e"],
+	});
+
+	function rels(ws: Workspace): string[] {
+		return ws.sourceFiles().map((file) => ws.rel(file.getFilePath()));
+	}
+
+	it("never widens a tsconfig-scoped project past its include", () => {
+		const root = scratch({
+			"tsconfig.json": scopedTsConfig,
+			"e2e/a.ts": "export const a = 1;",
+			"scripts/stray.ts": "export const stray = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		expect(rels(ws)).toEqual(["e2e/a.ts"]);
+
+		const result = ws.revalidate();
+		expect(result.added).toEqual([]);
+		expect(rels(ws)).toEqual(["e2e/a.ts"]);
+	});
+
+	it("still picks up a new file inside the tsconfig scope", () => {
+		const root = scratch({
+			"tsconfig.json": scopedTsConfig,
+			"e2e/a.ts": "export const a = 1;",
+			"scripts/stray.ts": "export const stray = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		write(root, "e2e/b.ts", "export const b = 1;");
+
+		expect(ws.revalidate().added).toEqual(["e2e/b.ts"]);
+		expect(rels(ws)).toEqual(["e2e/a.ts", "e2e/b.ts"]);
+	});
+
+	it("honours an explicit include over the tsconfig scope", () => {
+		const root = scratch({
+			"tsconfig.json": scopedTsConfig,
+			"e2e/a.ts": "export const a = 1;",
+			"scripts/stray.ts": "export const stray = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["scripts"],
+			staleAfterMs: 0,
+		});
+		ws.revalidate();
+		expect(rels(ws)).toEqual(["scripts/stray.ts"]);
+	});
+});
+
+describe("Workspace include normalization", () => {
+	const tree = {
+		"src/a.ts": "export const a = 1;",
+		"src/nested/b.tsx": "export const B = () => null;",
+		"other/c.ts": "export const c = 1;",
+	};
+
+	function rels(ws: Workspace): string[] {
+		return ws.sourceFiles().map((file) => ws.rel(file.getFilePath()));
+	}
+
+	it("expands a bare directory into a recursive source glob", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
+		expect(rels(ws)).toEqual(["src/a.ts", "src/nested/b.tsx"]);
+	});
+
+	it("expands a directory written with a trailing slash", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src/"] });
+		expect(rels(ws)).toEqual(["src/a.ts", "src/nested/b.tsx"]);
+	});
+
+	it("expands a directory written with Windows separators", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src\\nested"],
+		});
+		expect(rels(ws)).toEqual(["src/nested/b.tsx"]);
+	});
+
+	it("expands an absolute directory inside the root", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: [path.join(root, "src")],
+		});
+		expect(rels(ws)).toEqual(["src/a.ts", "src/nested/b.tsx"]);
+	});
+
+	it("expands `.` to the whole root", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({ projectRoot: root, include: ["."] });
+		expect(rels(ws)).toEqual(["other/c.ts", "src/a.ts", "src/nested/b.tsx"]);
+	});
+
+	it("leaves a real glob untouched", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src/*.ts"] });
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+	});
+
+	it("leaves a single file path untouched", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src/a.ts"] });
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+	});
+
+	it("expands a bare directory in `exclude` too", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({ projectRoot: root, exclude: ["src"] });
+		expect(rels(ws)).toEqual(["other/c.ts"]);
+	});
+});
+
 describe("Workspace.memo", () => {
 	it("reuses a value while its dependencies are unchanged", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });

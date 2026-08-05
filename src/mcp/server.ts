@@ -53,17 +53,19 @@ function readVersion(): string {
  * first tool call so the stdio handshake stays fast.
  */
 export function createMcpServer(options: McpServerOptions): McpServer {
-	let workspace: Workspace | undefined;
-	const getWorkspace = (): Workspace => {
-		workspace ??= AnalysisWorkspace.acquire({
-			projectRoot: options.projectRoot,
-			tsconfig: options.tsconfig,
-			include: options.srcDirs,
-			maxFiles: options.maxFiles,
-			attribute: options.attribute,
-		});
-		return workspace;
+	const workspaceOptions = {
+		projectRoot: options.projectRoot,
+		tsconfig: options.tsconfig,
+		include: options.srcDirs,
+		maxFiles: options.maxFiles,
+		attribute: options.attribute,
 	};
+	// Re-acquired on every call, never memoized here: `acquire` builds the
+	// workspace on first use and afterwards returns the cached one (LRU of 2)
+	// only after an mtime revalidation sweep. That sweep is what makes a
+	// long-lived stdio session see edits made since the previous call.
+	const getWorkspace = (): Workspace =>
+		AnalysisWorkspace.acquire(workspaceOptions);
 
 	const server = new McpServer(
 		{ name: "playwright-page-object", version: readVersion() },

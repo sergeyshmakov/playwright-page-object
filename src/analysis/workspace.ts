@@ -117,7 +117,8 @@ export class Workspace {
 	}
 
 	/** LRU of 2, keyed by root + tsconfig + include/exclude. */
-	static acquire(options: WorkspaceOptions): Workspace {
+	static acquire(rawOptions: WorkspaceOptions): Workspace {
+		const options = withNormalizedScope(rawOptions);
 		const key = workspaceKey(options);
 		const existing = Workspace.cache.get(key);
 		if (existing) {
@@ -162,7 +163,7 @@ export class Workspace {
 	): Workspace {
 		return new Workspace(
 			project,
-			options,
+			withNormalizedScope(options),
 			meta?.tsconfigPath ?? null,
 			meta?.inMemory ?? true,
 		);
@@ -392,16 +393,8 @@ export class Workspace {
 			const before = new Set(
 				this.project.getSourceFiles().map((file) => file.getFilePath()),
 			);
-			const globs =
-				this.options.include && this.options.include.length > 0
-					? this.options.include.map((glob) => absoluteGlob(this.root, glob))
-					: defaultIncludeGlobs(this.root);
 			try {
-				const matched = this.project.addSourceFilesAtPaths([
-					...globs,
-					...defaultExcludeGlobs(this.root),
-				]);
-				for (const sourceFile of matched) {
+				for (const sourceFile of this.rescan()) {
 					if (!before.has(sourceFile.getFilePath())) {
 						result.added.push(this.rel(sourceFile.getFilePath()));
 					}
@@ -421,6 +414,29 @@ export class Workspace {
 			this.enforceMaxFiles();
 		}
 		return result;
+	}
+
+	/**
+	 * Re-runs the scan that populated the project so newly created files appear.
+	 *
+	 * A tsconfig-backed project has to be rescanned through that same tsconfig:
+	 * falling back to `defaultIncludeGlobs` would drag in sibling packages and
+	 * the files the tsconfig deliberately excludes, silently widening every
+	 * later result and eating into `maxFiles`.
+	 */
+	private rescan(): SourceFile[] {
+		const include = this.options.include ?? [];
+		if (include.length === 0 && this.tsconfigPath) {
+			return this.project.addSourceFilesFromTsConfig(this.tsconfigPath);
+		}
+		const globs =
+			include.length > 0
+				? include.map((glob) => absoluteGlob(this.root, glob))
+				: defaultIncludeGlobs(this.root);
+		return this.project.addSourceFilesAtPaths([
+			...globs,
+			...defaultExcludeGlobs(this.root),
+		]);
 	}
 
 	private recordMtimes(): void {
@@ -447,6 +463,71 @@ export class Workspace {
 			throw new AnalysisLimitError(limit, count);
 		}
 	}
+}
+
+/** Characters that make a pattern a glob rather than a plain path. */
+const GLOB_MAGIC = /[*?[\]{}]/;
+/** A trailing `.ext` marks a pattern as one file rather than a directory. */
+const FILE_EXTENSION = /\.[A-Za-z0-9]+$/;
+/** What a bare directory pattern expands to. */
+const DIRECTORY_EXPANSION = "**/*.{ts,tsx,mts,cts}";
+
+/** Posix pattern relative to `root`, when it points inside `root` at all. */
+function relativizeToRoot(root: string, pattern: string): string {
+	const posixPattern = toPosix(pattern);
+	if (!path.isAbsolute(pattern) && !path.posix.isAbsolute(posixPattern)) {
+		return posixPattern;
+	}
+	const relative = toPosix(path.relative(root, pattern));
+	if (relative === "") {
+		return ".";
+	}
+	return relative.startsWith("../") || path.posix.isAbsolute(relative)
+		? posixPattern
+		: relative;
+}
+
+/**
+ * Rewrites a directory into the recursive source glob it stands for.
+ *
+ * `--src-dir src` is documented as a directory, but include/exclude patterns
+ * are matched literally against workspace-relative file paths, where `src`
+ * only ever equals the directory entry itself - never `src/page.ts`. Patterns
+ * that already carry glob magic, or that name a single file, are left alone.
+ */
+function normalizeScopePattern(root: string, pattern: string): string {
+	const negated = pattern.startsWith("!");
+	const body = relativizeToRoot(root, negated ? pattern.slice(1) : pattern)
+		.replace(/\/+$/, "")
+		.replace(/^\.\//, "");
+	let normalized: string;
+	if (body === "" || body === ".") {
+		normalized = DIRECTORY_EXPANSION;
+	} else if (GLOB_MAGIC.test(body) || FILE_EXTENSION.test(body)) {
+		normalized = body;
+	} else {
+		normalized = `${body}/${DIRECTORY_EXPANSION}`;
+	}
+	return negated ? `!${normalized}` : normalized;
+}
+
+/**
+ * Normalizes the scoping options once, at the workspace boundary, so every
+ * consumer (`addSourceFilesAtPaths`, `sourceFiles()`, `rescan()`) sees the
+ * same globs.
+ */
+function withNormalizedScope(options: WorkspaceOptions): WorkspaceOptions {
+	if (!options.include?.length && !options.exclude?.length) {
+		return options;
+	}
+	const root = normalizeRoot(options.projectRoot);
+	const normalize = (patterns: string[] | undefined) =>
+		patterns?.map((pattern) => normalizeScopePattern(root, pattern));
+	return {
+		...options,
+		include: normalize(options.include),
+		exclude: normalize(options.exclude),
+	};
 }
 
 function absoluteGlob(root: string, glob: string): string {

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -38,6 +38,21 @@ afterAll(async () => {
 		await handle.close().catch(() => {});
 	}
 });
+
+/** Minimal page object the discovery pass recognises, written to a temp repo. */
+function pageObjectSource(className: string): string {
+	return [
+		'import type { Locator } from "@playwright/test";',
+		'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+		"",
+		`@RootSelector("${className}Root")`,
+		`export class ${className} extends RootPageObject {`,
+		`\t@Selector("${className}Input")`,
+		"\taccessor Input!: Locator;",
+		"}",
+		"",
+	].join("\n");
+}
 
 interface Envelope {
 	ok: boolean;
@@ -195,6 +210,35 @@ describe("MCP server over in-memory transport", () => {
 			"role selectors must land in nonTestIdSelectors",
 		).toBe(true);
 		expect(data.deadSelectors).toHaveLength(0);
+	}, 30_000);
+
+	it("sees files written between two tool calls without a restart", async () => {
+		const projectRoot = mkdtempSync(path.join(tmpdir(), "ppo-live-"));
+		mkdirSync(path.join(projectRoot, "e2e"), { recursive: true });
+		const write = (name: string) =>
+			writeFileSync(
+				path.join(projectRoot, "e2e", `${name}.ts`),
+				pageObjectSource(name),
+				"utf8",
+			);
+		const names = async (client: Client): Promise<string[]> => {
+			const { envelope } = await callTool(client, "list_page_objects", {});
+			expect(envelope.ok).toBe(true);
+			return (envelope.data as Array<{ name: string }>)
+				.map((item) => item.name)
+				.sort();
+		};
+
+		try {
+			write("FirstPage");
+			const { client } = await connect(projectRoot);
+			expect(await names(client)).toEqual(["FirstPage"]);
+
+			write("SecondPage");
+			expect(await names(client)).toEqual(["FirstPage", "SecondPage"]);
+		} finally {
+			rmSync(projectRoot, { recursive: true, force: true });
+		}
 	}, 30_000);
 
 	it("returns success with a hint for an empty project", async () => {
