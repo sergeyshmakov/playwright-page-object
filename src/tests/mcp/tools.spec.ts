@@ -91,6 +91,14 @@ interface Envelope {
 	};
 }
 
+/** Diagnostic codes in `meta.warnings`; the key is absent when there are none. */
+function warningCodes(envelope: Envelope): string[] {
+	const warnings = envelope.meta?.warnings as
+		| Array<{ code: string }>
+		| undefined;
+	return (warnings ?? []).map((warning) => warning.code);
+}
+
 async function callTool(
 	client: Client,
 	name: string,
@@ -523,6 +531,111 @@ describe("MCP server over in-memory transport", () => {
 					envelope.meta?.alsoIncluded,
 					"scoping is by file, so the sibling class must be disclosed",
 				).toEqual(["BetaPage"]);
+			},
+		);
+	}, 30_000);
+
+	// The default report advises `includeRawLocators`; advice a caller cannot act
+	// on is worse than none, so the option has to exist on the tool itself.
+	it("map_coverage can act on its own includeRawLocators advice", async () => {
+		await withProject(
+			"ppo-raw-locators-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div><input data-testid="RawOnlyInput" /></div>;',
+					"}",
+					"",
+				].join("\n"),
+				"e2e/raw.spec.ts": [
+					'import { test } from "@playwright/test";',
+					"",
+					'test("selects the input directly", async ({ page }) => {',
+					'\tawait page.getByTestId("RawOnlyInput").click();',
+					"});",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				type Report = {
+					summary: { coveredUiTestIds: number; matchableUiTestIds: number };
+					matched: unknown[];
+					uncoveredTestIds: Array<{ id: string | null }>;
+				};
+
+				const off = await callTool(client, "map_coverage", {});
+				expect(off.isError).toBe(false);
+				const offData = off.envelope.data as Report;
+				expect(offData.summary.matchableUiTestIds).toBe(1);
+				expect(offData.summary.coveredUiTestIds).toBe(0);
+				expect(offData.uncoveredTestIds.map((entry) => entry.id)).toEqual([
+					"RawOnlyInput",
+				]);
+				expect(
+					warningCodes(off.envelope),
+					"the advisory has to ship, or nobody knows the sweep was skipped",
+				).toContain("raw-locators-disabled");
+
+				const on = await callTool(client, "map_coverage", {
+					includeRawLocators: true,
+				});
+				expect(on.isError).toBe(false);
+				const onData = on.envelope.data as Report;
+				expect(onData.summary.coveredUiTestIds).toBe(1);
+				expect(onData.uncoveredTestIds).toEqual([]);
+				expect(JSON.stringify(onData.matched)).toContain("e2e/raw.spec.ts");
+				expect(warningCodes(on.envelope)).not.toContain(
+					"raw-locators-disabled",
+				);
+			},
+		);
+	}, 30_000);
+
+	// An unmatched `file` used to select zero page objects and still return a
+	// "successful" report in which every rendered id was uncovered.
+	it("map_coverage accepts a ./-prefixed file and rejects an unmatched one", async () => {
+		await withProject(
+			"ppo-coverage-file-",
+			{
+				"e2e/Home.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("HomeRoot")',
+					"export class HomePage extends RootPageObject {",
+					'\t@Selector("HomeInput")',
+					"\taccessor Input!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="HomeRoot"><input data-testid="HomeInput" /></div>;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const dotted = await callTool(client, "map_coverage", {
+					file: "./e2e/Home.ts",
+				});
+				expect(dotted.isError).toBe(false);
+				const data = dotted.envelope.data as {
+					summary: { coveredUiTestIds: number; testIdSelectors: number };
+				};
+				expect(data.summary.testIdSelectors).toBe(2);
+				expect(
+					data.summary.coveredUiTestIds,
+					"a conventional ./ prefix must not read as an empty scope",
+				).toBe(2);
+
+				const typo = await callTool(client, "map_coverage", {
+					file: "e2e/Hom.ts",
+				});
+				expect(typo.isError).toBe(true);
+				expect(typo.envelope.error?.code).toBe("file_not_found");
+				expect(typo.envelope.error?.suggestions).toContain("e2e/Home.ts");
+				expect(typo.envelope.error?.hint).toContain("list_page_objects");
 			},
 		);
 	}, 30_000);

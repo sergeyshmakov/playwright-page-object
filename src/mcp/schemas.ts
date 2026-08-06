@@ -86,13 +86,21 @@ export const mapCoverageInput = z.object({
 	file: z
 		.string()
 		.optional()
-		.describe("Limit the page-object side to one file."),
+		.describe(
+			"Limit the page-object side to one file, path relative to the project root exactly as list_page_objects reports it (a leading ./ and Windows separators are accepted). A path that declares no page object fails with file_not_found rather than reporting everything as uncovered.",
+		),
 	attribute: z.string().optional(),
 	includeUnused: z
 		.boolean()
 		.default(true)
 		.describe(
 			"Include uncoveredTestIds (rendered ids no page object uses). Set false for a shorter response.",
+		),
+	includeRawLocators: z
+		.boolean()
+		.default(false)
+		.describe(
+			"Also scan spec files for direct getByTestId(...) calls. Off by default, so an id under uncoveredTestIds means no page object selects it - not that it is untested. Turn on before concluding a test id is unused.",
 		),
 	limit: z.number().int().min(1).max(1000).default(200),
 });

@@ -5,6 +5,8 @@ import {
 	buildTestIdTree,
 	type ComponentInfo,
 	discoverPageObjects,
+	nearestIds,
+	normalizeRelPath,
 	type PageObjectSummary,
 	type SelectorInfo,
 	type UiNode,
@@ -304,20 +306,50 @@ export function handleGetTestIdTree(
 }
 
 /**
+ * A path as the engine spells it, folded for comparison: posix separators, no
+ * leading `./`, and case folded only where the filesystem folds it too.
+ */
+function foldFile(value: string): string {
+	const posix = normalizeRelPath(value);
+	return process.platform === "win32" || process.platform === "darwin"
+		? posix.toLowerCase()
+		: posix;
+}
+
+/**
  * Mirrors how the engine resolves an `entry` file: posix separators, a trailing
  * path segment is enough ("Nested.tsx" matches "src/Nested.tsx"), and case is
  * folded only where the filesystem folds it too.
  */
 function sameFile(rel: string, wanted: string): boolean {
-	const fold = (value: string): string => {
-		const posix = value.replace(/\\/g, "/").replace(/^\.\//, "");
-		return process.platform === "win32" || process.platform === "darwin"
-			? posix.toLowerCase()
-			: posix;
-	};
-	const left = fold(rel);
-	const right = fold(wanted);
+	const left = foldFile(rel);
+	const right = foldFile(wanted);
 	return left === right || left.endsWith(`/${right}`);
+}
+
+/**
+ * Files worth naming after an unmatched path: the ones it is a trailing segment
+ * of first (a caller who wrote "Home.ts" meant one of those), then plausible
+ * typos, then whatever is left — an agent that gets an empty list has nothing to
+ * retry with.
+ */
+function nearbyFiles(wanted: string, files: string[]): string[] {
+	const folded = foldFile(wanted);
+	const base = folded.slice(folded.lastIndexOf("/") + 1);
+	const suffixed = files.filter((file) => {
+		const candidate = foldFile(file);
+		return (
+			candidate.endsWith(`/${folded}`) ||
+			candidate.slice(candidate.lastIndexOf("/") + 1) === base
+		);
+	});
+	return [
+		...new Set([
+			...suffixed,
+			...nearestIds(normalizeRelPath(wanted), files, 5),
+			...[...files].sort(),
+		]),
+	].slice(0, 5);
 }
 
 /** First node in document order whose expansion is `componentId`. */
@@ -438,7 +470,29 @@ export function handleMapCoverage(
 	let poInclude: string[] | undefined;
 	let alsoIncluded: string[] | undefined;
 	if (args.file) {
-		poInclude = [args.file];
+		// Scoping is a path glob, so an unmatched `file` selects zero page objects
+		// and the report comes back "successful" with every rendered id uncovered —
+		// which reads as a suite that tests nothing and invites edits to page
+		// objects that were never in scope. Resolve it against the index first, the
+		// way the `class` branch does. Controls count: they are only left out of
+		// `list_page_objects`, not out of the coverage scan.
+		const index = discoverPageObjects(workspace, { includeControls: true });
+		const files = [...new Set(index.pageObjects.map((item) => item.file))];
+		const wanted = foldFile(args.file);
+		const match = files.find((file) => foldFile(file) === wanted);
+		if (!match) {
+			throw new ToolError(
+				"file_not_found",
+				`No page object is declared in "${args.file}".`,
+				{
+					suggestions: nearbyFiles(args.file, files),
+					hint: "Use one of the suggested paths, or pass `class` and let the server find the file; list_page_objects reports the file of every page object.",
+				},
+			);
+		}
+		// The discovered spelling, not the caller's: the include glob is matched
+		// case-sensitively against workspace-relative paths.
+		poInclude = [match];
 	} else if (args.class) {
 		const index = discoverPageObjects(workspace);
 		const matches = index.pageObjects.filter(
@@ -487,6 +541,7 @@ export function handleMapCoverage(
 	const report = buildCoverageReport(workspace, {
 		attribute: args.attribute,
 		poInclude,
+		includeRawLocators: args.includeRawLocators,
 	});
 
 	const cap = <T>(list: T[]): T[] => list.slice(0, args.limit);
