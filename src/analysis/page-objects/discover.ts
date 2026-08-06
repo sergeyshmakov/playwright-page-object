@@ -207,6 +207,12 @@ export function runDiscovery(
 	const ctx = createAnalysisContext(ws);
 	const files = selectFiles(ws, options);
 	const classes = new Map<string, DiscoveredClass>();
+	// Before the snapshot below, not after it: reading the attribute is what
+	// parses `playwright.config.*`, and its notes (an unresolvable
+	// `testIdAttribute`, an unresolvable `testDir`) land in `ws.warnings`. Taken
+	// the other way round the snapshot predates them and this index — the only
+	// payload that carries workspace warnings — silently drops every one.
+	const attribute = ws.testIdAttribute();
 	const warnings: Diagnostic[] = [...ws.warnings];
 
 	const register = (
@@ -373,7 +379,6 @@ export function runDiscovery(
 		return a.file < b.file ? -1 : 1;
 	});
 
-	const attribute = ws.testIdAttribute();
 	const index: PageObjectIndex = {
 		schemaVersion: 1,
 		projectRoot: toPosix(ws.root),

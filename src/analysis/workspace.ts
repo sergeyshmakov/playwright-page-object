@@ -1,6 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { type Node, Project, type SourceFile } from "ts-morph";
+import {
+	FileSystemRefreshResult,
+	type Node,
+	Project,
+	type SourceFile,
+} from "ts-morph";
 import { readPlaywrightConfig } from "./config/playwrightConfig";
 import {
 	defaultExcludeGlobs,
@@ -196,7 +201,16 @@ export class Workspace {
 		// Passing `undefined` here instead hid an adjacent `e2e/tsconfig.json` and
 		// dropped the project onto synthesized options plus a repo-wide scan,
 		// which loses that config's path aliases and include/exclude rules.
-		const testDir = playwright.testDir ?? configDirOf(playwright.configFile);
+		//
+		// That default is only Playwright's when the property is *absent*. A
+		// `testDir` the config computes (`process.env.DIR`) names some other
+		// directory, so substituting the config's own would adopt a neighbouring
+		// tsconfig Playwright never reads and analyse the wrong source scope under
+		// the wrong compiler options. An unknown test dir is left unknown; the
+		// `testdir-unresolved` note the parser attached says why.
+		const testDir = playwright.testDirUnresolved
+			? undefined
+			: (playwright.testDir ?? configDirOf(playwright.configFile));
 
 		const located = locateTsConfig(root, options.tsconfig, testDir);
 		const warnings: Diagnostic[] = [];
@@ -400,7 +414,26 @@ export class Workspace {
 				continue;
 			}
 			const previous = this.mtimes.get(absolute);
-			if (previous !== undefined && previous !== stamp) {
+			if (previous === undefined) {
+				// First sweep over a file the resolver added on demand *after*
+				// construction — a `.js` module, an alias target, anything outside a
+				// narrowed scope. Its text was read when it was added, and an edit
+				// since then leaves no trace here: recording the new stamp without
+				// looking would freeze the pre-edit AST in place for good, because
+				// every later sweep then sees an unchanged mtime. Refreshing compares
+				// the text, so an untouched file reports nothing and costs one read,
+				// once, the first time the file is seen.
+				const refreshed = sourceFile.refreshFromFileSystemSync();
+				if (refreshed === FileSystemRefreshResult.Deleted) {
+					// `refreshFromFileSystemSync` has already forgotten the file.
+					this.mtimes.delete(absolute);
+					result.removed.push(this.rel(absolute));
+					continue;
+				}
+				if (refreshed === FileSystemRefreshResult.Updated) {
+					result.changed.push(this.rel(absolute));
+				}
+			} else if (previous !== stamp) {
 				sourceFile.refreshFromFileSystemSync();
 				result.changed.push(this.rel(absolute));
 			}

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveRelativeModule } from "../../analysis/util/resolve";
 import { Workspace } from "../../analysis/workspace";
 import { makeWorkspace } from "./helpers/inMemory";
 
@@ -147,6 +148,55 @@ describe("Workspace.revalidate", () => {
 		const ws = Workspace.acquire({ projectRoot: root });
 		write(root, "src/b.ts", "export const b = 1;");
 		expect(ws.revalidate().added).toEqual(["src/b.ts"]);
+	});
+
+	/**
+	 * A module the resolver pulls in on demand — a plain `.js` file, an alias
+	 * target, anything outside the scan globs — joins the project long after
+	 * `recordMtimes()` ran, so the first sweep that meets it has no stamp to
+	 * compare against. Recording the new stamp and moving on froze that file's
+	 * pre-edit AST for the rest of the session: every later sweep then found the
+	 * mtime unchanged and never refreshed it.
+	 */
+	it("refreshes a file first seen after construction", () => {
+		const root = scratch({
+			"src/a.ts":
+				'import { helper } from "./helper.js";\nexport const a = helper;',
+			"src/helper.js": "export const helper = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		// `.js` is outside SCAN_GLOB, so the file is in the project only because
+		// the resolver added it while following the import.
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+		const added = resolveRelativeModule(
+			ws.project,
+			ws.project.getSourceFileOrThrow("a.ts"),
+			"./helper.js",
+		);
+		expect(added).toBeDefined();
+
+		write(root, "src/helper.js", "export const helper = 2;");
+		touch(root, "src/helper.js", 60);
+
+		expect(ws.revalidate().changed).toContain("src/helper.js");
+		expect(added?.getFullText()).toContain("= 2");
+	});
+
+	it("does not report an untouched first-seen file as changed", () => {
+		const root = scratch({
+			"src/a.ts":
+				'import { helper } from "./helper.js";\nexport const a = helper;',
+			"src/helper.js": "export const helper = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		resolveRelativeModule(
+			ws.project,
+			ws.project.getSourceFileOrThrow("a.ts"),
+			"./helper.js",
+		);
+		const before = ws.currentEpoch;
+		expect(ws.revalidate()).toEqual({ changed: [], added: [], removed: [] });
+		expect(ws.currentEpoch).toBe(before);
 	});
 
 	it("bumps the epoch only when something actually changed", () => {

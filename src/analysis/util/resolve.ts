@@ -531,6 +531,17 @@ export function resolveExportedName(
 					continue;
 				}
 				if (!specifier) {
+					// `class Card {}; export { Card as CheckoutCard };` — the alias is
+					// what the importer asks for, but the declaration carries the
+					// pre-alias name, so the local lookup at the top of this function
+					// (which used the alias) found nothing. Try the declared name before
+					// assuming the binding must have come from an import: treating a
+					// locally declared class as unresolved turns imported components
+					// into tree boundaries and page-object references into dynamic ones.
+					const localAlias = localDeclaration(sourceFile, named.getName());
+					if (localAlias) {
+						return asResolved(localAlias, sourceFile, named.getName());
+					}
 					// `import { Card } from "./Card"; export { Card };` — a local
 					// re-export of an imported binding. Recursing into this same file
 					// would just re-run the failed local lookup.

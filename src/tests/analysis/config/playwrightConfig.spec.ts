@@ -208,6 +208,36 @@ describe("readPlaywrightConfig", () => {
 		expect(readPlaywrightConfig(ws).testDir).toBe("e2e/specs");
 	});
 
+	// An absent `testDir` means Playwright's own default — the config's directory.
+	// A computed one means some other directory entirely. Reporting both as
+	// `undefined` let workspace creation substitute the config's directory for a
+	// value it had positive evidence was something else.
+	it("separates a computed testDir from an omitted one", () => {
+		const computed = workspaceWithConfig({
+			"playwright.config.ts": [
+				'import { defineConfig } from "@playwright/test";',
+				"export default defineConfig({ testDir: process.env.E2E_DIR });",
+			].join("\n"),
+		});
+		const info = readPlaywrightConfig(computed);
+		expect(info.testDir).toBeUndefined();
+		expect(info.testDirUnresolved).toBe(true);
+		const note = info.notes.find(
+			(diagnostic) => diagnostic.code === "testdir-unresolved",
+		);
+		expect(note?.severity).toBe("warning");
+		expect(note?.loc).toMatchObject({ file: "playwright.config.ts", line: 2 });
+
+		const omitted = readPlaywrightConfig(
+			workspaceWithConfig({
+				"playwright.config.ts": "export default { fullyParallel: true };",
+			}),
+		);
+		expect(omitted.testDir).toBeUndefined();
+		expect(omitted.testDirUnresolved).toBeUndefined();
+		expect(omitted.notes).toEqual([]);
+	});
+
 	it("surfaces an unresolvable testIdAttribute as a workspace warning", () => {
 		const ws = workspaceWithConfig({
 			"playwright.config.ts":

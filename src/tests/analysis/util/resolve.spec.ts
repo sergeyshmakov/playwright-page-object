@@ -129,6 +129,66 @@ describe("resolveIdentifier", () => {
 		}
 	});
 
+	// `export { Card as CheckoutCard }` renames a declaration that lives in this
+	// same file. The lookup ran the alias through the local-declaration check
+	// (which cannot match, the declaration carries the pre-alias name) and then
+	// searched for an *import* binding called `Card` — of which there is none.
+	// The class was reported unresolved, which turns a static control reference
+	// into a dynamic one and an imported component into a tree boundary.
+	it("resolves an aliased export of a locally declared class", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import { CheckoutCard } from "./card";',
+				"src/card.ts": "class Card {}\nexport { Card as CheckoutCard };",
+			},
+			"src/a.ts",
+			"CheckoutCard",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.kind).toBe("class");
+			// The declared name, not the importer's alias.
+			expect(result.name).toBe("Card");
+			expect(result.sourceFile.getBaseName()).toBe("card.ts");
+		}
+	});
+
+	it("resolves an aliased export of a locally declared function", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import { makeCart } from "./cart";',
+				"src/cart.ts": "function build() {}\nexport { build as makeCart };",
+			},
+			"src/a.ts",
+			"makeCart",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.kind).toBe("function");
+			expect(result.name).toBe("build");
+		}
+	});
+
+	// The alias hop must not swallow the barrel case it was written for: when the
+	// pre-alias name is an imported binding rather than a local declaration, the
+	// import path still has to run.
+	it("still follows an aliased re-export of an imported binding", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import { CheckoutCard } from "./barrel";',
+				"src/barrel.ts":
+					'import { Card } from "./card";\nexport { Card as CheckoutCard };',
+				"src/card.ts": "export class Card {}",
+			},
+			"src/a.ts",
+			"CheckoutCard",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.sourceFile.getBaseName()).toBe("card.ts");
+		}
+	});
+
 	it("follows `export { default } from` without an alias", () => {
 		const result = resolveIn(
 			{

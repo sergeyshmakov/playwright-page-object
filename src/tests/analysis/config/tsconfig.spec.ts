@@ -181,6 +181,34 @@ describe("Workspace file discovery", () => {
 		).not.toContain("src/ignored.ts");
 	});
 
+	// That default only holds while the property is absent. A config that *does*
+	// set `testDir`, to a value only the running process could produce, names a
+	// directory that is specifically not the config's own — so substituting it
+	// adopts a neighbouring tsconfig Playwright never reads and scopes the whole
+	// analysis to sources it never runs, under compiler options it never uses.
+	it("keeps the config's directory out of it when testDir is computed", () => {
+		const root = scratch({
+			"e2e/playwright.config.ts":
+				"export default { testDir: process.env.E2E_DIR };",
+			"e2e/tsconfig.json": JSON.stringify({
+				compilerOptions: { baseUrl: "." },
+				include: ["."],
+			}),
+			"e2e/Home.ts": "export const a = 1;",
+			"src/app.ts": "export const b = 2;",
+		});
+		Workspace.reset();
+		const ws = Workspace.acquire({ projectRoot: root });
+		expect(ws.tsconfigPath).toBeNull();
+		expect(
+			ws.sourceFiles().map((file) => ws.rel(file.getFilePath())),
+		).toContain("src/app.ts");
+		// And the caller is told why the scope is what it is.
+		expect(
+			discoverPageObjects(ws).warnings.map((diagnostic) => diagnostic.code),
+		).toContain("testdir-unresolved");
+	});
+
 	it("refuses a workspace larger than maxFiles", () => {
 		const files: Record<string, string> = {};
 		for (let index = 0; index < 5; index += 1) {

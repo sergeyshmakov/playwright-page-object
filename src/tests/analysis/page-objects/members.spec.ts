@@ -156,6 +156,26 @@ describe("inferResult — page objects and controls", () => {
 		});
 	});
 
+	// `class Ctrl {}; export { Ctrl as CheckoutCtrl }` is an ordinary alias export,
+	// but resolving the import searched only for an import binding called `Ctrl`.
+	// The local declaration went unseen and a fully static control came back with
+	// a null ref, dropping it out of the expanded page-object graph.
+	it("reads a control exported under an alias of a local class", () => {
+		const member = readOne(
+			'  @Selector("x", CheckoutCtrl)\n  accessor field!: CheckoutCtrl;',
+			"field",
+			{ "src/Ctrl.ts": "class Ctrl {}\nexport { Ctrl as CheckoutCtrl };" },
+			'import { CheckoutCtrl } from "./Ctrl";',
+		);
+		// `className` stays the name written at the call site; `ref` is the one that
+		// has to point at the declaration, and it was `null`.
+		expect(member.result).toEqual({
+			kind: "control",
+			ref: "src/Ctrl.ts#Ctrl",
+			className: "CheckoutCtrl",
+		});
+	});
+
 	it("marks an inline arrow factory with viaInlineFactory", () => {
 		const member = readOne(
 			'  @SelectorByRole("button", {}, (l) => new Ctrl(l))\n  accessor field!: Ctrl;',

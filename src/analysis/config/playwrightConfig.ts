@@ -248,15 +248,32 @@ export function readPlaywrightConfig(
 	// Playwright resolves a relative `testDir` against the directory holding the
 	// config, not against the repo root — a nested `e2e/playwright.config.ts`
 	// with `testDir: "./specs"` means `e2e/specs`.
-	const rawTestDir = stringLiteralValue(
-		getProperty(object, "testDir")?.getInitializer(),
-	);
-	const testDir =
-		rawTestDir === undefined
-			? undefined
-			: workspace.rel(
-					path.resolve(path.dirname(sourceFile.getFilePath()), rawTestDir),
-				);
+	//
+	// Absent and unresolved are reported apart, because they mean opposite things
+	// downstream: no `testDir` at all is Playwright's implicit "the config's own
+	// directory", while `testDir: process.env.DIR` is a directory that is
+	// specifically *not* that default and cannot be guessed.
+	const testDirProperty = getProperty(object, "testDir");
+	const testDirInitializer = testDirProperty?.getInitializer();
+	const rawTestDir = stringLiteralValue(testDirInitializer);
+	let testDir: string | undefined;
+	let testDirUnresolved: true | undefined;
+	if (rawTestDir !== undefined) {
+		testDir = workspace.rel(
+			path.resolve(path.dirname(sourceFile.getFilePath()), rawTestDir),
+		);
+	} else if (testDirProperty) {
+		testDirUnresolved = true;
+		notes.push(
+			warn(
+				"testdir-unresolved",
+				"`testDir` is not a string literal and cannot be resolved without executing the config; tsconfig discovery falls back to the project root.",
+				testDirInitializer
+					? workspace.loc(testDirInitializer)
+					: workspace.loc(testDirProperty),
+			),
+		);
+	}
 
 	let testIdAttribute: string | undefined;
 	const useProperty = getProperty(object, "use");
@@ -330,5 +347,12 @@ export function readPlaywrightConfig(
 		);
 	}
 
-	return { configFile, testIdAttribute, testDir, projectOverrides, notes };
+	return {
+		configFile,
+		testIdAttribute,
+		testDir,
+		...(testDirUnresolved ? { testDirUnresolved } : {}),
+		projectOverrides,
+		notes,
+	};
 }

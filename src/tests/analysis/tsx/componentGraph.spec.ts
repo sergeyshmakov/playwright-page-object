@@ -50,6 +50,28 @@ describe("resolveComponentRef", () => {
 		expect(resolution.definition.name).toBe("Card");
 	});
 
+	// A module that renames a local declaration on the way out —
+	// `function Card() {}; export { Card as CheckoutCard }` — resolved to nothing,
+	// because only an import binding named `Card` was looked for. The component
+	// then became a tree boundary and everything it renders went unseen.
+	it("resolves an aliased export of a locally declared component", () => {
+		const { resolution } = resolve(
+			{
+				"src/App.tsx":
+					'import { CheckoutCard } from "./Card";\nexport default function App() { return <CheckoutCard />; }',
+				"src/Card.tsx":
+					"function Card() { return <div data-testid='c' />; }\nexport { Card as CheckoutCard };",
+			},
+			"src/App.tsx",
+			"CheckoutCard",
+		);
+		expect(resolution.kind).toBe("local");
+		if (resolution.kind === "local") {
+			expect(resolution.definition.name).toBe("Card");
+			expect(resolution.definition.file).toBe("src/Card.tsx");
+		}
+	});
+
 	// The importer's local alias is not an identity. Deriving one from it gave the
 	// same anonymous component a different id in every file that rendered it, so
 	// cross-references pointed at definitions that did not exist.

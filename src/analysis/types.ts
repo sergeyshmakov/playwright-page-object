@@ -29,6 +29,7 @@ export type DiagnosticCode =
 	| "playwright-config-not-found"
 	| "config-shape-unrecognized"
 	| "testid-attribute-unresolved"
+	| "testdir-unresolved"
 	| "testid-attribute-maybe-spread"
 	| "testid-attribute-project-override"
 	// page objects
@@ -423,6 +424,16 @@ export interface PlaywrightConfigInfo {
 	testIdAttribute: string | undefined;
 	/** Workspace-relative posix dir, already resolved against the config's own directory. */
 	testDir: string | undefined;
+	/**
+	 * `testDir` is written in the config but is not a string literal
+	 * (`testDir: process.env.DIR`), so its value is unknown rather than absent.
+	 *
+	 * The two cases are not interchangeable: an absent `testDir` means Playwright's
+	 * own default, the config file's directory, while an unresolved one means the
+	 * directory is anything *but* that default, and guessing it would scope the
+	 * analysis to a tsconfig Playwright never reads.
+	 */
+	testDirUnresolved?: true;
 	projectOverrides: Array<{
 		project: string | null;
 		testIdAttribute: string;
