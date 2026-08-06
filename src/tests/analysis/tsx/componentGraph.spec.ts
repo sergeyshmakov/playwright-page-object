@@ -412,6 +412,39 @@ describe("buildTestIdTree — anonymous default exports as roots", () => {
 		expect(tree.fidelity).toBe("full");
 	});
 
+	// `src/index.tsx` doing `export { default } from "./App"` is an ordinary
+	// React entry point. Requiring the resolved declaration to live in the entry
+	// file itself dropped that whole request to a flat inventory.
+	it("roots an entry barrel at the component it re-exports", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/index.tsx": 'export { default } from "./App";',
+				"src/App.tsx":
+					'export default function App() { return <div data-testid="root" />; }',
+			}),
+			{ entry: "src/index.tsx" },
+		);
+		expect(tree.fidelity).toBe("full");
+		expect(tree.fidelityReason).toBeUndefined();
+		expect(tree.roots[0]).toMatchObject({ tag: "div", component: "App" });
+		// The id names the declaring file, so it is the same key the component
+		// inventory minted — not one derived from the barrel.
+		expect(Object.keys(tree.components)).toContain("src/App.tsx#default");
+	});
+
+	it("keeps the re-exported component's own name over the barrel's", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/index.tsx": 'export { Panel as default } from "./Panel";',
+				"src/Panel.tsx":
+					'export function Panel() { return <div data-testid="panel" />; }',
+			}),
+			{ entry: "src/index.tsx" },
+		);
+		expect(tree.fidelity).toBe("full");
+		expect(tree.roots[0]).toMatchObject({ tag: "div", component: "Panel" });
+	});
+
 	it("still ignores a default export that is not a component", () => {
 		const tree = buildTestIdTree(
 			makeWorkspace({

@@ -162,6 +162,16 @@ describe("buildPageObjectTree — target resolution", () => {
 		expect(tree.root).toBe("e2e/Row.ts#Row");
 	});
 
+	// `./e2e/Row.ts` and `e2e\Row.ts` are how clients spell the path the index
+	// knows as `e2e/Row.ts`; neither may read as "no page objects there".
+	it("accepts the conventional spellings of a file path", () => {
+		for (const target of ["./e2e/Row.ts", "e2e\\Row.ts", "./e2e/Row.ts#Row"]) {
+			expect(buildPageObjectTree(makeWorkspace(SHARED), target).root).toBe(
+				"e2e/Row.ts#Row",
+			);
+		}
+	});
+
 	it("accepts `fixture:name`", () => {
 		const tree = buildPageObjectTree(
 			makeWorkspace({

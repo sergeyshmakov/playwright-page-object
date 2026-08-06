@@ -456,7 +456,7 @@ export function buildCoverageReport(
 		warnings.push(
 			info(
 				"raw-locators-disabled",
-				"Direct `getByTestId(...)` calls in spec files were not scanned; an uncovered test id does not necessarily mean it is untested. Pass includeRawLocators to include them.",
+				"Direct `getByTestId(...)` calls in spec files were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them.",
 			),
 		);
 	}

@@ -13,7 +13,7 @@ import type {
 } from "../types";
 import { Budget } from "../util/budget";
 import { docSummary } from "../util/jsdoc";
-import { keyFold, splitDefKey, toPosix } from "../util/paths";
+import { keyFold, normalizeRelPath, splitDefKey, toPosix } from "../util/paths";
 import { renderConstructor } from "../util/signature";
 import type { Workspace } from "../workspace";
 import {
@@ -85,7 +85,7 @@ function resolveTarget(
 	}
 
 	if (trimmed.includes("#")) {
-		const { file, name } = splitDefKey(toPosix(trimmed));
+		const { file, name } = splitDefKey(normalizeRelPath(trimmed));
 		const entry = discovery.classes.get(keyFold(`${file}#${name}`));
 		if (entry) {
 			return entry;
@@ -106,7 +106,9 @@ function resolveTarget(
 	}
 
 	if (FILE_EXTENSIONS.test(trimmed)) {
-		const file = toPosix(trimmed);
+		// `./e2e/Home.ts` and `e2e\Home.ts` are the same file the index knows as
+		// `e2e/Home.ts`; a caller-supplied spelling must not read as "not found".
+		const file = normalizeRelPath(trimmed);
 		const inFile = [...discovery.classes.values()].filter(
 			(entry) => keyFold(entry.file) === keyFold(file),
 		);

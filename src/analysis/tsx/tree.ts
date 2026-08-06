@@ -10,7 +10,7 @@ import type {
 } from "../types";
 import { Budget } from "../util/budget";
 import { keyFold, matchesAnyGlob, toPosix } from "../util/paths";
-import { resolveExportedName } from "../util/resolve";
+import { isInNodeModules, resolveExportedName } from "../util/resolve";
 import type { Workspace } from "../workspace";
 import {
 	buildDefinition,
@@ -193,8 +193,20 @@ function firstComponentIn(
 	// `export default function () {}` and `export default () => …` are the only
 	// component plenty of files declare, and skipping them dropped the whole tree
 	// to a flat inventory that claimed the file declared nothing.
+	//
+	// The declaration is taken wherever the resolver found it, including another
+	// file: `src/index.tsx` doing `export { default } from "./App"` is an
+	// ordinary React entry point, and rejecting it because the declaration lives
+	// in `App.tsx` dropped that entry to flat fidelity too. `buildDefinition`
+	// keys the definition off the *declaring* file, so the root still comes back
+	// as `src/App.tsx#default` — the same id `collectComponents` minted for it.
+	// A declaration under `node_modules` is a boundary the scanner reports rather
+	// than crosses, exactly as `resolveComponentRef` treats an imported tag.
 	const defaultExport = resolveExportedName(ws.project, sourceFile, "default");
-	if (defaultExport?.sourceFile === sourceFile) {
+	if (
+		defaultExport &&
+		!isInNodeModules(defaultExport.sourceFile.getFilePath())
+	) {
 		const built = buildDefinition(
 			ws,
 			defaultExport.declaration,

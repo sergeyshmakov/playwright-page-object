@@ -6,6 +6,22 @@ export function toPosix(input: string): string {
 }
 
 /**
+ * A caller-supplied path, spelled the way the engine emits paths.
+ *
+ * Every path the engine reports is workspace-relative and posix-separated, but
+ * a client will just as readily send `.\src\Home.ts` or `./src/Home.ts` for the
+ * same file. Normalising both sides of a comparison here is what keeps a
+ * conventional spelling from being read as "no such file".
+ */
+export function normalizeRelPath(input: string): string {
+	let out = toPosix(input.trim());
+	while (out.startsWith("./")) {
+		out = out.slice(2);
+	}
+	return out;
+}
+
+/**
  * Workspace-relative posix path. Falls back to the posix absolute path when
  * `abs` lives outside `root` (e.g. a sibling package or a `node_modules` file).
  */

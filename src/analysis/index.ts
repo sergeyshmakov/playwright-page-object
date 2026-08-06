@@ -37,6 +37,7 @@ export {
 	type TestIdTreeOptions,
 } from "./tsx/tree";
 export type * from "./types";
+export { normalizeRelPath } from "./util/paths";
 export {
 	DEFAULT_TEST_ID_ATTRIBUTE,
 	type RevalidateResult,

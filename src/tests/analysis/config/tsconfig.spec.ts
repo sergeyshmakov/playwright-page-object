@@ -158,6 +158,29 @@ describe("Workspace file discovery", () => {
 		]);
 	});
 
+	// Playwright defaults `testDir` to the directory holding the config. Passing
+	// `undefined` on to tsconfig discovery hid the e2e package's own tsconfig and
+	// fell back to synthesized options plus a repo-wide scan, losing that
+	// config's path aliases and include/exclude rules.
+	it("uses a nested Playwright config's own directory when testDir is omitted", () => {
+		const root = scratch({
+			"e2e/playwright.config.ts":
+				'export default { use: { testIdAttribute: "qa-id" } };',
+			"e2e/tsconfig.json": JSON.stringify({
+				compilerOptions: { baseUrl: "." },
+				include: ["."],
+			}),
+			"e2e/Home.ts": "export const a = 1;",
+			"src/ignored.ts": "export const b = 2;",
+		});
+		Workspace.reset();
+		const ws = Workspace.acquire({ projectRoot: root });
+		expect(ws.tsconfigPath).toBe(path.join(root, "e2e/tsconfig.json"));
+		expect(
+			ws.sourceFiles().map((file) => ws.rel(file.getFilePath())),
+		).not.toContain("src/ignored.ts");
+	});
+
 	it("refuses a workspace larger than maxFiles", () => {
 		const files: Record<string, string> = {};
 		for (let index = 0; index < 5; index += 1) {

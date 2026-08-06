@@ -190,7 +190,13 @@ export class Workspace {
 			compilerOptions: synthesizedCompilerOptions(),
 		});
 		const probeWorkspace = new Workspace(probe, options, null, false);
-		const testDir = readPlaywrightConfig(probeWorkspace).testDir;
+		const playwright = readPlaywrightConfig(probeWorkspace);
+		// Playwright defaults `testDir` to the directory holding the config, so a
+		// nested `e2e/playwright.config.ts` that omits it still means `e2e/`.
+		// Passing `undefined` here instead hid an adjacent `e2e/tsconfig.json` and
+		// dropped the project onto synthesized options plus a repo-wide scan,
+		// which loses that config's path aliases and include/exclude rules.
+		const testDir = playwright.testDir ?? configDirOf(playwright.configFile);
 
 		const located = locateTsConfig(root, options.tsconfig, testDir);
 		const warnings: Diagnostic[] = [];
@@ -506,6 +512,22 @@ function isAnalysable(
 		return false;
 	}
 	return true;
+}
+
+/**
+ * Playwright's implicit `testDir`: the directory the config file sits in.
+ *
+ * `configFile` is workspace-relative, so a root-level config yields `"."` — the
+ * project root, which {@link locateTsConfig} has already checked by the time it
+ * looks at the test dir. Returning `undefined` for that case keeps the walk from
+ * re-stating a path it just rejected.
+ */
+function configDirOf(configFile: string | null): string | undefined {
+	if (!configFile) {
+		return undefined;
+	}
+	const dir = path.posix.dirname(toPosix(configFile));
+	return dir === "." || dir === "" ? undefined : dir;
 }
 
 /**
