@@ -6,6 +6,7 @@ import type {
 	SelectorInfo,
 	TestIdTree,
 	UiNode,
+	UiUnresolvedReason,
 } from "../analysis";
 
 /**
@@ -147,6 +148,46 @@ export function renderPageObjectOutline(tree: PageObjectTree): string {
 	return lines.join("\n");
 }
 
+/**
+ * Plain-language label for a hole in the tree.
+ *
+ * One `unresolved: <code>` bucket collided with the documented meaning of the
+ * word: "the depth limit stopped here", "this component ships from npm" and
+ * "there is JSX in here we could not place" are three different things to do
+ * next, and a reader has to be able to tell them apart at a glance.
+ */
+function unresolvedLabel(reason: UiUnresolvedReason): string {
+	switch (reason) {
+		case "external-module":
+			return "external module";
+		case "identifier-unresolved":
+			return "unresolved import";
+		case "namespaced-component":
+			return "namespaced tag";
+		case "not-a-function-component":
+			return "not a function component";
+		case "recursive":
+			return "recursion cut";
+		case "not-followed":
+			return "not followed";
+		case "depth-limit-reached":
+			return "depth limit";
+		case "node-budget-reached":
+			return "node budget";
+		case "unresolved-jsx":
+			return "hole: unresolved-jsx";
+		case "opaque-expression":
+			return "hole: opaque";
+		default:
+			return "spread props";
+	}
+}
+
+/** `slot` for children, `prop <name>` for anything else the caller passed in. */
+function placementLabel(placement: NonNullable<UiNode["placement"]>): string {
+	return placement.kind === "slot" ? "slot" : `prop ${placement.name}`;
+}
+
 function renderUiNode(node: UiNode, indent: string, lines: string[]): void {
 	const flags: string[] = [];
 	if (node.testId?.kind === "pattern") {
@@ -154,14 +195,25 @@ function renderUiNode(node: UiNode, indent: string, lines: string[]): void {
 	} else if (node.testId?.kind === "dynamic") {
 		flags.push(`dynamic ${node.testId.raw}`);
 	}
+	if (node.placement) {
+		flags.push(placementLabel(node.placement));
+	}
 	if (node.conditional) {
 		flags.push("conditional");
 	}
 	if (node.repeated) {
 		flags.push("repeated");
 	}
+	if (node.viaDefault) {
+		flags.push("viaDefault");
+	}
+	// Not "dynamic": the attribute is written and renders nothing here. An agent
+	// reading "dynamic" would go looking for the value.
+	if (node.testIdAbsent) {
+		flags.push("id absent at this site");
+	}
 	if (node.unresolved) {
-		flags.push(`unresolved: ${node.unresolved.reason}`);
+		flags.push(unresolvedLabel(node.unresolved.reason));
 	}
 
 	if (node.expandedAt) {

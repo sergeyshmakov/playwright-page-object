@@ -310,10 +310,18 @@ describe("MCP server over in-memory transport", () => {
 
 				expect(isError).toBe(false);
 				const data = envelope.data as {
-					roots: Array<{ componentRef?: string }>;
+					roots: Array<{ tag: string; component: string }>;
 				};
-				expect(data.roots[0]?.componentRef).toBe("src/Nested.tsx#Inner");
-				expect(envelope.meta?.rootedAt).toContain("Inner");
+				// The tree is what `Inner` renders, exactly as `file` roots a file at
+				// what its entry component renders — not a `<Inner/>` tag node lifted
+				// out of somebody else's tree.
+				expect(data.roots[0]).toMatchObject({
+					tag: "span",
+					component: "Inner",
+				});
+				// The engine roots where it is told, so there is no substitution left
+				// to disclose, which is all `rootedAt` ever meant.
+				expect(envelope.meta?.rootedAt).toBeUndefined();
 				const serialized = JSON.stringify(data.roots);
 				expect(serialized).toContain("InnerBox");
 				expect(
@@ -368,7 +376,7 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
-	it("says the walk was depth-limited instead of claiming the component is not rendered", async () => {
+	it("roots a deeply nested component directly instead of asking for more depth", async () => {
 		const files = {
 			"src/Deep.tsx": [
 				"export function Shell() {",
@@ -387,34 +395,140 @@ describe("MCP server over in-memory transport", () => {
 		};
 
 		await withProject("ppo-depth-limit-", files, async (client) => {
-			// Leaf renders two levels below the file's entry component; depth 1
-			// cannot see it, which is not the same fact as "it is not rendered".
+			// Leaf renders two levels below the file's first component, but it is
+			// also declared right there — so it is rooted directly and the depth
+			// budget never enters into it.
 			const shallow = await callTool(client, "get_testid_tree", {
 				component: "Leaf",
 				depth: 1,
 			});
 
-			expect(shallow.isError).toBe(true);
-			expect(
-				shallow.envelope.error?.code,
-				"a depth-limited walk proves nothing about what it never reached",
-			).toBe("incomplete_tree");
-			expect(shallow.envelope.error?.hint).toContain("depth");
-
-			// The hint has to actually work.
-			const deep = await callTool(client, "get_testid_tree", {
-				component: "Leaf",
-				depth: 3,
-			});
-
-			expect(deep.isError).toBe(false);
-			const data = deep.envelope.data as {
-				roots: Array<{ componentRef?: string }>;
+			expect(shallow.isError).toBe(false);
+			const data = shallow.envelope.data as {
+				roots: Array<{ tag: string; component: string }>;
 			};
-			expect(data.roots[0]?.componentRef).toBe("src/Deep.tsx#Leaf");
+			expect(data.roots[0]).toMatchObject({ tag: "span", component: "Leaf" });
 			const serialized = JSON.stringify(data.roots);
 			expect(serialized).toContain("LeafBox");
 			expect(serialized).not.toContain("ShellBox");
+			expect(shallow.envelope.meta?.fidelity).toBe("full");
+			expect(shallow.envelope.meta?.truncated).toBeUndefined();
+		});
+	}, 30_000);
+
+	it("treats followComponents: false as a caller choice, not a budget cut", async () => {
+		await withProject(
+			"ppo-not-followed-",
+			{
+				"src/Deep.tsx": [
+					"export function Shell() {",
+					'\treturn <div data-testid="ShellBox"><Middle /></div>;',
+					"}",
+					"",
+					"export function Middle() {",
+					'\treturn <section data-testid="MiddleBox" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { isError, envelope } = await callTool(
+					client,
+					"get_testid_tree",
+					{ component: "Shell", followComponents: false },
+				);
+
+				expect(isError).toBe(false);
+				// It used to be faked as `depth: 1`, so the answer blamed a budget
+				// that was never reached and reported the tree as truncated.
+				expect(envelope.meta?.truncated).toBeUndefined();
+				expect(envelope.meta?.fidelity).toBe("partial");
+				expect(warningCodes(envelope)).not.toContain("depth-limit-reached");
+				expect(warningCodes(envelope)).toContain("components-not-followed");
+				expect(String(envelope.meta?.hint)).toContain("followComponents: true");
+			},
+		);
+	}, 30_000);
+
+	it("renders placement and each kind of hole distinctly in outline format", async () => {
+		await withProject(
+			"ppo-outline-labels-",
+			{
+				"src/Page.tsx": [
+					'import { Gapped } from "@ext/ui";',
+					"export function Page() {",
+					"\treturn (",
+					"\t\t<Gapped>",
+					'\t\t\t<span data-testid="Slotted" />',
+					"\t\t\t<Nested />",
+					"\t\t</Gapped>",
+					"\t);",
+					"}",
+					"",
+					"export function Nested() {",
+					'\treturn <b data-testid="Deep" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const passed = await callTool(client, "get_testid_tree", {
+					component: "Page",
+					format: "outline",
+				});
+				const text = String(passed.envelope.data);
+				expect(text).toContain("slot");
+				expect(text).toContain("external module");
+
+				const stubbed = await callTool(client, "get_testid_tree", {
+					component: "Page",
+					format: "outline",
+					depth: 1,
+				});
+				const stubbedText = String(stubbed.envelope.data);
+				expect(stubbedText).toContain("depth limit");
+				// Two different situations must not read as one `unresolved:` bucket.
+				expect(stubbedText).not.toBe(text);
+			},
+		);
+	}, 30_000);
+
+	it("says the walk was depth-limited rather than implying the tree is whole", async () => {
+		const files = {
+			"src/Deep.tsx": [
+				"export function Shell() {",
+				'\treturn <div data-testid="ShellBox"><Middle /></div>;',
+				"}",
+				"",
+				"export function Middle() {",
+				'\treturn <section data-testid="MiddleBox"><Leaf /></section>;',
+				"}",
+				"",
+				"export function Leaf() {",
+				'\treturn <span data-testid="LeafBox" />;',
+				"}",
+				"",
+			].join("\n"),
+		};
+
+		await withProject("ppo-depth-hint-", files, async (client) => {
+			const shallow = await callTool(client, "get_testid_tree", {
+				component: "Shell",
+				depth: 1,
+			});
+
+			expect(shallow.isError).toBe(false);
+			expect(shallow.envelope.meta?.fidelity).toBe("partial");
+			expect(shallow.envelope.meta?.truncated).toBe(true);
+			expect(String(shallow.envelope.meta?.hint)).toContain("depth");
+
+			// The hint has to actually work.
+			const deep = await callTool(client, "get_testid_tree", {
+				component: "Shell",
+				depth: 3,
+			});
+			expect(deep.envelope.meta?.fidelity).toBe("full");
+			expect(JSON.stringify(deep.envelope.data)).toContain("LeafBox");
 		});
 	}, 30_000);
 
@@ -457,7 +571,7 @@ describe("MCP server over in-memory transport", () => {
 					component: "Inner",
 				});
 				const rootedData = rooted.envelope.data as Payload;
-				expect(rooted.envelope.meta?.rootedAt).toContain("Inner");
+				expect(rootedData.roots[0]).toMatchObject({ tag: "span" });
 				expect(rootedData.stats.nodes).toBe(countNodes(rootedData.roots));
 				expect(
 					rootedData.stats.testIds,
@@ -467,7 +581,11 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
-	it("refuses to substitute another component when the requested one is unreachable", async () => {
+	// This used to fail with `ambiguous_component`: the engine could only root a
+	// file at its *first* component, so a sibling that nothing rendered was
+	// unreachable and the handler had to refuse rather than answer with Alpha.
+	// The engine roots at a named declaration now, so the honest answer exists.
+	it("roots at a sibling component that nothing else renders", async () => {
 		await withProject(
 			"ppo-sibling-component-",
 			{
@@ -491,9 +609,11 @@ describe("MCP server over in-memory transport", () => {
 					},
 				);
 
-				expect(isError).toBe(true);
-				expect(envelope.error?.code).toBe("ambiguous_component");
-				expect(envelope.error?.candidates).toEqual(["Alpha"]);
+				expect(isError).toBe(false);
+				expect(envelope.meta?.rootedAt).toBeUndefined();
+				const serialized = JSON.stringify(envelope.data);
+				expect(serialized).toContain("BetaBox");
+				expect(serialized).not.toContain("AlphaBox");
 			},
 		);
 	}, 30_000);

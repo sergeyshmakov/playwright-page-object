@@ -230,9 +230,17 @@ export function handleGetTestIdTree(
 	workspace: Workspace,
 	args: z.infer<typeof getTestIdTreeInput>,
 ) {
-	const depth = args.followComponents ? args.depth : 1;
+	// `followComponents` is a real engine option now, so it no longer has to be
+	// faked as `depth: 1`. That collapse reported every component boundary as
+	// `depth-limit-reached` and set `truncated`, telling callers a budget had run
+	// out when they had simply asked for one level.
+	const depth = args.depth;
+	const followComponents = args.followComponents;
 
 	if (args.testId) {
+		// A lookup answers from the flat inventory, which is complete whatever the
+		// walk did. `followComponents` shapes the tree, so narrowing the lookup by
+		// it would answer "not rendered" about a file the walk simply skipped.
 		const tree = buildTestIdTree(workspace, {
 			attribute: args.attribute,
 			maxDepth: depth,
@@ -271,6 +279,7 @@ export function handleGetTestIdTree(
 	}
 
 	let entry = args.file;
+	let entryComponent: string | undefined;
 	let requested: ComponentInfo | undefined;
 	let siblings: ComponentInfo[] = [];
 	const scopeFile = args.file;
@@ -278,6 +287,7 @@ export function handleGetTestIdTree(
 		const probe = buildTestIdTree(workspace, {
 			attribute: args.attribute,
 			maxDepth: 1,
+			followComponents: false,
 		});
 		const components = Object.values(probe.components);
 		const named = components.filter(
@@ -314,6 +324,10 @@ export function handleGetTestIdTree(
 		}
 		const match = matches[0];
 		entry = match.file;
+		// The engine roots where it is told now, so the name resolved here is the
+		// name the tree comes back rooted at — no re-derivation, no sibling
+		// reconciliation, no chance of answering with a component nobody asked for.
+		entryComponent = match.name;
 		requested = match;
 		siblings = components.filter(
 			(component) =>
@@ -324,9 +338,28 @@ export function handleGetTestIdTree(
 	const tree = buildTestIdTree(workspace, {
 		attribute: args.attribute,
 		entry,
+		entryComponent,
 		maxDepth: depth,
+		followComponents,
 	});
 
+	// The engine roots where it was told. The only way a named component still
+	// fails to come back is the engine refusing it outright, and its reason is
+	// more specific than anything this layer could re-derive.
+	if (requested && tree.fidelity === "flat") {
+		throw new ToolError(
+			"incomplete_tree",
+			tree.fidelityReason ??
+				`"${requested.name}" could not be rooted in "${requested.file}".`,
+			{
+				candidates: siblings.map((one) => one.name).sort(),
+				hint: `Pass testId to find where "${requested.name}" is rendered, or request one of the other components in that file.`,
+			},
+		);
+	}
+
+	const roots = tree.roots;
+	const gap = traversalGap(roots, tree.truncated === true);
 	const meta: Record<string, unknown> = {
 		attribute: tree.attribute,
 		attributeSource: tree.attributeSource,
@@ -336,65 +369,31 @@ export function handleGetTestIdTree(
 		truncated: tree.truncated,
 		scanned: tree.stats.files,
 		warnings: tree.warnings,
-		hint: environmentHint(tree.warnings),
+		// A partial tree is the normal answer for any real app, so the useful
+		// thing is not the word but what to do about it. "Absent from this tree"
+		// must never be read as "not rendered" while a gap is open.
+		hint: withEnvironmentHint(
+			tree.warnings,
+			gap ? gapHint(gap, depth, followComponents) : undefined,
+		),
 	};
 
-	// The engine roots a file at its first (or default-exported) component, so a
-	// file declaring several can answer with a component nobody asked for. Never
-	// hand that back as if it were the requested one.
-	let roots = tree.roots;
-	if (requested && siblings.length > 0 && tree.fidelity === "full") {
-		const actual = roots[0]?.component;
-		if (actual === undefined) {
-			meta.hint = withEnvironmentHint(
-				tree.warnings,
-				`The tree is empty and "${requested.file}" declares ${siblings.length + 1} components; a file is rooted at its first component, so this may not be "${requested.name}".`,
-			);
-		} else if (actual !== requested.name) {
-			const subtree = findComponentNode(roots, requested.id);
-			if (!subtree) {
-				// "Not rendered" is only true of a tree the walk saw in full. A walk
-				// cut short by depth, by the node budget or by an unexpanded child
-				// proves nothing about the component it never reached — say that
-				// instead of blaming the caller for asking.
-				const gap = traversalGap(roots, tree.truncated === true);
-				if (gap) {
-					throw new ToolError(
-						"incomplete_tree",
-						`"${requested.name}" was not reached under "${actual}", but ${gap.detail}, so whether it renders there is unknown.`,
-						{
-							hint: gapHint(gap, requested.name, depth, args.followComponents),
-						},
-					);
-				}
-				throw new ToolError(
-					"ambiguous_component",
-					`"${requested.file}" declares ${siblings.length + 1} components; it is rooted at "${actual}", and "${requested.name}" is not rendered inside it.`,
-					{
-						candidates: [
-							...new Set([actual, ...siblings.map((one) => one.name)]),
-						].sort(),
-						hint: `Request component "${actual}", or pass testId to find where "${requested.name}" is rendered.`,
-					},
-				);
-			}
-			roots = [subtree];
-			meta.rootedAt = `${requested.name}, as rendered inside ${actual}`;
-		}
-	}
-
 	if (args.format === "outline") {
-		return ok(renderTestIdOutline({ ...tree, roots }), meta);
+		return ok(renderTestIdOutline(tree), meta);
 	}
 
 	if (tree.fidelity === "flat") {
 		return ok({ fidelity: "flat", inventory: tree.inventory }, meta);
 	}
 
-	// Counted over `roots`, not over the scan: after a re-root those are two
-	// different shapes, and stats that describe something the caller cannot see
-	// are worse than no stats. Scan-wide numbers live in `meta.scanned`.
-	return ok({ fidelity: "full", roots, stats: subtreeStats(roots) }, meta);
+	// Counted over `roots`, not over the scan: those are two different shapes
+	// whenever the tree is rooted at one component of many, and stats describing
+	// something the caller cannot see are worse than no stats. Scan-wide numbers
+	// live in `meta.scanned`.
+	return ok(
+		{ fidelity: tree.fidelity, roots, stats: subtreeStats(roots) },
+		meta,
+	);
 }
 
 /**
@@ -444,23 +443,6 @@ function nearbyFiles(wanted: string, files: string[]): string[] {
 	].slice(0, 5);
 }
 
-/** First node in document order whose expansion is `componentId`. */
-function findComponentNode(
-	nodes: UiNode[],
-	componentId: string,
-): UiNode | null {
-	for (const node of nodes) {
-		if (node.componentRef === componentId) {
-			return node;
-		}
-		const found = findComponentNode(node.children, componentId);
-		if (found) {
-			return found;
-		}
-	}
-	return null;
-}
-
 /** Counts describing exactly the nodes shipped in `roots`. */
 function subtreeStats(roots: UiNode[]): Record<string, number> {
 	let nodes = 0;
@@ -488,7 +470,7 @@ function subtreeStats(roots: UiNode[]): Record<string, number> {
 }
 
 interface TreeGap {
-	kind: "depth" | "nodes" | "boundary";
+	kind: "not-followed" | "depth" | "nodes" | "boundary";
 	detail: string;
 }
 
@@ -496,24 +478,31 @@ interface TreeGap {
  * Why the walk could not see the whole tree, or `null` when it saw all of it.
  *
  * Only cuts that *hide* nodes count: the depth limit and the node budget stop
- * the walk outright, and a component left unexpanded (external module,
- * unresolved reference, JSX children composition) hides whatever it renders.
+ * the walk outright, a component left unexpanded hides whatever it renders, and
+ * a `#unresolved` marker stands for content the walk saw but could not place.
  * `spread-props` is not one of them — that marks an unknown test id on a node
  * whose children were still walked. `expandedAt` is not one either: the subtree
  * it points at is in this same tree.
+ *
+ * `not-followed` is ranked first because it is the only one the caller asked
+ * for, so it is the only one where the fix is a different argument rather than
+ * a bigger budget.
  */
 function traversalGap(roots: UiNode[], truncated: boolean): TreeGap | null {
+	let notFollowed = 0;
 	let depthCut = false;
 	let boundary: string | undefined;
 	const visit = (nodes: UiNode[]): void => {
 		for (const node of nodes) {
 			const reason = node.unresolved?.reason;
-			if (reason === "depth-limit-reached") {
+			if (reason === "not-followed") {
+				notFollowed += 1;
+			} else if (reason === "depth-limit-reached") {
 				depthCut = true;
 			} else if (
 				reason !== undefined &&
 				reason !== "spread-props" &&
-				node.nodeType === "component"
+				(node.nodeType === "component" || node.nodeType === "unresolved")
 			) {
 				boundary ??= reason;
 			}
@@ -522,6 +511,12 @@ function traversalGap(roots: UiNode[], truncated: boolean): TreeGap | null {
 	};
 	visit(roots);
 
+	if (notFollowed > 0) {
+		return {
+			kind: "not-followed",
+			detail: `${notFollowed} component tag(s) were reported without expanding them`,
+		};
+	}
 	if (depthCut) {
 		return { kind: "depth", detail: "the depth limit cut the walk short" };
 	}
@@ -537,22 +532,35 @@ function traversalGap(roots: UiNode[], truncated: boolean): TreeGap | null {
 	return null;
 }
 
+/**
+ * What to do about a gap: the next call, not an apology.
+ *
+ * `meta.fidelityReason` already counts the holes and names their codes, so this
+ * says only the two things it cannot — which argument closes the gap, and that
+ * an id's absence from a holed tree proves nothing.
+ */
 function gapHint(
 	gap: TreeGap,
-	name: string,
 	depth: number,
 	followComponents: boolean,
 ): string {
-	const findIt = `Pass testId to find where "${name}" is rendered.`;
-	if (gap.kind !== "depth") {
-		return findIt;
+	const caveat =
+		"An id missing from an incomplete tree may still be rendered; pass testId to look one up across the whole scan.";
+	if (gap.kind === "not-followed") {
+		return `Re-call with followComponents: true to see inside them. ${caveat}`;
 	}
-	if (!followComponents) {
-		return `Re-call with followComponents: true; it pinned the walk to 1 level. ${findIt}`;
+	if (gap.kind === "depth") {
+		if (!followComponents) {
+			return `Re-call with followComponents: true. ${caveat}`;
+		}
+		return depth >= 10
+			? `Depth is already at the maximum. ${caveat}`
+			: `Re-call with a larger depth (this call walked ${depth}, max 10). ${caveat}`;
 	}
-	return depth >= 10
-		? `Depth is already at the maximum. ${findIt}`
-		: `Re-call with a larger depth (this call walked ${depth}, max 10). ${findIt}`;
+	if (gap.kind === "nodes") {
+		return `The node budget ran out; re-call with file or component set to a narrower root. ${caveat}`;
+	}
+	return caveat;
 }
 
 export function handleMapCoverage(
