@@ -8,6 +8,7 @@ import type { McpServerOptions } from "./options";
 import { createMcpServer } from "./server";
 
 export type { McpServerOptions } from "./options";
+export { validateServerOptions } from "./options";
 export { createMcpServer } from "./server";
 
 export interface RunMcpServerOptions extends McpServerOptions {

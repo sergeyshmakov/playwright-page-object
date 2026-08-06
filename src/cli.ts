@@ -24,12 +24,13 @@ Commands:
         objects and rendered test ids in this repository.
 
 Options for mcp:
-  --project-root <dir>   Repository root to analyze          (default: cwd)
-  --tsconfig <file>      tsconfig.json to use                (default: discovered)
-  --src-dir <dir>        Restrict scanning to this directory (repeatable)
-  --attribute <name>     Test-id attribute                   (default: playwright.config use.testIdAttribute, else data-testid)
-  --max-files <n>        Cap on files parsed                 (default: 2000)
-  --log-level <level>    silent | error | info | debug      (default: error, stderr only)
+  --project-root <dir>       Repository root to analyze          (default: cwd)
+  --tsconfig <file>          tsconfig.json to use                (default: discovered)
+  --playwright-config <file> playwright.config.* to read         (default: discovered, ranked)
+  --src-dir <dir>            Restrict scanning to this directory (repeatable)
+  --attribute <name>         Test-id attribute                   (default: playwright.config use.testIdAttribute, else data-testid)
+  --max-files <n>            Cap on files parsed                 (default: 2000)
+  --log-level <level>        silent | error | info | debug       (default: error, stderr only)
 
 Global options:
   -v, --version   Print the installed version
@@ -64,6 +65,7 @@ function runMcp(argv: string[]): number {
 			options: {
 				"project-root": { type: "string" },
 				tsconfig: { type: "string" },
+				"playwright-config": { type: "string" },
 				"src-dir": { type: "string", multiple: true },
 				attribute: { type: "string" },
 				"max-files": { type: "string" },
@@ -105,12 +107,25 @@ function runMcp(argv: string[]): number {
 	// tsup keeps it external so the CLI bundle stays free of ts-morph/the SDK.
 	const mcp = require("playwright-page-object/mcp") as typeof import("./mcp");
 
-	const handle = mcp.runMcpServer({
+	const serverOptions = {
 		projectRoot: resolve((values["project-root"] as string | undefined) ?? ""),
 		tsconfig: values.tsconfig as string | undefined,
+		playwrightConfig: values["playwright-config"] as string | undefined,
 		srcDirs: values["src-dir"] as string[] | undefined,
 		attribute: values.attribute as string | undefined,
 		maxFiles,
+	};
+
+	// A stdio server that starts against a mistyped path stays up for the whole
+	// session serving answers derived from a scope nobody asked for. Refusing at
+	// startup is the only place a human still sees the message.
+	const problems = mcp.validateServerOptions(serverOptions);
+	if (problems.length > 0) {
+		return fail(problems.join("\n"));
+	}
+
+	const handle = mcp.runMcpServer({
+		...serverOptions,
 		logLevel: logLevel as "silent" | "error" | "info" | "debug",
 	});
 

@@ -56,6 +56,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	const workspaceOptions = {
 		projectRoot: options.projectRoot,
 		tsconfig: options.tsconfig,
+		playwrightConfig: options.playwrightConfig,
 		include: options.srcDirs,
 		maxFiles: options.maxFiles,
 		attribute: options.attribute,

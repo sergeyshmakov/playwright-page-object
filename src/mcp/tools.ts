@@ -4,6 +4,7 @@ import {
 	buildPageObjectTree,
 	buildTestIdTree,
 	type ComponentInfo,
+	type Diagnostic,
 	discoverPageObjects,
 	nearestIds,
 	normalizeRelPath,
@@ -26,6 +27,80 @@ import type {
  * Thin tool handlers: validate cross-field rules, call the analysis engine,
  * shape a token-lean payload, wrap in the response envelope.
  */
+
+/**
+ * Turns an environment diagnostic into the flag that fixes it.
+ *
+ * The engine deliberately names no CLI option — it is consumed by more than one
+ * surface — but an agent holding a wrong answer needs a concrete next move, and
+ * "the attribute is wrong" without "restart with `--attribute data-tid`" is a
+ * dead end. This is the one place that translation happens, and it goes in
+ * front of every per-tool hint: no advice about which tool to call next matters
+ * while the analysis is reading the wrong attribute.
+ */
+export function environmentHint(
+	warnings: Diagnostic[] | undefined,
+): string | undefined {
+	if (!warnings || warnings.length === 0) {
+		return undefined;
+	}
+	const byCode = (code: string): Diagnostic | undefined =>
+		warnings.find((warning) => warning.code === code);
+
+	const mismatch = byCode("attribute-mismatch");
+	if (mismatch) {
+		const candidate = String(mismatch.data?.candidate ?? "");
+		return `The test-id attribute is almost certainly wrong: nothing in the scanned sources uses "${mismatch.data?.attribute}", while "${candidate}" is everywhere. Restart the server with --attribute ${candidate}, or with --playwright-config <file> pointing at the config that sets use.testIdAttribute. Treat this result as unreliable until then.`;
+	}
+
+	const blind = byCode("scope-empty") ?? byCode("attribute-no-evidence");
+	if (blind) {
+		return blind.code === "scope-empty"
+			? "No JSX/TSX sources were scanned, so no rendered test id can be found and every selector will look unmatched. Restart the server with --src-dir <dir> (or --project-root <dir>) covering the application sources."
+			: `No element in the scanned sources uses the "${blind.data?.attribute}" attribute. Restart the server with --src-dir <dir> so the application sources are in scope, or with --attribute <name> if the sources use a different one.`;
+	}
+
+	const missing = warnings.find(
+		(warning) =>
+			warning.code === "scope-dir-missing" && warning.severity !== "info",
+	);
+	if (missing) {
+		return `The scanned directory "${missing.data?.path}" does not exist, so the analysis saw less than you think. Restart the server with a --src-dir that is on disk.`;
+	}
+
+	const ambiguous = warnings.find(
+		(warning) =>
+			warning.code === "playwright-config-ambiguous" &&
+			warning.severity === "warning",
+	);
+	if (ambiguous) {
+		return `${ambiguous.data?.count} Playwright configs were found and none of them sets use.testIdAttribute; ${ambiguous.data?.chosen} was read. If the attribute lives elsewhere, restart the server with --playwright-config <file>.`;
+	}
+
+	const conflict = byCode("testid-attribute-conflict");
+	if (conflict) {
+		return `Two Playwright configs disagree about use.testIdAttribute. Restart the server with --playwright-config <file> to pin the one your tests run with.`;
+	}
+
+	return undefined;
+}
+
+/** Prepends the environment hint, so it is read before any per-tool advice. */
+function withEnvironmentHint(
+	warnings: Diagnostic[] | undefined,
+	hint: string | undefined,
+): string | undefined {
+	const environment = environmentHint(warnings);
+	if (!environment) {
+		return hint;
+	}
+	return hint ? `${environment} ${hint}` : environment;
+}
+
+/** Config file the analysis actually read, for `meta.playwrightConfig`. */
+function configFileOf(workspace: Workspace): string | undefined {
+	return workspace.playwright().configFile ?? undefined;
+}
 
 function compactSelector(selector: SelectorInfo): Record<string, unknown> {
 	const compact: Record<string, unknown> = { kind: selector.kind };
@@ -96,13 +171,16 @@ export function handleListPageObjects(
 		root: index.projectRoot,
 		attribute: index.testIdAttribute,
 		attributeSource: index.testIdAttributeSource,
+		playwrightConfig: configFileOf(workspace),
 		scanned: index.stats.filesScanned,
 		total: total > shown.length ? total : undefined,
 		warnings: index.warnings,
-		hint:
+		hint: withEnvironmentHint(
+			index.warnings,
 			total === 0
 				? 'No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with --src-dir <dir>; also check that those files import from "playwright-page-object".'
 				: undefined,
+		),
 	});
 }
 
@@ -135,8 +213,10 @@ export function handleGetPageObjectTree(
 		root: tree.projectRoot,
 		attribute: tree.testIdAttribute,
 		attributeSource: tree.testIdAttributeSource,
+		playwrightConfig: configFileOf(workspace),
 		truncated: tree.truncated,
 		warnings: tree.warnings,
+		hint: environmentHint(tree.warnings),
 	};
 
 	if (args.format === "outline") {
@@ -175,10 +255,17 @@ export function handleGetTestIdTree(
 			{
 				attribute: tree.attribute,
 				attributeSource: tree.attributeSource,
-				hint:
+				playwrightConfig: configFileOf(workspace),
+				// "That id is not rendered anywhere" is the single most misleading
+				// answer this server can give when the attribute or the scope is
+				// wrong, and this branch used to ship it with no warnings at all.
+				warnings: tree.warnings,
+				hint: withEnvironmentHint(
+					tree.warnings,
 					occurrences.length === 0
 						? `No rendered element with test id "${needle}" was found. Call get_testid_tree without testId to see the full tree, or map_coverage to check for renamed ids.`
 						: undefined,
+				),
 			},
 		);
 	}
@@ -243,11 +330,13 @@ export function handleGetTestIdTree(
 	const meta: Record<string, unknown> = {
 		attribute: tree.attribute,
 		attributeSource: tree.attributeSource,
+		playwrightConfig: configFileOf(workspace),
 		fidelity: tree.fidelity,
 		fidelityReason: tree.fidelityReason,
 		truncated: tree.truncated,
 		scanned: tree.stats.files,
 		warnings: tree.warnings,
+		hint: environmentHint(tree.warnings),
 	};
 
 	// The engine roots a file at its first (or default-exported) component, so a
@@ -257,7 +346,10 @@ export function handleGetTestIdTree(
 	if (requested && siblings.length > 0 && tree.fidelity === "full") {
 		const actual = roots[0]?.component;
 		if (actual === undefined) {
-			meta.hint = `The tree is empty and "${requested.file}" declares ${siblings.length + 1} components; a file is rooted at its first component, so this may not be "${requested.name}".`;
+			meta.hint = withEnvironmentHint(
+				tree.warnings,
+				`The tree is empty and "${requested.file}" declares ${siblings.length + 1} components; a file is rooted at its first component, so this may not be "${requested.name}".`,
+			);
 		} else if (actual !== requested.name) {
 			const subtree = findComponentNode(roots, requested.id);
 			if (!subtree) {
@@ -572,8 +664,13 @@ export function handleMapCoverage(
 		attributeSource: args.attribute
 			? "param"
 			: workspace.testIdAttribute().source,
+		playwrightConfig: configFileOf(workspace),
 		alsoIncluded,
 		warnings: report.warnings,
 		truncated,
+		// A coverage score computed against the wrong attribute reads as a healthy
+		// `1` (zero of zero ids covered) — the one number in this payload nobody
+		// double-checks. It gets the loudest treatment.
+		hint: environmentHint(report.warnings),
 	});
 }

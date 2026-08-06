@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterAll, describe, expect, it } from "vitest";
+import type { McpServerOptions } from "../../mcp/options";
 import { createMcpServer } from "../../mcp/server";
 
 /**
@@ -16,9 +17,12 @@ const exampleRoot = path.resolve(process.cwd(), "example");
 type ClientHandle = { client: Client; close: () => Promise<void> };
 const openClients: ClientHandle[] = [];
 
-async function connect(projectRoot: string): Promise<ClientHandle> {
+async function connect(
+	projectRoot: string,
+	extra: Partial<McpServerOptions> = {},
+): Promise<ClientHandle> {
 	const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
-	const server = createMcpServer({ projectRoot });
+	const server = createMcpServer({ projectRoot, ...extra });
 	const client = new Client({ name: "vitest", version: "0.0.0" });
 	await server.connect(serverEnd);
 	await client.connect(clientEnd);
@@ -65,13 +69,14 @@ async function withProject<T>(
 	prefix: string,
 	files: Record<string, string>,
 	body: (client: Client) => Promise<T>,
+	options: Partial<McpServerOptions> = {},
 ): Promise<T> {
 	const root = mkdtempSync(path.join(tmpdir(), prefix));
 	try {
 		for (const [rel, contents] of Object.entries(files)) {
 			writeFile(root, rel, contents);
 		}
-		const { client } = await connect(root);
+		const { client } = await connect(root, options);
 		return await body(client);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -759,6 +764,190 @@ describe("MCP server over in-memory transport", () => {
 					"dropping /i reads as a case-sensitive locator",
 				).toBe("i");
 			},
+		);
+	}, 30_000);
+
+	/**
+	 * The field failure, end to end.
+	 *
+	 * A monorepo whose Playwright config lives at
+	 * `playwright/playwright.base.config.ts` and whose components use `data-tid`.
+	 * The old fixed-basename probe looked at `<root>` and `<root>/{test,tests,e2e}`
+	 * only, found nothing, assumed `data-testid`, and every tool answered
+	 * confidently about a repository it had mis-read — with no warnings at all.
+	 */
+	it("reads a config from a directory no fixed list would have probed", async () => {
+		await withProject(
+			"ppo-nested-config-",
+			{
+				"playwright/playwright.base.config.ts": [
+					'import { defineConfig } from "@playwright/test";',
+					"export default defineConfig({",
+					'\ttestDir: "../e2e",',
+					'\tuse: { testIdAttribute: "data-tid" },',
+					"});",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-tid="AppRoot"><input data-tid="EmailInput" /></div>;',
+					"}",
+					"",
+				].join("\n"),
+				"e2e/LoginPage.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("AppRoot")',
+					"export class LoginPage extends RootPageObject {",
+					'\t@Selector("EmailInput")',
+					"\taccessor Email!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const calls: Array<[string, Record<string, unknown>]> = [
+					["list_page_objects", {}],
+					["get_page_object_tree", { class: "LoginPage" }],
+					["get_testid_tree", {}],
+					["map_coverage", {}],
+				];
+
+				for (const [name, args] of calls) {
+					const { isError, envelope } = await callTool(client, name, args);
+					expect(isError, `${name} must succeed`).toBe(false);
+					expect(envelope.meta?.attribute, `${name} attribute`).toBe(
+						"data-tid",
+					);
+					expect(envelope.meta?.attributeSource, `${name} source`).toBe(
+						"playwright-config",
+					);
+					expect(envelope.meta?.playwrightConfig, `${name} config`).toBe(
+						"playwright/playwright.base.config.ts",
+					);
+					expect(
+						warningCodes(envelope),
+						`${name} must not report a mismatch it does not have`,
+					).not.toContain("attribute-mismatch");
+				}
+
+				// The point of getting the attribute right: the selectors match.
+				const coverage = await callTool(client, "map_coverage", {});
+				const report = coverage.envelope.data as {
+					summary: { coveredUiTestIds: number; matchableUiTestIds: number };
+					deadSelectors: unknown[];
+				};
+				expect(report.summary.matchableUiTestIds).toBe(2);
+				expect(report.summary.coveredUiTestIds).toBe(2);
+				expect(report.deadSelectors).toHaveLength(0);
+			},
+		);
+	}, 30_000);
+
+	// The other half of the same failure: when the attribute really is wrong,
+	// nothing in the payload shape says so — the numbers all look healthy.
+	it("shouts on every tool when the attribute does not match the sources", async () => {
+		await withProject(
+			"ppo-attr-mismatch-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					"\treturn (",
+					'\t\t<div data-tid="AppRoot">',
+					'\t\t\t<input data-tid="EmailInput" />',
+					'\t\t\t<button data-tid="SubmitButton" />',
+					"\t\t</div>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+				"e2e/LoginPage.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("AppRoot")',
+					"export class LoginPage extends RootPageObject {",
+					'\t@Selector("EmailInput")',
+					"\taccessor Email!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const calls: Array<[string, Record<string, unknown>]> = [
+					["list_page_objects", {}],
+					["get_page_object_tree", { class: "LoginPage" }],
+					["get_testid_tree", {}],
+					["get_testid_tree", { testId: "EmailInput" }],
+					["map_coverage", {}],
+				];
+
+				for (const [name, args] of calls) {
+					const { isError, envelope } = await callTool(client, name, args);
+					expect(isError, `${name} must still answer`).toBe(false);
+					expect(warningCodes(envelope), `${name} warnings`).toContain(
+						"attribute-mismatch",
+					);
+					expect(
+						String(envelope.meta?.hint ?? ""),
+						`${name} must say which flag fixes it`,
+					).toContain("--attribute data-tid");
+				}
+			},
+		);
+	}, 30_000);
+
+	it("tells a caller to fix the scope when no UI source was scanned", async () => {
+		await withProject(
+			"ppo-empty-scope-",
+			{
+				"e2e/LoginPage.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("AppRoot")',
+					"export class LoginPage extends RootPageObject {",
+					'\t@Selector("EmailInput")',
+					"\taccessor Email!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "map_coverage", {});
+				expect(warningCodes(envelope)).toContain("scope-empty");
+				expect(String(envelope.meta?.hint ?? "")).toContain("--src-dir");
+			},
+		);
+	}, 30_000);
+
+	it("honours --playwright-config over anything discovery would pick", async () => {
+		await withProject(
+			"ppo-explicit-config-",
+			{
+				"playwright.config.ts": [
+					'export default { use: { testIdAttribute: "data-discovered" } };',
+					"",
+				].join("\n"),
+				"config/pw.ts": [
+					'export default { use: { testIdAttribute: "data-pinned" } };',
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-pinned="AppRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {});
+				expect(envelope.meta?.attribute).toBe("data-pinned");
+				expect(envelope.meta?.playwrightConfig).toBe("config/pw.ts");
+				expect(warningCodes(envelope)).not.toContain("attribute-mismatch");
+			},
+			{ playwrightConfig: "config/pw.ts" },
 		);
 	}, 30_000);
 
