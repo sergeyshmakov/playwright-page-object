@@ -38,6 +38,10 @@ updates:
       # AST semantics under the MCP analysis tools. Review majors manually.
       - dependency-name: "ts-morph"
         versions: [ ">=29" ]
+      # commander >=15 requires node >=22.12; this package supports node >=20.
+      # Lift when engines.node moves past 22.12.
+      - dependency-name: "commander"
+        versions: [ ">=15" ]
 
   - package-ecosystem: "npm"
     directory: "/docs"

@@ -271,7 +271,7 @@ async function main() {
 			`unknown command exited ${unknownResult.code}, expected 1`,
 		);
 		assert(
-			unknownResult.stderr.includes("Unknown command"),
+			/unknown command/i.test(unknownResult.stderr),
 			"unknown command did not write to stderr",
 		);
 
