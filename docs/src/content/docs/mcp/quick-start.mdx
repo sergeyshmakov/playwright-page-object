@@ -1,0 +1,204 @@
+---
+title: Quick Start
+description: Install the MCP server, register it in Claude Code, Cursor, VS Code or Codex CLI, and see the first three calls an agent makes.
+---
+
+## Install
+
+The package must be installed for `npx` to resolve the local bin:
+
+```bash
+npm install -D playwright-page-object
+```
+
+## Verify
+
+Run the server's help before you wire it into a client. It prints in well under a second, because the analysis engine loads only when the server actually starts:
+
+```bash
+npx playwright-page-object mcp --help
+```
+
+You should see the flag list. If that command fails, no client will be able to start the server either, and the error is easier to read here than in a client log.
+
+## Register the server
+
+The server speaks stdio. Any MCP client can run it; only the config file shape differs.
+
+### Claude Code
+
+Committed and project-scoped, so the whole team gets it. Create `.mcp.json` at the repository root:
+
+```json
+{
+	"mcpServers": {
+		"playwright-page-object": {
+			"command": "npx",
+			"args": ["playwright-page-object", "mcp"]
+		}
+	}
+}
+```
+
+Or add it with one command:
+
+```bash
+claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
+```
+
+### Cursor
+
+`.cursor/mcp.json`, same shape:
+
+```json
+{
+	"mcpServers": {
+		"playwright-page-object": {
+			"command": "npx",
+			"args": ["playwright-page-object", "mcp"]
+		}
+	}
+}
+```
+
+### VS Code
+
+`.vscode/mcp.json`. Note the different top-level key and the explicit `type`:
+
+```json
+{
+	"servers": {
+		"playwright-page-object": {
+			"type": "stdio",
+			"command": "npx",
+			"args": ["playwright-page-object", "mcp"]
+		}
+	}
+}
+```
+
+### Codex CLI
+
+`~/.codex/config.toml`:
+
+```toml
+[mcp_servers.playwright-page-object]
+command = "npx"
+args = ["playwright-page-object", "mcp"]
+```
+
+### Two spawn caveats
+
+- **Running without installing first.** Use `npx -y playwright-page-object mcp`. The `-y` matters: a stdio server has no TTY to answer npx's install prompt, and without it the handshake hangs.
+- **Windows.** Clients that spawn the command without a shell cannot execute the `npx` shim. Use `"command": "cmd"` with `"args": ["/c", "npx", "playwright-page-object", "mcp"]`.
+
+If your repository is not the client's working directory, or the app you want analysed is one package of a monorepo, add `--project-root`:
+
+```json
+{
+	"mcpServers": {
+		"playwright-page-object": {
+			"command": "npx",
+			"args": ["playwright-page-object", "mcp", "--project-root", "apps/web"]
+		}
+	}
+}
+```
+
+See [Configuration](/mcp/configuration/) for the rest of the flags.
+
+## The first three calls
+
+These are real responses from the [example checkout app](https://github.com/sergeyshmakov/playwright-page-object/tree/main/example) in this repository, pretty-printed and abbreviated. On the wire every response is a single compact-JSON text block.
+
+### 1. What page objects already exist
+
+An agent calls `list_page_objects` before it globs anything, and before it creates a page object that may already exist:
+
+```json
+{
+	"ok": true,
+	"data": [
+		{
+			"name": "CheckoutPage",
+			"file": "e2e/page-objects/CheckoutPage.ts",
+			"kind": "rootPageObject",
+			"root": { "kind": "testId", "testId": "CheckoutPage" },
+			"fixtures": ["checkoutPage"],
+			"members": 6,
+			"methods": 3
+		},
+		{
+			"name": "CartItemControl",
+			"file": "e2e/page-objects/CartItemControl.ts",
+			"kind": "nestedPageObject",
+			"members": 1,
+			"methods": 1
+		}
+	],
+	"meta": {
+		"root": "/repo/example",
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts",
+		"scanned": 17,
+		"total": 6
+	}
+}
+```
+
+Six classes, no files read. `meta.attribute` and `meta.attributeSource` say which test-id attribute every later answer will be read with.
+
+### 2. What one page object exposes
+
+`get_page_object_tree` with `{"class": "CheckoutPage", "format": "outline"}` returns the selector tree as indented text, which costs fewer tokens than JSON:
+
+```text
+CheckoutPage (rootPageObject)  @testId "CheckoutPage"  e2e/page-objects/CheckoutPage.ts
+  PromoCode -> PageObject  @testId "PromoCodeInput"
+  PromoCodeInput -> Locator  @testId "PromoCodeInput"
+  ApplyPromoButton -> ButtonControl  @role "button" {"name":"Apply"}
+    ButtonControl (nestedPageObject)  e2e/page-objects/controls/ButtonControl.ts
+  CartItems -> ListPageObject<CartItemControl>  @testIdPattern /CartItem_/
+    CartItemControl (nestedPageObject)  e2e/page-objects/CartItemControl.ts
+      RemoveButton -> ButtonControl  @role "button" {"name":"Remove"}
+        ButtonControl (see above)
+      methods: expectVisible()
+  CartItemsAsPlainList -> ListPageObject<PageObject>  @testIdPattern /CartItem_/
+  CartItemRows -> Locator  @testIdPattern /CartItem_/
+  methods: applyPromoCode(code: string), expectCartEmpty(), expectCartHasItemCount(n: number)
+```
+
+The chain `checkoutPage.CartItems.first().RemoveButton` falls straight out of that, and so does the fact that `applyPromoCode(code)` already exists and does not need reimplementing.
+
+### 3. What the app actually renders
+
+`get_testid_tree` with `{"format": "outline"}` walks from the app entry:
+
+```text
+-  Header  src/App.tsx:31
+  -  header  src/components/Header.tsx:3
+    -  h1  src/components/Header.tsx:4
+    SignIn  button  src/components/Header.tsx:5
+-  CheckoutPage  src/App.tsx:32
+  CheckoutPage  main  src/components/CheckoutPage.tsx:18
+    PromoSection  section  src/components/CheckoutPage.tsx:19
+      PromoCodeInput  input  src/components/CheckoutPage.tsx:21
+      ApplyPromoButton  button  src/components/CheckoutPage.tsx:28
+      PromoApplied  span  src/components/CheckoutPage.tsx:36 (conditional)
+    CartSection  section  src/components/CheckoutPage.tsx:39
+      EmptyCart  p  src/components/CheckoutPage.tsx:42 (conditional)
+      CartItemsList  div  src/components/CheckoutPage.tsx:44 (conditional)
+        -  CartItemComponent  src/components/CheckoutPage.tsx:46 (conditional, repeated)
+          CartItem_*  div  src/components/CartItem.tsx:10 (dynamic `CartItem_${item.id}`, conditional, repeated)
+            CartItemName  span  src/components/CartItem.tsx:11 (conditional, repeated)
+            CartItemPrice  span  src/components/CartItem.tsx:12 (conditional, repeated)
+            Remove  button  src/components/CartItem.tsx:13 (conditional, repeated)
+```
+
+A leading `-` marks a node with no test id. `CartItem_*` is a template-literal id reported as a pattern with the source expression, which is exactly why `@ListSelector("CartItem_")` is the right decorator for the rows. `meta.fidelity` on that response is `"full"`, so absence from this tree really does mean the id is not rendered.
+
+## Next
+
+- [Tools](/mcp/tools/) for every parameter and the error codes.
+- [Troubleshooting](/mcp/troubleshooting/) if the first call comes back empty or with a warning.

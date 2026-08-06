@@ -1,0 +1,53 @@
+---
+title: MCP Server
+description: Static analysis of your page objects and rendered test ids, exposed to AI coding agents over the Model Context Protocol.
+---
+
+`playwright-page-object` ships a local [MCP](https://modelcontextprotocol.io/) server. One command gives an AI coding agent four read-only tools that statically analyze your test suite.
+
+```bash
+npx playwright-page-object mcp
+```
+
+Everything is static analysis of your source with [ts-morph](https://ts-morph.com/). No browser, no code execution, no network. Nothing leaves your machine.
+
+## Why an agent needs it
+
+An agent asked to "add a test for removing a cart item" has two blind spots.
+
+The first is your page-object graph. A chain like `checkoutPage.CartItems.first().RemoveButton` spans three classes in three files, and the agent has to read all of them transitively to learn the chain exists. That cost repeats every task and every session.
+
+The second is your rendered markup. Nothing in the agent's context holds the real `data-testid` values, so it writes `getByTestId("remove-btn")` for an app whose id is `Remove`. The test compiles, and it fails at runtime with a timeout. That failure mode looks like success until the suite runs.
+
+The server closes both gaps with facts read from the AST. Anything it cannot resolve statically is reported as dynamic, unproven, or unresolved, with its source text. It is never guessed.
+
+## The four tools
+
+| Tool | Call it when | Returns |
+| --- | --- | --- |
+| `list_page_objects` | You need to know what page objects exist, instead of globbing | Every decorated class with its file, host kind, root selector, fixture bindings, member and method counts |
+| `get_page_object_tree` | Before writing or editing a test that touches a page object | One class's full selector tree: members, selector values, resolved types, nested controls, method signatures |
+| `get_testid_tree` | Before writing any selector | The tree of test ids your components render, with dynamic, conditional and repeated flags |
+| `map_coverage` | After renaming test ids, or when a locator times out | Matched pairs, rendered ids no page object uses, and selectors whose id is rendered nowhere |
+
+The typical order is `list_page_objects`, then `get_page_object_tree` for the class you will touch, then `get_testid_tree` before writing a selector, and `map_coverage` when something does not match.
+
+## What the server refuses to do
+
+- It never executes your Playwright config. A computed `use.testIdAttribute` resolves to unknown plus a diagnostic, not to whatever the analysing process has in its environment.
+- It never reports "not rendered" from an incomplete walk. A tree with holes is labelled `fidelity: "partial"` and says where the holes are.
+- It never counts a test id written on a component tag as rendered unless forwarding to a host element was proven. See [prop forwarding](/mcp/configuration/#assuming-prop-forwarding).
+- It never reports role, text or label selectors as dead. They cannot be checked against markup statically, so they get their own bucket.
+
+## Read next
+
+- [Quick Start](/mcp/quick-start/) — install, register the server in your client, and the first three calls an agent makes.
+- [Tools](/mcp/tools/) — every parameter, the response envelope, the meta fields, and the error codes.
+- [Configuration](/mcp/configuration/) — every CLI flag, the discovery ladders, scope control, and the freshness model.
+- [Troubleshooting](/mcp/troubleshooting/) — symptom-first fixes for wrong attributes, empty scans, and oversized responses.
+
+## See also
+
+- [Agent Skills](/ai-tooling/agent-skills/) — teaches an agent the decorator semantics; the MCP server supplies the project-specific facts.
+- [Context7](/ai-tooling/context7/)
+- [Cubic Wiki](/ai-tooling/cubic-wiki/)

@@ -1,0 +1,160 @@
+---
+title: Troubleshooting
+description: Symptom-first fixes for empty results, wrong test-id attributes, ambiguous configs, oversized responses and partial trees.
+---
+
+Read `meta.warnings` and `meta.hint` first. The server ranks warnings by how badly they invalidate the answer, and an environment problem is prepended to the hint ahead of any per-tool advice.
+
+## "No page objects found"
+
+`list_page_objects` returned an empty array with `meta.total: 0`.
+
+The hint distinguishes three causes, because two of them are the call's own arguments rather than the repository:
+
+| Hint says | Cause | Fix |
+| --- | --- | --- |
+| "No classes with playwright-page-object decorators were found" | The index itself is empty | See below |
+| "No page object matches filter … but the index holds N" | Your `filter` matched nothing | Widen it. The hint lists the closest class names |
+| "offset N is past the end of M result(s)" | You paged past the end | Re-call with a smaller `offset` |
+
+An index that is genuinely empty has two usual causes. Either the page objects are outside the scanned scope, which `--src-dir` fixes, or they do not import from `playwright-page-object` at all. Discovery is evidence-based: a class is indexed because it carries a library decorator, extends a library base class, is bound in a fixture, or is passed as a factory argument. A class that re-exports decorators through a local wrapper module is not recognised.
+
+Check `meta.scanned` in the same response. A small number there means the scope is wrong, not the discovery.
+
+## Every selector looks dead, and the attribute is wrong
+
+This is the failure the server works hardest to prevent, because it is silent. Read the attribute the analysis used before you believe any answer:
+
+```json
+{
+	"meta": {
+		"attribute": "data-qa",
+		"attributeSource": "playwright-config",
+		"warnings": [
+			{
+				"code": "attribute-mismatch",
+				"severity": "warning",
+				"message": "No element in the 5 scanned JSX/TSX file(s) uses the \"data-qa\" attribute (read from the Playwright config), but \"data-testid\" appears 13 time(s) (next most common: \"data-item-id\", 1). Every test id in this result was read with an attribute the sources do not use.",
+				"data": { "attribute": "data-qa", "candidate": "data-testid", "candidateCount": 13 }
+			}
+		],
+		"hint": "The test-id attribute is almost certainly wrong: nothing in the scanned sources uses \"data-qa\", while \"data-testid\" is everywhere. Restart the server with --attribute data-testid, or with --playwright-config <file> pointing at the config that sets use.testIdAttribute. Treat this result as unreliable until then."
+	}
+}
+```
+
+Walk it in this order:
+
+1. **`data.candidate`** names the attribute your sources actually use, with its occurrence count. That is the answer most of the time.
+2. **`attributeSource`** says which layer picked the wrong name. `param` means your own `--attribute` flag or a per-call argument. `playwright-config` means a config was read; `meta.playwrightConfig` names it, and it may not be the config your tests run with. `default` means nothing set the key and `data-testid` was assumed.
+3. **Fix the source, not the symptom.** Prefer `--playwright-config <file>` pointing at the config that really sets `use.testIdAttribute`, so the server keeps tracking it. Use `--attribute <name>` when the value is computed and cannot be read statically.
+
+Two related warnings mean the same class of problem:
+
+- `attribute-no-evidence` — the attribute appears nowhere and nothing else stood out. Either the scope does not contain the UI, or the name is wrong.
+- `testid-attribute-unresolved` — the config writes the key but not as a string literal. The server will not execute your config to find out. Pass `--attribute`.
+
+Until the attribute is right, treat `map_coverage` output as unusable. `summary.coverage` is `null` rather than a score when nothing was matchable, and a `no-matchable-testids` warning explains why.
+
+## "Several Playwright configs were found"
+
+`playwright-config-ambiguous` lists what was found and names what was read. Its severity tells you how much to care: informational when an attribute did resolve, a warning when none did and `data-testid` was assumed.
+
+`meta.playwrightConfig` names the file that was read. If that is not the config your suite runs with, pin it:
+
+```bash
+npx playwright-page-object mcp --playwright-config e2e/playwright.ci.config.ts
+```
+
+Two more warnings can appear here:
+
+- `testid-attribute-inherited` — the chosen config does not set the attribute, and it was read from a merge layer, an imported base, or a sibling config. The message names the file. Confirm it is the one your tests use.
+- `testid-attribute-conflict` — two configs disagree. The server used one and named both. Pin the right one with `--playwright-config`.
+
+Remember that `--playwright-config` turns discovery off completely, sibling probe included.
+
+## The server refuses to start
+
+The client shows a failed server with no detail. Run the same command in a terminal:
+
+```console
+$ npx playwright-page-object mcp --project-root apps/web --src-dir soruce
+--src-dir does not exist: soruce
+```
+
+The four checks are `--project-root` being a directory, `--tsconfig` and `--playwright-config` being files, and every non-glob `--src-dir` existing. Each is a mistake that would otherwise be silent for the whole session.
+
+If the command prints help instead of starting, the `mcp` subcommand is missing from `args`. If it hangs with no output at all, the client is spawning `npx` without `-y` and npx is waiting on an install prompt that has no TTY to answer it.
+
+## `ambiguous_component` and `incomplete_tree`
+
+Both come from `get_testid_tree` addressing a component by name.
+
+`ambiguous_component` means several files declare that name. `candidates` lists them; re-call with `component` and `file` together.
+
+`incomplete_tree` means the named component could not be rooted at all. `candidates` lists the other components declared in that file. Two ways forward: request one of those instead, or pass `testId` to look a specific id up across the whole scan. The lookup answers from the flat inventory, which is complete whatever the walk managed to do.
+
+`file_not_found` from the same tool means no component with that name exists in the scanned sources, or none exists in the `file` you named. Drop `file` to search everywhere, or drop both to start from the auto-detected app entry.
+
+## `fidelity: "partial"` — what now
+
+A partial tree is the normal answer for a real application. It means the walk ran and `roots` is real, but at least one subtree is missing or its placement is unproven. `meta.fidelityReason` counts the holes and names their codes.
+
+The rule that matters: **absence from a partial tree is not proof the id is not rendered.** `meta.hint` says which argument closes the gap.
+
+| `fidelityReason` mentions | Next call |
+| --- | --- |
+| `not-followed` | `followComponents: true` |
+| `depth-limit-reached` | A larger `depth`, up to 10 |
+| `node-budget-reached` | Root the walk narrower with `file` or `component` |
+| `external-module` | Those components ship from outside the scanned sources. Widen `--src-dir`, or accept the gap |
+| `unresolved-jsx`, `opaque-expression` | Nothing to change. The walk saw content it could not place |
+
+To settle one specific id regardless of the tree, use the lookup form: `{"testId": "CartItemName"}`.
+
+`fidelity: "flat"` is different. No entry component could be rooted, `roots` is empty, and only `inventory` is meaningful. Address a component or a file explicitly, or work from the inventory.
+
+## "Response is N bytes (cap 40000)"
+
+`too_large` is not a failure of your query, it is a request to narrow it. Each tool's hint names the knobs that tool actually has:
+
+| Tool | Knobs, cheapest first |
+| --- | --- |
+| `list_page_objects` | A lower `limit`, a narrower `filter`, or page with `offset` following `meta.nextOffset` |
+| `get_page_object_tree` | `format: "outline"`, then a lower `depth`, then `includeMethods: false` |
+| `get_testid_tree` | `format: "outline"`, then a lower `depth`, then scope with `file` or `component` |
+| `map_coverage` | A lower `limit`, fewer `buckets`, or `includeUnused: false` |
+
+Switching format is usually enough on its own. It costs no information you were going to parse.
+
+## Dead selectors that are not dead
+
+`deadSelectors` means the selector's test id is rendered nowhere the server could see. That is a strong claim, and there are four honest reasons it can be wrong.
+
+- **Scope.** The component lives outside the scanned sources. Look for `ui-scope-incomplete` in `meta.warnings` and for `scope.externalComponentModules`, which names the modules supplying component tags the scan could not resolve. A shared UI package in a monorepo produces exactly this.
+- **Dynamic ids.** The element builds its id at runtime, so it lands in `unknownTestIds` with reason `dynamic-value` rather than on the rendered side. A selector whose literal appears inside that expression is reported as unknown, not dead.
+- **Forwarding.** The id is written on a component tag and nothing proved it reaches a host element. Check for `testid-forwarding-unproven`, and for `forwarding-unproven-widespread` if it happens across your suite. If your components forward as a rule, restart with [`--assume-forwarded`](/mcp/configuration/#assuming-prop-forwarding).
+- **The attribute.** See above. A wrong attribute makes every test-id selector dead at once, which is the tell.
+
+Going the other way, an id in `uncoveredTestIds` means no *page object* selects it. It does not mean nothing tests it. Pass `includeRawLocators: true` to sweep direct `getByTestId` calls too before concluding an id is unused. The `raw-locators-disabled` warning says so on every response that did not.
+
+Ids whose pattern matches everything are quarantined rather than counted, under `unanchored-testid-pattern`. Counted, a single `data-testid={someVariable}` would make every selector in the project look covered and empty the dead list entirely. Give those elements a literal prefix to make them matchable.
+
+## Nothing was scanned
+
+`scope-empty` means no JSX or TSX file was in the analysed scope, so no rendered test id can be found and every selector will look unmatched. The count in `meta.scanned` confirms it.
+
+Causes, in order of likelihood: `--project-root` points at the e2e package rather than at the repository, `--src-dir` narrows to a directory that holds only specs, or the UI is a framework the JSX scanner does not read. The scanner handles `.tsx` and `.jsx`; Vue SFCs, Svelte and Angular templates are not scanned.
+
+`scope-dir-missing` is the narrower case: a scanned directory is not on disk. A non-glob `--src-dir` in that state stops the server at startup, so this warning generally means a glob or an exclusion resolved to nothing.
+
+## Reading the server's own logs
+
+stdout carries the JSON-RPC stream and nothing else, ever. Everything the server has to say about itself goes to stderr, so `--log-level debug` is safe with any client and will not corrupt the protocol.
+
+Tool failures are returned in band, as `{"ok": false, "error": {…}}` with the MCP `isError` flag, and never as JSON-RPC transport errors. An agent can recover from the first and cannot recover from the second. If your client reports a transport-level failure, the problem is the spawn, not the tool call. Check the `-y` and Windows `cmd /c` caveats in the [Quick Start](/mcp/quick-start/#two-spawn-caveats).
+
+## See also
+
+- [Configuration](/mcp/configuration/) for the discovery ladders behind most of these warnings.
+- [Tools](/mcp/tools/) for the full error-code table.

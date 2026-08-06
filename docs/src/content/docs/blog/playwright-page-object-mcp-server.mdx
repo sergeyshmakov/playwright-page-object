@@ -55,7 +55,7 @@ Or the committed file version:
 }
 ```
 
-Zero-config covers the common layout: the server walks up for your `tsconfig.json`, finds `playwright.config.ts`, and scans from there. Monorepos point it at one app with `--project-root apps/web`. The full flag list is in the [MCP server docs](/ai-tooling/mcp-server/).
+Zero-config covers more than the common layout. The server searches the whole repository for anything matching `playwright*.config.{ts,mts,cts,js,mjs,cjs}`, ranks the candidates (an exact `playwright.config.ts` first, then shallower paths), and reads the winner. It finds your `tsconfig.json` at the project root or next to the Playwright `testDir`. Monorepos point it at one app with `--project-root apps/web`. The full flag list is in [Configuration](/mcp/configuration/).
 
 ## What does an agent actually get back?
 
@@ -71,17 +71,21 @@ Compact JSON built for context windows, not humans. Ask for `get_page_object_tre
 
 That one entry tells the agent three things it would otherwise read two files to learn: the member is a `ListPageObject`, rows match the `CartItem_` prefix, and each item is a `CartItemControl` (whose `RemoveButton` is in the same response). The chain `checkoutPage.CartItems.first().RemoveButton` falls out of the JSON directly.
 
-`map_coverage` is the tool I did not plan originally and now think earns its slot. Against this repo's own [example app](https://github.com/sergeyshmakov/playwright-page-object/tree/main/example) it reports that `ApplyPromoButton` is rendered but no page object references it by test id (both page objects reach that button by role). An agent that knows this stops writing a fifth way to click Apply. The same tool catches the reverse: a selector whose test id no component renders anymore, which is usually a rename you forgot to propagate, surfaced with nearest-match suggestions.
+`map_coverage` is the tool I did not plan originally and now think earns its slot. Against this repo's own [example app](https://github.com/sergeyshmakov/playwright-page-object/tree/main/example) it reports that `ApplyPromoButton` is rendered but no page object references it by test id (both page objects reach that button by role). An agent that knows this stops writing a fifth way to click Apply. The same tool catches the reverse: a selector whose test id no component renders anymore, which is usually a rename you forgot to propagate, surfaced with nearest-match suggestions. Its six buckets, and what each one is allowed to claim, are in the [tool reference](/mcp/tools/).
 
 ## How does the server know my test-id attribute?
 
-It reads `use.testIdAttribute` from your `playwright.config.ts` statically, so `data-tid` and other custom attributes work without configuration. A computed value (an env var, a spread from another module) can't be read without executing your config, which the server refuses to do; it falls back to `data-testid` and tells you so in the response metadata. Pass `--attribute data-tid` to override explicitly.
+It reads `use.testIdAttribute` statically, so `data-tid` and other custom attributes work without configuration. Real configs are rarely one literal, so the reader flattens the export into layers and reads across all of them: `defineConfig({ ...base })`, `defineConfig(merge(base, overrides))`, and a leaf config importing a shared base one directory up. If the chosen config says nothing about the attribute, it probes the other discovered configs and says which one it read it from. A computed value (an env var, a spread it couldn't follow) can't be read without executing your config, which the server refuses to do; it falls back to `data-testid` and tells you so. Pass `--attribute data-tid` to override explicitly, or `--playwright-config` to pin the file.
 
-Every tool response carries `attributeSource: "flag" | "playwright-config" | "default"`, so when ids look wrong, one field tells you which layer picked the attribute.
+Every tool response carries `attributeSource: "param" | "playwright-config" | "default"`, so when ids look wrong, one field tells you which layer picked the attribute.
+
+There is a second safety net, because a wrong attribute is the one error that produces confident nonsense rather than an error. Before any answer ships, the server counts occurrences of the resolved attribute in the scanned TSX. If there are none and some other hyphenated attribute is everywhere, the response carries an `attribute-mismatch` warning naming that attribute and its occurrence count, and a hint telling you exactly what to restart with. Zero of zero test ids covered used to read as a perfect coverage score; now it reads as `coverage: null` plus a warning.
 
 ## Where does static analysis fall short?
 
 Anything not statically resolvable is reported as `dynamic` with its source text, never guessed. That covers computed selector arguments, `@SelectorBy(fn)` custom functions, spread props, and prop forwarding deeper than one hop. Role and text selectors can't be checked against rendered markup at all, so `map_coverage` reports them separately and never counts them as dead.
+
+The same honesty applies to a test id written on a component tag, `<Card data-testid="Save" />`. That id only reaches the DOM if `Card` passes the prop to a host element, so every occurrence carries a `reach` of `element`, `forwarded` or `component-prop`. Only the first two count as rendered; the third goes to `unknownTestIds` as forwarding-unproven, and a selector matching only it is reported as unknown rather than as matched or dead. If your component library forwards props as a matter of course, `--assume-forwarded` flips that, and every id and match the assumption changed is labelled as assumed.
 
 In practice the honest-uncertainty design matters more than the coverage number. An agent told "this test id is `dynamic: CartItem_${item.id}`" writes a regex selector; an agent silently given a wrong answer writes a broken test. If your suite leans heavily on computed selectors, the trees will contain more `dynamic` nodes and fewer exact values, and the file-reading fallback stays available.
 
@@ -91,7 +95,7 @@ The server also isn't a substitute for knowing the library. Pair it with the [Ag
 
 ### Does the MCP server work with data-tid or other custom attributes?
 
-Yes. It reads `use.testIdAttribute` from your Playwright config statically and falls back to `data-testid`. For computed configs, pass `--attribute data-tid` when registering the server. Per-call overrides are also supported on the `get_testid_tree` and `map_coverage` tools.
+Yes. It searches the repository for your Playwright config, reads `use.testIdAttribute` statically across merge layers and imported base configs, and falls back to `data-testid`. If the resolved attribute appears nowhere in your components, the response says so and names the one that does. For computed configs, pass `--attribute data-tid` when registering the server. Per-call overrides are also supported on the `get_testid_tree` and `map_coverage` tools.
 
 ### Does it execute my code or launch a browser?
 
@@ -103,15 +107,15 @@ The page-object tools (`list_page_objects`, `get_page_object_tree`) need the dec
 
 ### Which MCP clients does it support?
 
-Any stdio MCP client: Claude Code, Cursor, VS Code, Codex CLI, and others. The server speaks the standard protocol over stdin/stdout. Registration snippets for each client are in the [docs](/ai-tooling/mcp-server/).
+Any stdio MCP client: Claude Code, Cursor, VS Code, Codex CLI, and others. The server speaks the standard protocol over stdin/stdout. Registration snippets for each client are in the [quick start](/mcp/quick-start/).
 
 ### Does it work in a monorepo?
 
-Yes, per app. Run one server per package with `--project-root apps/web`, and `--attribute` if apps use different test-id attributes. A single server pointed at the monorepo root works too, up to the configurable `--max-files` cap.
+Yes, per app. Run one server per package with `--project-root apps/web`, and `--attribute` if apps use different test-id attributes. A single server pointed at the monorepo root works too, up to the configurable `--max-files` cap. When components come from a shared package outside the scanned scope, `map_coverage` says so with a `ui-scope-incomplete` warning rather than reporting those ids as missing.
 
 ### How fresh are the results?
 
-Current as of each tool call. The server stat-checks tracked files per request and re-parses only what changed, so an agent's own edits are visible immediately. Only changing `testIdAttribute` or moving files outside the scanned directories needs a restart.
+Current as of each tool call. The server stat-checks tracked files per request and re-parses only what changed, so an agent's own edits are visible immediately. New files, deleted files and a newly added Playwright config are picked up too. What needs a restart is a change to the flags the server was started with, since those define what it analyses.
 
 ---
 

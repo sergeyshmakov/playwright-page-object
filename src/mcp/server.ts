@@ -25,7 +25,7 @@ const READ_ONLY = {
 
 const INSTRUCTIONS = `Static-analysis tools for playwright-page-object test suites. All tools are read-only.
 
-Results reflect the files on disk at the moment of the call - edits are visible to the next call, the server never needs a restart. Restart is only required after changing use.testIdAttribute in the Playwright config or moving page objects outside the scanned directories.
+Results reflect the files on disk at the moment of the call - edits (including Playwright config changes) are visible to the next call. A restart is only needed to change the server's own flags, such as --src-dir scope or --attribute.
 
 Typical flow: list_page_objects first (never glob for page objects), get_page_object_tree before writing or editing a test, get_testid_tree before writing any selector (never invent a test id), map_coverage when a locator times out or after renaming test ids.`;
 

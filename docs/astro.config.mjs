@@ -59,6 +59,16 @@ export default defineConfig({
 					],
 				},
 				{
+					label: "MCP Server",
+					items: [
+						"mcp",
+						"mcp/quick-start",
+						"mcp/tools",
+						"mcp/configuration",
+						"mcp/troubleshooting",
+					],
+				},
+				{
 					label: "Reference",
 					items: [
 						"reference/context-resolution",
@@ -79,7 +89,6 @@ export default defineConfig({
 				{
 					label: "AI Tooling",
 					items: [
-						"ai-tooling/mcp-server",
 						"ai-tooling/agent-skills",
 						"ai-tooling/context7",
 						"ai-tooling/cubic-wiki",

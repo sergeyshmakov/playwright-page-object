@@ -1,0 +1,416 @@
+---
+title: Tools
+description: Reference for the four MCP tools - parameters, response envelope, meta fields, error codes, and a worked example for each.
+---
+
+All four tools are read-only, idempotent, and closed-world. They read the files on disk at the moment of the call.
+
+## Response envelope
+
+Every tool returns one text block holding compact JSON. Success:
+
+```json
+{ "ok": true, "data": "…", "meta": { "…": "…" } }
+```
+
+Failure, with the MCP `isError` flag set:
+
+```json
+{
+	"ok": false,
+	"error": {
+		"code": "class_not_found",
+		"message": "No page object named \"ChekoutPage\" was found.",
+		"suggestions": ["CheckoutPage"],
+		"hint": "Call list_page_objects to see every page object."
+	}
+}
+```
+
+`candidates` and `suggestions` are capped at 10 entries; when there were more, `moreCandidates` or `moreSuggestions` carries the remainder as a count. Meta keys whose value is `undefined`, `null`, `false`, or an empty array are dropped before serialization, so a field's absence means "nothing to report".
+
+Responses are capped at 40,000 bytes. An oversized payload is replaced by a `too_large` error whose `hint` names the knobs *that tool* has.
+
+### Meta fields
+
+| Field | Tools | Meaning |
+| --- | --- | --- |
+| `root` | `list_page_objects`, `get_page_object_tree` | Absolute path of the analysed project root |
+| `attribute` | all | Test-id attribute this call read the sources with |
+| `attributeSource` | all | `"param"`, `"playwright-config"`, or `"default"` |
+| `playwrightConfig` | all | Project-relative path of the config that was read; absent when none was found |
+| `scanned` | `list_page_objects`, `get_testid_tree` | Files parsed |
+| `warnings` | all | Environment diagnostics, worst-invalidating first, capped at 8 |
+| `hint` | all | What to do next, in the tool's own argument names. An environment problem is prepended, because no advice about the next call matters while the analysis reads the wrong attribute |
+| `total`, `offset`, `nextOffset` | `list_page_objects` | Unpaged count, the offset in effect, and the offset for the next page |
+| `note` | `get_page_object_tree`, `map_coverage` | An absolute `file` was accepted and relativized; says how it was read |
+| `truncated` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | A budget or a `limit` cut the payload |
+| `fidelity`, `fidelityReason` | `get_testid_tree` | Completeness of the node tree, and where the holes are |
+| `alsoIncluded` | `map_coverage` | Page objects analysed alongside the one you named, because they share its file |
+| `ignored` | `map_coverage` | Arguments overruled by `buckets` |
+| `shown` | `map_coverage` | Per-bucket count of the entries actually returned, when `limit` cut a list |
+| `assumeForwarded` | `map_coverage` | The server runs with `--assume-forwarded` |
+
+`attributeSource` is worth reading on every call. `"default"` means no config set `use.testIdAttribute` and Playwright's `data-testid` was assumed, which is correct for most repositories and wrong for the ones that migrated away from it.
+
+### Error codes
+
+| Code | Raised by | What to do |
+| --- | --- | --- |
+| `invalid_input` | `get_page_object_tree`, `map_coverage` | Neither `class` nor `file` was given, or `file` is an absolute path outside the project root, or it is the root itself. Re-call with a project-relative path |
+| `class_not_found` | `get_page_object_tree`, `map_coverage` | Read `suggestions` (nearest names by edit distance), or call `list_page_objects` |
+| `ambiguous_class` | `get_page_object_tree`, `map_coverage` | Several classes share the name. `candidates` holds `path.ts#ClassName` keys; re-call with `file` set to one of them |
+| `ambiguous_component` | `get_testid_tree` | Several files declare that component name. Re-call with `component` and `file` together |
+| `incomplete_tree` | `get_testid_tree` | The named component could not be rooted. `candidates` lists the other components in that file; or pass `testId` to look the id up across the whole scan |
+| `file_not_found` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | The path or component name selects nothing. Use `suggestions` / `candidates`, or drop the argument to widen the search |
+| `too_large` | all | Apply the `hint`; it names the knobs that tool has |
+| `max_files_exceeded` | all | Restart the server with a higher `--max-files`, or narrow the scan with `--src-dir` / `--tsconfig` |
+| `internal_error` | all | An unexpected failure, returned in-band rather than as a transport error. The message is the thrown error's; the server also logs it to stderr |
+
+`parse_error` is part of the wire contract but is not currently emitted.
+
+---
+
+## `list_page_objects`
+
+Every class in the repository that uses the library's decorators. Call it first, before grepping or globbing, and before creating a page object that may already exist.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `filter` | string | — | Case-insensitive substring, matched against class name **and** file path |
+| `limit` | integer 1–500 | `100` | |
+| `offset` | integer ≥ 0 | `0` | Applied after `filter`. Follow `meta.nextOffset` to page |
+
+### Response
+
+`data` is an array of entries with `name`, `file`, `kind`, optional `root` (compact selector), optional `fixtures` (binding names), `members`, `methods`, and the class JSDoc as `doc`. `kind` is one of `rootPageObject`, `rootPlain`, `pageFallback`, `fragment`, `nestedPageObject`, `externalControl`.
+
+Member details are deliberately absent. Use `get_page_object_tree` for those.
+
+`meta.total` always reports the unpaged count, so a complete list is distinguishable from a capped one without a second call.
+
+### Example
+
+Against the example app, with no arguments:
+
+```json
+{
+	"ok": true,
+	"data": [
+		{
+			"name": "CheckoutPage",
+			"file": "e2e/page-objects/CheckoutPage.ts",
+			"kind": "rootPageObject",
+			"root": { "kind": "testId", "testId": "CheckoutPage" },
+			"fixtures": ["checkoutPage"],
+			"members": 6,
+			"methods": 3
+		},
+		{
+			"name": "PromoSectionFragment",
+			"file": "e2e/page-objects/PromoSectionFragment.ts",
+			"kind": "fragment",
+			"members": 1,
+			"methods": 0,
+			"doc": "Fragment control: receives the section root from `@Selector(\"PromoSection\", …)`…"
+		}
+	],
+	"meta": {
+		"root": "/repo/example",
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts",
+		"scanned": 17,
+		"total": 6
+	}
+}
+```
+
+An empty page gets a `hint` that distinguishes the three reasons it can be empty: nothing was indexed at all, the `filter` matched none of what was indexed (with the closest names), or the `offset` is past the end.
+
+---
+
+## `get_page_object_tree`
+
+One class's full selector tree, with nested control classes expanded inline and the class's own method signatures listed. Call it before writing or editing a test that touches a page object, and before adding an accessor that may already exist.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `class` | string | — | Class name. Provide `class`, `file`, or both |
+| `file` | string | — | Path relative to the project root. An absolute path inside the root is accepted and relativized, and `meta.note` says so; one outside the root is rejected |
+| `depth` | integer 1–10 | `3` | Levels of nested control classes to expand |
+| `includeMethods` | boolean | `true` | |
+| `format` | `"json"` \| `"outline"` | `"json"` | |
+
+`file` alone resolves to the file's default-exported page object, else its first root one. When the file declares several and none is preferred, the call fails with `ambiguous_class` and `path.ts#ClassName` candidates.
+
+### Response
+
+With `format: "json"`, `data` is `{ root, defs, stats }`. `root` is a key into `defs`, and `defs` is a flat map of `path.ts#ClassName` to node. Shared controls appear once and are referenced by id everywhere else, so a control used by ten members costs one definition.
+
+Each member carries `name`, `loc`, `visibility`, the full `selector` (decorator name, raw source text, and the parsed value), and a `result` describing what the accessor resolves to: `locator`, `pageObject`, `list` (with `itemClassName`), `control`, or `unknown` with the source text.
+
+With `format: "outline"`, `data` is an indented string. It costs far fewer tokens and is not machine-parseable. `(see above)` marks a definition already printed, and `(not expanded: depth limit)` or `(not expanded: node budget)` marks one the walk did not reach.
+
+### Example
+
+`{"class": "CartItemControl"}`, abbreviated:
+
+```json
+{
+	"ok": true,
+	"data": {
+		"root": "e2e/page-objects/CartItemControl.ts#CartItemControl",
+		"defs": {
+			"e2e/page-objects/CartItemControl.ts#CartItemControl": {
+				"className": "CartItemControl",
+				"hostKind": "nestedPageObject",
+				"scope": "parent-locator",
+				"extendsChain": ["PageObject"],
+				"members": [
+					{
+						"name": "RemoveButton",
+						"selector": {
+							"kind": "role",
+							"decorator": "SelectorByRole",
+							"raw": "@SelectorByRole(\"button\", { name: \"Remove\" })",
+							"dynamic": false,
+							"role": "button",
+							"options": { "name": "Remove" }
+						},
+						"result": {
+							"kind": "pageObject",
+							"ref": "e2e/page-objects/controls/ButtonControl.ts#ButtonControl",
+							"className": "ButtonControl"
+						}
+					}
+				],
+				"methods": [
+					{ "name": "expectVisible", "signature": "expectVisible()", "isAsync": true }
+				],
+				"expanded": true
+			},
+			"e2e/page-objects/controls/ButtonControl.ts#ButtonControl": { "…": "…" }
+		},
+		"stats": { "defs": 2, "members": 1, "methods": 1, "dynamic": 0, "parseMs": 1 }
+	},
+	"meta": {
+		"root": "/repo/example",
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts"
+	}
+}
+```
+
+---
+
+## `get_testid_tree`
+
+The test ids your components render, in nesting order. Call it before writing any selector, when a locator resolves to zero elements, and when choosing between `@Selector` and `@ListSelector` for a repeated row.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `file` | string | — | Component file to root the tree at |
+| `component` | string | — | Component name. Combine with `file` when two files declare the same name |
+| `testId` | string | — | Look up where a known id is rendered, instead of walking a tree |
+| `depth` | integer 1–10 | `4` | |
+| `followComponents` | boolean | `true` | Inline the subtrees of child components imported from other files |
+| `attribute` | string | — | Per-call override of the resolved test-id attribute |
+| `format` | `"json"` \| `"outline"` | `"json"` | |
+
+With neither `file` nor `component`, the walk starts from the auto-detected app entry.
+
+### Fidelity
+
+`meta.fidelity` describes the completeness of the **node tree**, not of individual ids:
+
+| Value | Meaning |
+| --- | --- |
+| `"full"` | The walk reached everything. Absence from the tree is proof the id is not rendered under that root |
+| `"partial"` | At least one subtree is missing or its placement is unproven. `roots` is real but has holes, and `meta.fidelityReason` counts them |
+| `"flat"` | No entry component could be rooted. `roots` is empty and only `inventory` is meaningful |
+
+The flat inventory is complete in all three states, so a `testId` lookup answers correctly whatever the walk did.
+
+### Node flags
+
+| Flag | Meaning |
+| --- | --- |
+| `conditional` | Rendered inside a conditional |
+| `repeated` | Rendered inside a `.map(...)` callback |
+| `placement: {"kind":"slot"}` | Passed to the parent component as children. Where, or whether, the parent renders it is not proven |
+| `placement: {"kind":"prop"}` | Passed as the value of another prop. Same caveat |
+| `expandedAt` | This component's subtree was already expanded at an earlier render site; read it there. Only set when the two sites render identical subtrees |
+| `viaDefault` | The id came from the component's own fallback, because the call site provably passed nothing |
+| `testIdAbsent` | The element writes the attribute, but at this site the value provably resolves to nothing. Do not write a selector for it |
+| `unresolved` | A hole. `reason` is one of `external-module`, `identifier-unresolved`, `namespaced-component`, `not-a-function-component`, `recursive`, `not-followed`, `depth-limit-reached`, `node-budget-reached`, `unresolved-jsx`, `opaque-expression`, `spread-props` |
+
+In the outline format the same flags appear in parentheses, and `-` stands for a node with no test id.
+
+A `testId` lookup returns `{ occurrences }`, each with the source location, the enclosing component, and `reach`:
+
+| `reach` | Meaning |
+| --- | --- |
+| `"element"` | Written directly on a host element. It renders |
+| `"forwarded"` | Written as a prop and proven to land on a host element. It renders |
+| `"component-prop"` | Written on a component tag with nothing proving it goes further. It renders only if that component passes the prop down |
+
+When every occurrence is `component-prop`, the response says so in `meta.hint` rather than letting you read the hit as proof. Patterns that match every possible id are excluded from a lookup and counted in the hint, because reporting them as hits would claim your id is rendered at a line the source writes `data-testid={anything}` on.
+
+### Example
+
+`{"component": "CartItem", "format": "outline"}`:
+
+```text
+CartItem_*  div  src/components/CartItem.tsx:10 (dynamic `CartItem_${item.id}`)
+  CartItemName  span  src/components/CartItem.tsx:11
+  CartItemPrice  span  src/components/CartItem.tsx:12
+  Remove  button  src/components/CartItem.tsx:13
+```
+
+```json
+{
+	"meta": {
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts",
+		"fidelity": "full",
+		"scanned": 5
+	}
+}
+```
+
+The same call with `followComponents: false` from the app entry shows the other side:
+
+```json
+{
+	"meta": {
+		"fidelity": "partial",
+		"fidelityReason": "2 of 2 nodes were left unexpanded (not-followed ×2); ids inside them are missing from roots but present in inventory.",
+		"hint": "Re-call with followComponents: true to see inside them. An id missing from an incomplete tree may still be rendered; pass testId to look one up across the whole scan."
+	}
+}
+```
+
+---
+
+## `map_coverage`
+
+Cross-references the selectors your page objects declare against the test ids your app renders. Call it after refactoring a component, after renaming test ids, before adding accessors, and when a test times out on a locator.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `class` | string | — | Narrow the page-object side to the file declaring this class |
+| `file` | string | — | Limit the page-object side to one file, spelled as `list_page_objects` reports it. A leading `./` and Windows separators are accepted |
+| `attribute` | string | — | Per-call override of the test-id attribute |
+| `includeUnused` | boolean | `true` | Include `uncoveredTestIds`. Ignored when `buckets` is given |
+| `includeRawLocators` | boolean | `false` | Also scan for direct `getByTestId` / `getItemByTestId` / `filterByItemTestId` / `filterByHasTestId` calls |
+| `buckets` | array | — | Return only these lists. Wins over `includeUnused`, which is then echoed in `meta.ignored` |
+| `limit` | integer 1–1000 | `200` | Per bucket |
+
+Omit `class` and `file` to scan the whole project. Scoping happens by path, so `class` also pulls in page objects sharing that file, and `meta.alsoIncluded` names them. A `file` that declares no page object fails with `file_not_found` rather than returning a report in which everything looks uncovered.
+
+### Buckets
+
+`summary` and `scope` always ship, whatever `buckets` asks for.
+
+| Bucket | Contents |
+| --- | --- |
+| `matched` | Selector/id pairs with a `confidence` of `exact`, `pattern`, `regex`, `probe`, or `prefix` |
+| `uncoveredTestIds` | Rendered ids no page object references, each with a ready-to-paste decorator `suggestion` |
+| `deadSelectors` | Selectors whose test id is rendered nowhere, with `nearestTestIds` typo suggestions |
+| `nonTestIdSelectors` | Role, text, label, placeholder, alt and title selectors. Reported for awareness and never counted as dead |
+| `unknownSelectors` | Selectors that could be neither matched nor called dead, with the evidence that was found |
+| `unknownTestIds` | Rendered ids that could not be treated as rendered: `dynamic-value`, `forwarding-unproven`, or `unanchored-pattern` |
+
+`summary.coverage` is `coveredUiTestIds / matchableUiTestIds`, or **`null`** when nothing was matchable. It is never `1` for a scan that found nothing, which is the failure mode that used to make a misconfigured server look healthy. `scope` reports what the two sides were drawn from, including component tags coming from modules outside the scanned sources.
+
+### Example
+
+`{"buckets": ["uncoveredTestIds"]}` against the example app, abbreviated:
+
+```json
+{
+	"ok": true,
+	"data": {
+		"summary": {
+			"uiTestIds": 13,
+			"matchableUiTestIds": 13,
+			"coveredUiTestIds": 4,
+			"testIdSelectors": 14,
+			"matched": 14,
+			"deadSelectors": 0,
+			"nonTestIdSelectors": 5,
+			"unknownSelectors": 0,
+			"unknownTestIds": 0,
+			"uncoveredTestIds": 9,
+			"catchAllTestIds": 0,
+			"staticUiIdsCompared": 12,
+			"coverage": 0.3076923076923077
+		},
+		"scope": {
+			"uiFilesScanned": 5,
+			"pageObjectFilesScanned": 18,
+			"externalComponentModules": ["react"],
+			"externalComponentTags": 1
+		},
+		"uncoveredTestIds": [
+			{
+				"id": "ApplyPromoButton",
+				"patternSource": null,
+				"occurrences": [
+					{
+						"file": "src/components/CheckoutPage.tsx",
+						"loc": { "file": "src/components/CheckoutPage.tsx", "line": 28 },
+						"tag": "button",
+						"component": "CheckoutPage",
+						"reach": "element"
+					}
+				],
+				"suggestion": "@Selector(\"ApplyPromoButton\")"
+			},
+			{ "id": "CartItemName", "…": "…" }
+		]
+	},
+	"meta": {
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts",
+		"ignored": ["includeUnused"],
+		"warnings": [
+			{
+				"code": "raw-locators-disabled",
+				"severity": "info",
+				"message": "Direct locator calls … were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them."
+			}
+		]
+	}
+}
+```
+
+`ApplyPromoButton` is rendered but no page object selects it by test id, because both page objects reach that button by role. That is the kind of fact that stops an agent from writing a fifth way to click Apply.
+
+---
+
+## `json` or `outline`
+
+`get_page_object_tree` and `get_testid_tree` accept both.
+
+| | `json` | `outline` |
+| --- | --- | --- |
+| Shape | Structured objects, stable field names | Indented plain text |
+| Tokens | Higher, roughly 2–4× on deep trees | Lower |
+| Machine-parseable | Yes | No |
+| Carries locations | Yes, `loc` with line and column | Yes, `file:line` |
+| Carries every field | Yes | No: visibility, JSDoc and column numbers are dropped |
+
+Use `outline` when an agent only has to read the shape, which is most of the time, and `json` when something downstream has to parse it. A `too_large` error on a JSON call is usually solved by switching format before touching `depth`.
