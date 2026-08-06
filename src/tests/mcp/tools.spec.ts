@@ -14,6 +14,9 @@ import { createMcpServer } from "../../mcp/server";
 
 const exampleRoot = path.resolve(process.cwd(), "example");
 
+/** A template hole in fixture *source*, assembled so it is not one here. */
+const hole = (name: string): string => `\${${name}}`;
+
 type ClientHandle = { client: Client; close: () => Promise<void> };
 const openClients: ClientHandle[] = [];
 
@@ -68,7 +71,7 @@ function writeFile(root: string, rel: string, body: string): void {
 async function withProject<T>(
 	prefix: string,
 	files: Record<string, string>,
-	body: (client: Client) => Promise<T>,
+	body: (client: Client, root: string) => Promise<T>,
 	options: Partial<McpServerOptions> = {},
 ): Promise<T> {
 	const root = mkdtempSync(path.join(tmpdir(), prefix));
@@ -77,7 +80,7 @@ async function withProject<T>(
 			writeFile(root, rel, contents);
 		}
 		const { client } = await connect(root, options);
-		return await body(client);
+		return await body(client, root);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -1068,6 +1071,355 @@ describe("MCP server over in-memory transport", () => {
 				expect(warningCodes(envelope)).not.toContain("attribute-mismatch");
 			},
 			{ playwrightConfig: "config/pw.ts" },
+		);
+	}, 30_000);
+
+	/* ---------------------------------------------------------------------- */
+	/* Paging, bucket selection and the advice attached to an empty answer.    */
+	/* ---------------------------------------------------------------------- */
+
+	/** One file declaring `count` trivially different page objects. */
+	function manyPageObjects(count: number): string {
+		const lines = [
+			'import type { Locator } from "@playwright/test";',
+			'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+			"",
+		];
+		for (let index = 0; index < count; index += 1) {
+			lines.push(
+				`@RootSelector("Screen${index}Root")`,
+				`export class GeneratedScreenNumber${index}Page extends RootPageObject {`,
+				`\t@Selector("Screen${index}Input")`,
+				"\taccessor Input!: Locator;",
+				"}",
+				"",
+			);
+		}
+		return lines.join("\n");
+	}
+
+	it("pages list_page_objects with offset and always reports the total", async () => {
+		await withProject(
+			"ppo-paging-",
+			{ "e2e/many.ts": manyPageObjects(12) },
+			async (client) => {
+				const first = await callTool(client, "list_page_objects", {
+					limit: 5,
+				});
+				expect((first.envelope.data as unknown[]).length).toBe(5);
+				// Always, not only when it overflows: a caller who cannot tell a
+				// complete list from a capped one has to re-call to find out.
+				expect(first.envelope.meta?.total).toBe(12);
+				expect(first.envelope.meta?.nextOffset).toBe(5);
+
+				const second = await callTool(client, "list_page_objects", {
+					limit: 5,
+					offset: first.envelope.meta?.nextOffset as number,
+				});
+				expect((second.envelope.data as unknown[]).length).toBe(5);
+				expect(second.envelope.meta?.offset).toBe(5);
+				expect(second.envelope.meta?.nextOffset).toBe(10);
+
+				const last = await callTool(client, "list_page_objects", {
+					limit: 5,
+					offset: 10,
+				});
+				expect((last.envelope.data as unknown[]).length).toBe(2);
+				expect(
+					last.envelope.meta?.nextOffset,
+					"the final page must not invite another call",
+				).toBeUndefined();
+
+				const past = await callTool(client, "list_page_objects", {
+					limit: 5,
+					offset: 50,
+				});
+				expect(past.envelope.data).toEqual([]);
+				expect(String(past.envelope.meta?.hint)).toContain("past the end");
+			},
+		);
+	}, 30_000);
+
+	// An index of 305 page objects and a filter that matches none of them used
+	// to produce "no page objects were found; restart with --src-dir", sending a
+	// caller to reconfigure a server that was working perfectly.
+	it("blames the filter, not the scope, when the index is not empty", async () => {
+		await withProject(
+			"ppo-filter-miss-",
+			{
+				"e2e/many.ts": manyPageObjects(4),
+				// Present so the environment hint stays quiet and the assertion is
+				// about this tool's own advice rather than the workspace's.
+				"src/App.tsx":
+					'export function App() {\n\treturn <div data-testid="Screen0Input" />;\n}\n',
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "list_page_objects", {
+					filter: "checkout",
+				});
+				const hint = String(envelope.meta?.hint);
+				expect(envelope.data).toEqual([]);
+				expect(envelope.meta?.total).toBe(0);
+				expect(hint).toContain('filter "checkout"');
+				expect(hint).toContain("the index holds 4");
+				expect(hint).not.toContain("--src-dir");
+			},
+		);
+	}, 30_000);
+
+	it("names only its own knobs when a response is too large", async () => {
+		await withProject(
+			"ppo-too-large-",
+			{ "e2e/many.ts": manyPageObjects(400) },
+			async (client) => {
+				const { isError, envelope } = await callTool(
+					client,
+					"list_page_objects",
+					{ limit: 500 },
+				);
+				expect(isError).toBe(true);
+				expect(envelope.error?.code).toBe("too_large");
+				const hint = String(envelope.error?.hint);
+				expect(hint).toContain("offset");
+				expect(hint).toContain("limit");
+				expect(hint, "list_page_objects has no depth").not.toContain("depth");
+			},
+		);
+	}, 60_000);
+
+	it("returns only the requested coverage buckets, with totals intact", async () => {
+		await withProject(
+			"ppo-buckets-",
+			{
+				"e2e/Home.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("HomeRoot")',
+					"export class HomePage extends RootPageObject {",
+					'\t@Selector("HomeInput")',
+					"\taccessor Input!: Locator;",
+					'\t@Selector("Missing")',
+					"\taccessor Gone!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="HomeRoot"><input data-testid="HomeInput" /><b data-testid="Spare" /></div>;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "map_coverage", {
+					buckets: ["deadSelectors"],
+				});
+				const data = envelope.data as Record<string, unknown>;
+				expect(Object.keys(data).sort()).toEqual([
+					"deadSelectors",
+					"scope",
+					"summary",
+				]);
+				// The lists are gone; the numbers describing them are not.
+				const summary = data.summary as Record<string, number>;
+				expect(summary.uncoveredTestIds).toBe(1);
+				expect(summary.matchableUiTestIds).toBe(3);
+				expect(envelope.meta?.ignored).toEqual(["includeUnused"]);
+			},
+		);
+	}, 30_000);
+
+	it("reports which buckets it capped", async () => {
+		await withProject(
+			"ppo-bucket-cap-",
+			{
+				"e2e/Home.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("HomeRoot")',
+					"export class HomePage extends RootPageObject {",
+					'\t@Selector("A")',
+					"\taccessor A!: Locator;",
+					'\t@Selector("B")',
+					"\taccessor B!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="HomeRoot"><i data-testid="A" /><i data-testid="B" /></div>;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "map_coverage", {
+					buckets: ["matched"],
+					limit: 1,
+				});
+				expect(envelope.meta?.truncated).toBe(true);
+				expect(envelope.meta?.shown).toEqual({ matched: 1 });
+			},
+		);
+	}, 30_000);
+
+	// Agents paste the path their editor shows them.
+	it("accepts an absolute path inside the root and refuses one outside it", async () => {
+		await withProject(
+			"ppo-abs-path-",
+			{
+				"e2e/Home.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("HomeRoot")',
+					"export class HomePage extends RootPageObject {",
+					'\t@Selector("HomeInput")',
+					"\taccessor Input!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client, root) => {
+				const inside = await callTool(client, "get_page_object_tree", {
+					file: path.join(root, "e2e", "Home.ts"),
+				});
+				expect(inside.isError).toBe(false);
+				expect(String(inside.envelope.meta?.note)).toContain("e2e/Home.ts");
+
+				const outside = await callTool(client, "get_page_object_tree", {
+					file: path.join(tmpdir(), "elsewhere", "Home.ts"),
+				});
+				expect(outside.isError).toBe(true);
+				expect(outside.envelope.error?.code).toBe("invalid_input");
+				expect(String(outside.envelope.error?.message)).toContain(
+					"outside the analysed project root",
+				);
+			},
+		);
+	}, 30_000);
+
+	// A typo shares no substring with the real name, which is exactly when the
+	// suggestion matters. Substring matching alone returned nothing.
+	it("suggests a typo'd class name in map_coverage", async () => {
+		await withProject(
+			"ppo-coverage-typo-",
+			{
+				"e2e/Home.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("HomeRoot")',
+					"export class HomePage extends RootPageObject {",
+					'\t@Selector("HomeInput")',
+					"\taccessor Input!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { isError, envelope } = await callTool(client, "map_coverage", {
+					class: "HmoePage",
+				});
+				expect(isError).toBe(true);
+				expect(envelope.error?.code).toBe("class_not_found");
+				expect(envelope.error?.suggestions).toContain("HomePage");
+			},
+		);
+	}, 30_000);
+
+	// `total(): number` on the methods line produced `await page.total()`.
+	it("puts a getter on its own accessors line in the outline", async () => {
+		await withProject(
+			"ppo-outline-accessors-",
+			{
+				"e2e/Home.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("HomeRoot")',
+					"export class HomePage extends RootPageObject {",
+					'\t@Selector("HomeInput")',
+					"\taccessor Input!: Locator;",
+					"",
+					"\tget total(): number {",
+					"\t\treturn 1;",
+					"\t}",
+					"",
+					"\tasync open(): Promise<void> {}",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_page_object_tree", {
+					class: "HomePage",
+					format: "outline",
+				});
+				const text = String(envelope.data);
+				expect(text).toContain("methods: open(): Promise<void>");
+				expect(text).toContain("accessors: get total: number");
+			},
+		);
+	}, 30_000);
+
+	// The lookup used to answer "yes, at src/App.tsx:3" about an element whose
+	// id is built entirely at run time, which matches anything and proves nothing.
+	it("does not answer a testId lookup with a match-anything element", async () => {
+		await withProject(
+			"ppo-catch-all-lookup-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					"\tconst id = String(Math.random());",
+					`\treturn <div data-testid={\`${hole("id")}\`} />;`,
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {
+					testId: "Whatever",
+				});
+				expect(envelope.data).toEqual({ occurrences: [] });
+				const hint = String(envelope.meta?.hint);
+				expect(hint).toContain("built entirely at runtime");
+				expect(hint).toContain("excluded");
+			},
+		);
+	}, 30_000);
+
+	it("says so when every occurrence of an id is an unproven component prop", async () => {
+		await withProject(
+			"ppo-prop-lookup-",
+			{
+				"src/Card.tsx": [
+					"export default function Card(props: { children?: unknown }) {",
+					"\treturn <div>{props.children as never}</div>;",
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					'import Card from "./Card";',
+					"export function App() {",
+					'\treturn <Card data-testid="Ghost" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {
+					testId: "Ghost",
+				});
+				const occurrences = (envelope.data as { occurrences: unknown[] })
+					.occurrences;
+				expect(occurrences).toHaveLength(1);
+				expect(String(envelope.meta?.hint)).toContain(
+					"prop on a component tag",
+				);
+			},
 		);
 	}, 30_000);
 

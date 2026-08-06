@@ -14,6 +14,14 @@ export const listPageObjectsInput = z.object({
 			'Case-insensitive substring matched against class name and file path, e.g. "checkout".',
 		),
 	limit: z.number().int().min(1).max(500).default(100),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.default(0)
+		.describe(
+			"Index of the first entry to return, applied after filter. meta.total always reports the full count and meta.nextOffset the value to pass for the next page.",
+		),
 });
 
 export const getPageObjectTreeInput = z.object({
@@ -25,7 +33,7 @@ export const getPageObjectTreeInput = z.object({
 		.string()
 		.optional()
 		.describe(
-			"Path to the file, relative to the project root. Use with class when a name is ambiguous; alone it resolves to the file's default-exported (else first root) page object, and errors with candidates when neither applies.",
+			"Path to the file, relative to the project root. An absolute path inside the project root is accepted and relativized (meta.note says so); one outside it is rejected. Use with class when a name is ambiguous; alone it resolves to the file's default-exported (else first root) page object, and errors with candidates when neither applies.",
 		),
 	depth: z
 		.number()
@@ -76,6 +84,16 @@ export const getTestIdTreeInput = z.object({
 	format: z.enum(["json", "outline"]).default("json"),
 });
 
+/** The six lists `map_coverage` can return, as a `buckets` enum. */
+export const COVERAGE_BUCKETS = [
+	"matched",
+	"uncoveredTestIds",
+	"deadSelectors",
+	"nonTestIdSelectors",
+	"unknownSelectors",
+	"unknownTestIds",
+] as const;
+
 export const mapCoverageInput = z.object({
 	class: z
 		.string()
@@ -94,13 +112,19 @@ export const mapCoverageInput = z.object({
 		.boolean()
 		.default(true)
 		.describe(
-			"Include uncoveredTestIds (rendered ids no page object uses). Set false for a shorter response.",
+			"Include uncoveredTestIds (rendered ids no page object uses). Set false for a shorter response. Ignored when buckets is given.",
 		),
 	includeRawLocators: z
 		.boolean()
 		.default(false)
 		.describe(
-			"Also scan spec files for direct getByTestId(...) calls. Off by default, so an id under uncoveredTestIds means no page object selects it - not that it is untested. Turn on before concluding a test id is unused.",
+			"Also scan the sources for direct getByTestId / getItemByTestId / filterByItemTestId / filterByHasTestId calls. Off by default, so an id under uncoveredTestIds means no page object selects it - not that it is untested. Turn on before concluding a test id is unused.",
+		),
+	buckets: z
+		.array(z.enum(COVERAGE_BUCKETS))
+		.optional()
+		.describe(
+			"Return only these lists. summary and scope always ship. Wins over includeUnused, which is then echoed in meta.ignored.",
 		),
 	limit: z.number().int().min(1).max(1000).default(200),
 });

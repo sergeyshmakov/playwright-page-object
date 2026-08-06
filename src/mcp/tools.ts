@@ -1,11 +1,15 @@
+import * as path from "node:path";
 import type * as z from "zod";
 import {
 	buildCoverageReport,
 	buildPageObjectTree,
 	buildTestIdTree,
 	type ComponentInfo,
+	type CoverageBucket,
 	type Diagnostic,
 	discoverPageObjects,
+	isCatchAllPattern,
+	nearestFiles,
 	nearestIds,
 	normalizeRelPath,
 	type PageObjectSummary,
@@ -14,13 +18,15 @@ import {
 	type Workspace,
 } from "../analysis";
 import { ToolError } from "./errors";
+import type { McpServerOptions } from "./options";
 import { renderPageObjectOutline, renderTestIdOutline } from "./outline";
 import { ok } from "./respond";
-import type {
-	getPageObjectTreeInput,
-	getTestIdTreeInput,
-	listPageObjectsInput,
-	mapCoverageInput,
+import {
+	COVERAGE_BUCKETS,
+	type getPageObjectTreeInput,
+	type getTestIdTreeInput,
+	type listPageObjectsInput,
+	type mapCoverageInput,
 } from "./schemas";
 
 /**
@@ -150,6 +156,40 @@ function summaryEntry(summary: PageObjectSummary): Record<string, unknown> {
 	return entry;
 }
 
+const EMPTY_INDEX_HINT =
+	'No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with --src-dir <dir>; also check that those files import from "playwright-page-object".';
+
+/**
+ * What to say when the page came back empty.
+ *
+ * Three different situations produced the same "nothing was found" message, and
+ * two of them were the caller's own arguments rather than the repository: a
+ * filter that matched none of 305 page objects, and an offset past the end.
+ * Telling either of those callers to restart the server with `--src-dir` sends
+ * them to reconfigure a server that is working correctly.
+ */
+function listEmptyHint(
+	filter: string | undefined,
+	offset: number,
+	total: number,
+	indexed: PageObjectSummary[],
+): string | undefined {
+	if (indexed.length === 0) {
+		return EMPTY_INDEX_HINT;
+	}
+	if (total === 0) {
+		const nearest = nearestIds(
+			filter ?? "",
+			indexed.map((item) => item.className),
+			5,
+		);
+		const suggestion =
+			nearest.length > 0 ? ` Closest names: ${nearest.join(", ")}.` : "";
+		return `No page object matches filter "${filter}", but the index holds ${indexed.length}. Drop or widen the filter — it is a plain case-insensitive substring of the class name or file path.${suggestion}`;
+	}
+	return `offset ${offset} is past the end of ${total} result(s); re-call with a smaller offset.`;
+}
+
 export function handleListPageObjects(
 	workspace: Workspace,
 	args: z.infer<typeof listPageObjectsInput>,
@@ -165,23 +205,81 @@ export function handleListPageObjects(
 		);
 	}
 	const total = items.length;
-	const shown = items.slice(0, args.limit);
+	const offset = args.offset;
+	const shown = items.slice(offset, offset + args.limit);
+	const end = offset + shown.length;
 
-	return ok(shown.map(summaryEntry), {
-		root: index.projectRoot,
-		attribute: index.testIdAttribute,
-		attributeSource: index.testIdAttributeSource,
-		playwrightConfig: configFileOf(workspace),
-		scanned: index.stats.filesScanned,
-		total: total > shown.length ? total : undefined,
-		warnings: index.warnings,
-		hint: withEnvironmentHint(
-			index.warnings,
-			total === 0
-				? 'No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with --src-dir <dir>; also check that those files import from "playwright-page-object".'
-				: undefined,
-		),
-	});
+	return ok(
+		shown.map(summaryEntry),
+		{
+			root: index.projectRoot,
+			attribute: index.testIdAttribute,
+			attributeSource: index.testIdAttributeSource,
+			playwrightConfig: configFileOf(workspace),
+			scanned: index.stats.filesScanned,
+			// Always, not only when it overflows: a caller who cannot tell a
+			// complete list from a capped one has to re-call to find out.
+			total,
+			offset: offset > 0 ? offset : undefined,
+			nextOffset: end < total ? end : undefined,
+			warnings: index.warnings,
+			hint: withEnvironmentHint(
+				index.warnings,
+				shown.length === 0
+					? listEmptyHint(args.filter, offset, total, index.pageObjects)
+					: undefined,
+			),
+		},
+		{
+			shrinkHint:
+				"Re-call with a lower `limit`, a narrower `filter`, or page through with `offset`.",
+		},
+	);
+}
+
+/** Characters that make a value look like an absolute path on either OS. */
+function isAbsoluteLike(value: string): boolean {
+	return path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+/**
+ * Accepts an absolute path that points inside the project, and refuses one that
+ * does not.
+ *
+ * Agents paste the path their editor shows them. Treating
+ * `C:\repo\e2e\Home.ts` as a relative path made it match nothing and produced
+ * `file_not_found` with a list of relative suggestions — technically correct,
+ * unactionable in practice. A path outside the root is a different mistake and
+ * gets a different answer rather than a silent miss.
+ */
+function relativizeFile(
+	workspace: Workspace,
+	file: string,
+): { file: string; note?: string } {
+	if (!isAbsoluteLike(file)) {
+		return { file };
+	}
+	const root = normalizeRelPath(workspace.root).replace(/\/+$/, "");
+	const posix = normalizeRelPath(file);
+	if (foldFile(posix) === foldFile(root)) {
+		throw new ToolError("invalid_input", `"${file}" is the project root.`, {
+			hint: "Pass the path of a file, relative to the project root.",
+		});
+	}
+	if (foldFile(posix).startsWith(`${foldFile(root)}/`)) {
+		const relative = posix.slice(root.length + 1);
+		return {
+			file: relative,
+			note: `\`file\` was given as an absolute path and read as "${relative}", relative to the project root.`,
+		};
+	}
+	throw new ToolError(
+		"invalid_input",
+		`"${file}" is outside the analysed project root (${root}).`,
+		{
+			hint: "Paths are workspace-relative. Pass the path exactly as list_page_objects reports it, or restart the server with --project-root covering that file.",
+		},
+	);
 }
 
 export function handleGetPageObjectTree(
@@ -194,10 +292,14 @@ export function handleGetPageObjectTree(
 		});
 	}
 
+	const resolved = args.file
+		? relativizeFile(workspace, args.file)
+		: { file: undefined, note: undefined };
+
 	const target =
-		args.class && args.file
-			? `${args.file}#${args.class}`
-			: (args.class ?? args.file ?? "");
+		args.class && resolved.file
+			? `${resolved.file}#${args.class}`
+			: (args.class ?? resolved.file ?? "");
 
 	const tree = buildPageObjectTree(workspace, target, {
 		maxDepth: args.depth,
@@ -214,16 +316,45 @@ export function handleGetPageObjectTree(
 		attribute: tree.testIdAttribute,
 		attributeSource: tree.testIdAttributeSource,
 		playwrightConfig: configFileOf(workspace),
+		note: resolved.note,
 		truncated: tree.truncated,
 		warnings: tree.warnings,
 		hint: environmentHint(tree.warnings),
 	};
 
+	const shrink = {
+		shrinkHint: `Re-call with format:"outline", a lower depth (this call used ${args.depth}), or includeMethods:false.`,
+	};
+
 	if (args.format === "outline") {
-		return ok(renderPageObjectOutline(tree), meta);
+		return ok(renderPageObjectOutline(tree), meta, shrink);
 	}
 
-	return ok({ root: tree.root, defs: tree.defs, stats: tree.stats }, meta);
+	return ok(
+		{ root: tree.root, defs: tree.defs, stats: tree.stats },
+		meta,
+		shrink,
+	);
+}
+
+/** What a `testId` lookup should say beyond the occurrence list itself. */
+function lookupHint(
+	needle: string,
+	found: number,
+	catchAllSkipped: number,
+	propOnly: boolean,
+): string | undefined {
+	if (found === 0) {
+		const quarantined =
+			catchAllSkipped > 0
+				? ` ${catchAllSkipped} element(s) do write the attribute with a value built entirely at runtime, which would match any id and so proves nothing about this one; they are excluded.`
+				: "";
+		return `No rendered element with test id "${needle}" was found.${quarantined} Call get_testid_tree without testId to see the full tree, or map_coverage to check for renamed ids.`;
+	}
+	if (propOnly) {
+		return `Every occurrence of "${needle}" is written as a prop on a component tag, and nothing proved the component forwards it to a host element. It may not exist in the DOM at all; check the component before writing a selector for it.`;
+	}
+	return undefined;
 }
 
 export function handleGetTestIdTree(
@@ -246,11 +377,20 @@ export function handleGetTestIdTree(
 			maxDepth: depth,
 		});
 		const needle = args.testId;
+		// A pattern that matches everything matches this too, and reporting it as
+		// a hit tells a caller their id is rendered at a line where the source
+		// writes `data-testid={anything}`. Counted separately so the answer can
+		// say what it left out instead of pretending there was nothing.
+		let catchAllSkipped = 0;
 		const occurrences = tree.inventory.filter((occurrence) => {
 			if (occurrence.value.kind === "static") {
 				return occurrence.value.value === needle;
 			}
 			if (occurrence.value.kind === "pattern" && occurrence.value.regex) {
+				if (isCatchAllPattern(occurrence.value.regex.source)) {
+					catchAllSkipped += 1;
+					return false;
+				}
 				return new RegExp(
 					occurrence.value.regex.source,
 					occurrence.value.regex.flags,
@@ -258,6 +398,9 @@ export function handleGetTestIdTree(
 			}
 			return false;
 		});
+		const propOnly =
+			occurrences.length > 0 &&
+			occurrences.every((occurrence) => occurrence.reach === "component-prop");
 		return ok(
 			{ occurrences },
 			{
@@ -270,10 +413,12 @@ export function handleGetTestIdTree(
 				warnings: tree.warnings,
 				hint: withEnvironmentHint(
 					tree.warnings,
-					occurrences.length === 0
-						? `No rendered element with test id "${needle}" was found. Call get_testid_tree without testId to see the full tree, or map_coverage to check for renamed ids.`
-						: undefined,
+					lookupHint(needle, occurrences.length, catchAllSkipped, propOnly),
 				),
+			},
+			{
+				shrinkHint:
+					'Re-call with format:"outline", a lower depth, or scope the walk with `file` or `component`.',
 			},
 		);
 	}
@@ -378,12 +523,16 @@ export function handleGetTestIdTree(
 		),
 	};
 
+	const shrink = {
+		shrinkHint: `Re-call with format:"outline", a lower depth (this call used ${depth}), or scope the walk with \`file\` or \`component\`.`,
+	};
+
 	if (args.format === "outline") {
-		return ok(renderTestIdOutline(tree), meta);
+		return ok(renderTestIdOutline(tree), meta, shrink);
 	}
 
 	if (tree.fidelity === "flat") {
-		return ok({ fidelity: "flat", inventory: tree.inventory }, meta);
+		return ok({ fidelity: "flat", inventory: tree.inventory }, meta, shrink);
 	}
 
 	// Counted over `roots`, not over the scan: those are two different shapes
@@ -393,6 +542,7 @@ export function handleGetTestIdTree(
 	return ok(
 		{ fidelity: tree.fidelity, roots, stats: subtreeStats(roots) },
 		meta,
+		shrink,
 	);
 }
 
@@ -416,31 +566,6 @@ function sameFile(rel: string, wanted: string): boolean {
 	const left = foldFile(rel);
 	const right = foldFile(wanted);
 	return left === right || left.endsWith(`/${right}`);
-}
-
-/**
- * Files worth naming after an unmatched path: the ones it is a trailing segment
- * of first (a caller who wrote "Home.ts" meant one of those), then plausible
- * typos, then whatever is left — an agent that gets an empty list has nothing to
- * retry with.
- */
-function nearbyFiles(wanted: string, files: string[]): string[] {
-	const folded = foldFile(wanted);
-	const base = folded.slice(folded.lastIndexOf("/") + 1);
-	const suffixed = files.filter((file) => {
-		const candidate = foldFile(file);
-		return (
-			candidate.endsWith(`/${folded}`) ||
-			candidate.slice(candidate.lastIndexOf("/") + 1) === base
-		);
-	});
-	return [
-		...new Set([
-			...suffixed,
-			...nearestIds(normalizeRelPath(wanted), files, 5),
-			...[...files].sort(),
-		]),
-	].slice(0, 5);
 }
 
 /** Counts describing exactly the nodes shipped in `roots`. */
@@ -563,12 +688,35 @@ function gapHint(
 	return caveat;
 }
 
+/** Bucket names in the order the report ships them. */
+const BUCKET_ORDER: CoverageBucket[] = [...COVERAGE_BUCKETS];
+
+/** Which lists this call asked for, and whether an argument was overruled. */
+function selectedBuckets(
+	requested: CoverageBucket[] | undefined,
+	includeUnused: boolean,
+): { buckets: Set<CoverageBucket>; ignored?: string[] } {
+	if (requested && requested.length > 0) {
+		// Two ways to say the same thing, so one of them has to win, and the
+		// explicit list is the one the caller wrote on purpose. Saying which was
+		// dropped costs one meta field and saves a debugging session.
+		return { buckets: new Set(requested), ignored: ["includeUnused"] };
+	}
+	const buckets = new Set(BUCKET_ORDER);
+	if (!includeUnused) {
+		buckets.delete("uncoveredTestIds");
+	}
+	return { buckets };
+}
+
 export function handleMapCoverage(
 	workspace: Workspace,
 	args: z.infer<typeof mapCoverageInput>,
+	options: Pick<McpServerOptions, "assumeForwarded"> = {},
 ) {
 	let poInclude: string[] | undefined;
 	let alsoIncluded: string[] | undefined;
+	let note: string | undefined;
 	if (args.file) {
 		// Scoping is a path glob, so an unmatched `file` selects zero page objects
 		// and the report comes back "successful" with every rendered id uncovered —
@@ -578,14 +726,16 @@ export function handleMapCoverage(
 		// `list_page_objects`, not out of the coverage scan.
 		const index = discoverPageObjects(workspace, { includeControls: true });
 		const files = [...new Set(index.pageObjects.map((item) => item.file))];
-		const wanted = foldFile(args.file);
+		const resolved = relativizeFile(workspace, args.file);
+		note = resolved.note;
+		const wanted = foldFile(resolved.file);
 		const match = files.find((file) => foldFile(file) === wanted);
 		if (!match) {
 			throw new ToolError(
 				"file_not_found",
 				`No page object is declared in "${args.file}".`,
 				{
-					suggestions: nearbyFiles(args.file, files),
+					suggestions: nearestFiles(resolved.file, files),
 					hint: "Use one of the suggested paths, or pass `class` and let the server find the file; list_page_objects reports the file of every page object.",
 				},
 			);
@@ -599,14 +749,20 @@ export function handleMapCoverage(
 			(item) => item.className === args.class,
 		);
 		if (matches.length === 0) {
-			const needle = (args.class ?? "").toLowerCase();
-			const suggestions = index.pageObjects
-				.filter((item) => item.className.toLowerCase().includes(needle))
-				.map((item) => item.className)
+			const wanted = args.class ?? "";
+			const needle = wanted.toLowerCase();
+			const names = index.pageObjects.map((item) => item.className);
+			const substring = names
+				.filter((name) => name.toLowerCase().includes(needle))
 				.slice(0, 5);
+			// A typo shares no substring with the real name ("ChekoutPage" does not
+			// contain "checkout"), which is exactly when a caller most needs the
+			// suggestion. Edit distance answers where substring matching gives up.
+			const suggestions =
+				substring.length > 0 ? substring : nearestIds(wanted, names, 5);
 			throw new ToolError(
 				"class_not_found",
-				`No page object named "${args.class}" was found.`,
+				`No page object named "${wanted}" was found.`,
 				{
 					suggestions,
 					hint: "Call list_page_objects to see every page object.",
@@ -642,43 +798,57 @@ export function handleMapCoverage(
 		attribute: args.attribute,
 		poInclude,
 		includeRawLocators: args.includeRawLocators,
+		assumeForwarded: options.assumeForwarded,
 	});
 
-	const cap = <T>(list: T[]): T[] => list.slice(0, args.limit);
-	const capped = {
+	const { buckets, ignored } = selectedBuckets(
+		args.buckets as CoverageBucket[] | undefined,
+		args.includeUnused,
+	);
+	// `summary` and `scope` always ship: they are the totals every capped list is
+	// read against, and a bucket selection that hid them would turn a shorter
+	// response into an unreadable one.
+	const data: Record<string, unknown> = {
 		summary: report.summary,
-		matched: cap(report.matched),
-		...(args.includeUnused
-			? { uncoveredTestIds: cap(report.uncoveredTestIds) }
-			: {}),
-		deadSelectors: cap(report.deadSelectors),
-		nonTestIdSelectors: cap(report.nonTestIdSelectors),
-		unknownSelectors: cap(report.unknownSelectors),
-		unknownTestIds: cap(report.unknownTestIds),
+		scope: report.scope,
 	};
+	const shown: Record<string, number> = {};
+	let truncated = false;
+	for (const bucket of BUCKET_ORDER) {
+		if (!buckets.has(bucket)) {
+			continue;
+		}
+		const list: unknown[] = report[bucket];
+		data[bucket] = list.slice(0, args.limit);
+		if (list.length > args.limit) {
+			truncated = true;
+			shown[bucket] = args.limit;
+		}
+	}
 
-	// Every list that ships capped has to count, or a client reads a partial
-	// report as complete. `uncoveredTestIds` only ships when includeUnused is on.
-	const truncated =
-		report.matched.length > args.limit ||
-		(args.includeUnused && report.uncoveredTestIds.length > args.limit) ||
-		report.deadSelectors.length > args.limit ||
-		report.nonTestIdSelectors.length > args.limit ||
-		report.unknownSelectors.length > args.limit ||
-		report.unknownTestIds.length > args.limit;
-
-	return ok(capped, {
-		attribute: report.attribute,
-		attributeSource: args.attribute
-			? "param"
-			: workspace.testIdAttribute().source,
-		playwrightConfig: configFileOf(workspace),
-		alsoIncluded,
-		warnings: report.warnings,
-		truncated,
-		// A coverage score computed against the wrong attribute reads as a healthy
-		// `1` (zero of zero ids covered) — the one number in this payload nobody
-		// double-checks. It gets the loudest treatment.
-		hint: environmentHint(report.warnings),
-	});
+	return ok(
+		data,
+		{
+			attribute: report.attribute,
+			attributeSource: args.attribute
+				? "param"
+				: workspace.testIdAttribute().source,
+			playwrightConfig: configFileOf(workspace),
+			alsoIncluded,
+			note,
+			assumeForwarded: options.assumeForwarded === true ? true : undefined,
+			ignored,
+			shown: Object.keys(shown).length > 0 ? shown : undefined,
+			warnings: report.warnings,
+			truncated,
+			// A coverage score computed against the wrong attribute used to read as
+			// a healthy `1` (zero of zero ids covered) — the one number in this
+			// payload nobody double-checks. It gets the loudest treatment.
+			hint: environmentHint(report.warnings),
+		},
+		{
+			shrinkHint:
+				"Re-call with a lower `limit`, fewer `buckets`, or includeUnused:false.",
+		},
+	);
 }

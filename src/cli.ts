@@ -30,6 +30,11 @@ Options for mcp:
   --src-dir <dir>            Restrict scanning to this directory (repeatable)
   --attribute <name>         Test-id attribute                   (default: playwright.config use.testIdAttribute, else data-testid)
   --max-files <n>            Cap on files parsed                 (default: 2000)
+  --assume-forwarded         Count a test id written on a component tag as rendered.
+                             Off by default: a prop only reaches the DOM if the
+                             component forwards it. Turn it on for a component
+                             library that forwards as a rule - map_coverage labels
+                             every id and match the assumption changes.
   --log-level <level>        silent | error | info | debug       (default: error, stderr only)
 
 Global options:
@@ -69,6 +74,7 @@ function runMcp(argv: string[]): number {
 				"src-dir": { type: "string", multiple: true },
 				attribute: { type: "string" },
 				"max-files": { type: "string" },
+				"assume-forwarded": { type: "boolean" },
 				"log-level": { type: "string" },
 				help: { type: "boolean", short: "h" },
 			},
@@ -114,6 +120,7 @@ function runMcp(argv: string[]): number {
 		srcDirs: values["src-dir"] as string[] | undefined,
 		attribute: values.attribute as string | undefined,
 		maxFiles,
+		assumeForwarded: values["assume-forwarded"] === true,
 	};
 
 	// A stdio server that starts against a mistyped path stays up for the whole

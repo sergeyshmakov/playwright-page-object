@@ -1,6 +1,7 @@
 import type {
 	MaybeStatic,
 	MemberNode,
+	MethodInfo,
 	PageObjectNode,
 	PageObjectTree,
 	SelectorInfo,
@@ -102,14 +103,51 @@ function memberRefs(member: MemberNode): string[] {
 	}
 }
 
+/**
+ * Why a `$ref` has no definition in the tree.
+ *
+ * `(unresolved)` used to cover all three cases, and it is the wrong answer for
+ * two of them: the class resolves perfectly well, the walk just stopped before
+ * reaching it. A reader told "unresolved" goes looking for a broken import; one
+ * told "depth limit" re-calls with a bigger depth and gets the answer.
+ */
+function missingRefLabel(
+	owner: PageObjectNode | undefined,
+	tree: PageObjectTree,
+): string {
+	if (owner?.warnings?.some((one) => one.code === "depth-limit-reached")) {
+		return "(not expanded: depth limit)";
+	}
+	if (tree.warnings.some((one) => one.code === "node-budget-reached")) {
+		return "(not expanded: node budget)";
+	}
+	return "(unresolved)";
+}
+
+function methodMarks(method: MethodInfo): string {
+	const marks: string[] = [];
+	if (method.inherited) {
+		marks.push(
+			method.declaredIn ? `inherited: ${method.declaredIn}` : "inherited",
+		);
+	}
+	if (method.visibility === "protected") {
+		marks.push("protected");
+	}
+	if (method.isStatic) {
+		marks.push("static");
+	}
+	return marks.length > 0 ? ` [${marks.join(", ")}]` : "";
+}
+
 export function renderPageObjectOutline(tree: PageObjectTree): string {
 	const lines: string[] = [];
 	const visited = new Set<string>();
 
-	function renderDef(id: string, indent: string): void {
+	function renderDef(id: string, indent: string, owner?: PageObjectNode): void {
 		const def: PageObjectNode | undefined = tree.defs[id];
 		if (!def) {
-			lines.push(`${indent}${id} (unresolved)`);
+			lines.push(`${indent}${id} ${missingRefLabel(owner, tree)}`);
 			return;
 		}
 		if (visited.has(id)) {
@@ -134,13 +172,28 @@ export function renderPageObjectOutline(tree: PageObjectTree): string {
 				if (tree.defs[ref]?.external) {
 					continue;
 				}
-				renderDef(ref, `${indent}    `);
+				renderDef(ref, `${indent}    `, def);
 			}
 		}
 
-		if (def.methods.length > 0) {
-			const signatures = def.methods.map((method) => method.signature);
-			lines.push(`${indent}  methods: ${signatures.join(", ")}`);
+		// Split, because the two are called differently: `await p.apply()` against
+		// `p.total`. One `methods:` line made a getter look like a method, which is
+		// a `TypeError` an agent only finds at run time.
+		const methods = def.methods.filter((method) => method.kind === "method");
+		const accessors = def.methods.filter((method) => method.kind !== "method");
+		if (methods.length > 0) {
+			lines.push(
+				`${indent}  methods: ${methods
+					.map((method) => `${method.signature}${methodMarks(method)}`)
+					.join(", ")}`,
+			);
+		}
+		if (accessors.length > 0) {
+			lines.push(
+				`${indent}  accessors: ${accessors
+					.map((method) => `${method.signature}${methodMarks(method)}`)
+					.join(", ")}`,
+			);
 		}
 	}
 

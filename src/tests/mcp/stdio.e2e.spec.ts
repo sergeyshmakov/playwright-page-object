@@ -75,7 +75,64 @@ describe.skipIf(!existsSync(distCli))("MCP server over spawned stdio", () => {
 		const help = runCli(["mcp", "--help"]);
 		expect(help.status).toBe(0);
 		expect(help.stdout).toContain("--playwright-config");
+		expect(help.stdout).toContain("--assume-forwarded");
 	});
+
+	// The flag changes what "rendered" means in every coverage answer, so it has
+	// to survive the whole path: argv, validation, server options, handler.
+	it("carries --assume-forwarded through to the coverage report", async () => {
+		const root = mkdtempSync(path.join(tmpdir(), "ppo-e2e-assume-"));
+		mkdirSync(path.join(root, "src"), { recursive: true });
+		mkdirSync(path.join(root, "e2e"), { recursive: true });
+		writeFileSync(
+			path.join(root, "src", "Card.tsx"),
+			"export default function Card(props: { children?: unknown }) {\n\treturn <div>{props.children as never}</div>;\n}\n",
+		);
+		writeFileSync(
+			path.join(root, "src", "App.tsx"),
+			'import Card from "./Card";\nexport function App() {\n\treturn <Card data-testid="Ghost" />;\n}\n',
+		);
+		writeFileSync(
+			path.join(root, "e2e", "GhostPage.ts"),
+			[
+				'import type { Locator } from "@playwright/test";',
+				'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+				"",
+				"@RootSelector()",
+				"export class GhostPage extends RootPageObject {",
+				'\t@Selector("Ghost")',
+				"\taccessor Ghost!: Locator;",
+				"}",
+				"",
+			].join("\n"),
+		);
+
+		const transport = new StdioClientTransport({
+			command: process.execPath,
+			args: [distCli, "mcp", "--project-root", root, "--assume-forwarded"],
+		});
+		const client = new Client({ name: "vitest-e2e", version: "0.0.0" });
+		await client.connect(transport);
+
+		try {
+			const result = (await client.callTool({
+				name: "map_coverage",
+				arguments: {},
+			})) as { content: Array<{ type: string; text: string }> };
+			const text = result.content.find((block) => block.type === "text")?.text;
+			const envelope = JSON.parse(text as string) as {
+				ok: boolean;
+				data: { summary: { assumedForwardedTestIds?: number } };
+				meta?: Record<string, unknown>;
+			};
+			expect(envelope.ok).toBe(true);
+			expect(envelope.meta?.assumeForwarded).toBe(true);
+			expect(envelope.data.summary.assumedForwardedTestIds).toBe(1);
+		} finally {
+			await client.close();
+			rmSync(root, { recursive: true, force: true });
+		}
+	}, 60_000);
 
 	// A server started against a directory that is not there stays up for the
 	// whole session answering from an empty scope. Startup is the last moment a

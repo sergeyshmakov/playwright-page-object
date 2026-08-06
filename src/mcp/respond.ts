@@ -50,7 +50,24 @@ function compactMeta(meta: ToolMeta | undefined): ToolMeta | undefined {
 	return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-export function ok(data: unknown, meta?: ToolMeta): TextResult {
+export interface OkOptions {
+	/**
+	 * What to change to make *this* tool's response smaller, in its own argument
+	 * names. The generic advice named knobs three of the four tools do not have
+	 * ("a smaller depth" to `list_page_objects`), so the one caller who most
+	 * needs a next move got advice that does not typecheck.
+	 */
+	shrinkHint?: string;
+}
+
+const GENERIC_SHRINK_HINT =
+	"Re-call with a smaller depth, a narrower filter, or address a single class or file.";
+
+export function ok(
+	data: unknown,
+	meta?: ToolMeta,
+	options: OkOptions = {},
+): TextResult {
 	const cleanedMeta = compactMeta(meta);
 	const payload: Record<string, unknown> = { ok: true, data };
 	if (cleanedMeta) {
@@ -66,12 +83,13 @@ export function ok(data: unknown, meta?: ToolMeta): TextResult {
 		new ToolError(
 			"too_large",
 			`Response is ${serialized.length} bytes (cap ${MAX_RESPONSE_BYTES}).`,
-			{
-				hint: "Re-call with a smaller depth, a narrower filter, or address a single class or file.",
-			},
+			{ hint: options.shrinkHint ?? GENERIC_SHRINK_HINT },
 		),
 	);
 }
+
+/** A list of things to pick from stops being one somewhere around a dozen. */
+export const MAX_ERROR_LIST = 10;
 
 export function fail(error: ToolError): TextResult {
 	const body: Record<string, unknown> = {
@@ -79,10 +97,16 @@ export function fail(error: ToolError): TextResult {
 		message: error.message,
 	};
 	if (error.candidates && error.candidates.length > 0) {
-		body.candidates = error.candidates;
+		body.candidates = error.candidates.slice(0, MAX_ERROR_LIST);
+		if (error.candidates.length > MAX_ERROR_LIST) {
+			body.moreCandidates = error.candidates.length - MAX_ERROR_LIST;
+		}
 	}
 	if (error.suggestions && error.suggestions.length > 0) {
-		body.suggestions = error.suggestions;
+		body.suggestions = error.suggestions.slice(0, MAX_ERROR_LIST);
+		if (error.suggestions.length > MAX_ERROR_LIST) {
+			body.moreSuggestions = error.suggestions.length - MAX_ERROR_LIST;
+		}
 	}
 	if (error.hint) {
 		body.hint = error.hint;

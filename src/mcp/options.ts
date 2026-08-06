@@ -18,6 +18,15 @@ export interface McpServerOptions {
 	attribute?: string;
 	/** Cap on files parsed. */
 	maxFiles?: number;
+	/**
+	 * Count a test id written on a component tag as rendered, for repositories
+	 * whose components forward props as a rule (`--assume-forwarded`).
+	 *
+	 * A server-level switch rather than a tool argument: it changes what the word
+	 * "rendered" means in every answer, and that has to be a property of the
+	 * repository the server was started against, not of one call.
+	 */
+	assumeForwarded?: boolean;
 }
 
 /** Characters that make a `--src-dir` value a glob rather than a plain path. */
