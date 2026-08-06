@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { readPlaywrightConfig } from "../../../analysis/config/playwrightConfig";
-import { Workspace } from "../../../analysis/workspace";
+import { discoverPageObjects } from "../../../analysis/page-objects/discover";
+import { Workspace, type WorkspaceOptions } from "../../../analysis/workspace";
 import { exampleWorkspace } from "../helpers/example";
 
 const temporaryRoots: string[] = [];
@@ -13,7 +14,10 @@ const temporaryRoots: string[] = [];
  * have to be read straight off disk. That makes a real temp directory the
  * honest fixture here.
  */
-function workspaceWithConfig(files: Record<string, string>): Workspace {
+function workspaceWithConfig(
+	files: Record<string, string>,
+	options: Partial<WorkspaceOptions> = {},
+): Workspace {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-pwcfg-"));
 	temporaryRoots.push(root);
 	for (const [relativePath, contents] of Object.entries(files)) {
@@ -22,7 +26,7 @@ function workspaceWithConfig(files: Record<string, string>): Workspace {
 		fs.writeFileSync(absolute, contents, "utf8");
 	}
 	Workspace.reset();
-	return Workspace.acquire({ projectRoot: root });
+	return Workspace.acquire({ projectRoot: root, ...options });
 }
 
 afterAll(() => {
@@ -247,6 +251,33 @@ describe("readPlaywrightConfig", () => {
 		expect(ws.warnings.map((diagnostic) => diagnostic.code)).toContain(
 			"testid-attribute-unresolved",
 		);
+	});
+
+	/**
+	 * An explicit `--attribute` short-circuits `testIdAttribute()` before it
+	 * reaches the config, but the config is still the only source of
+	 * `testdir-unresolved` and the shape diagnostics — and discovery's warnings
+	 * are the only payload that carries them. The override decides the
+	 * attribute, never whether the config is read.
+	 */
+	it("keeps config diagnostics when an explicit attribute overrides the config", () => {
+		const ws = workspaceWithConfig(
+			{
+				"playwright.config.ts": [
+					'import { defineConfig } from "@playwright/test";',
+					"export default defineConfig({ testDir: process.env.E2E_DIR });",
+				].join("\n"),
+				"src/a.ts": "export const a = 1;",
+			},
+			{ attribute: "data-qa" },
+		);
+		expect(ws.testIdAttribute()).toEqual({
+			attribute: "data-qa",
+			source: "param",
+		});
+		expect(
+			discoverPageObjects(ws).warnings.map((diagnostic) => diagnostic.code),
+		).toContain("testdir-unresolved");
 	});
 
 	it("keeps a missing config out of the workspace warnings", () => {

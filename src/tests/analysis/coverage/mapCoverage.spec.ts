@@ -208,6 +208,40 @@ describe("buildCoverageReport — ids written on a component tag", () => {
 		expect(forwarded.deadSelectors).toEqual([]);
 		expect(forwarded.unknownSelectors).toEqual([]);
 	});
+
+	// A lowercase namespace does not make `<icons.Card>` a host element — JSX
+	// reads any dotted tag out of scope — so the id on it is still a prop nobody
+	// has proven reaches the DOM.
+	it("treats a dotted tag with a lowercase namespace the same way", () => {
+		const namespaced = buildCoverageReport(
+			makeWorkspace({
+				...UNFORWARDED,
+				"src/icons.tsx": [
+					"export function Card(props: { children?: unknown }) {",
+					"  return <div>{props.children as never}</div>;",
+					"}",
+				].join("\n"),
+				"src/App.tsx": [
+					'import * as icons from "./icons";',
+					"export default function App() {",
+					'  return <main><icons.Card data-testid="Ghost" /></main>;',
+					"}",
+				].join("\n"),
+			}),
+		);
+		expect(namespaced.matched).toEqual([]);
+		expect(namespaced.summary.matchableUiTestIds).toBe(0);
+		expect(namespaced.unknownSelectors).toContainEqual(
+			expect.objectContaining({
+				memberPath: "GhostPage.Ghost",
+				reason: "unforwarded-prop",
+			}),
+		);
+		expect(namespaced.unknownTestIds[0]).toMatchObject({
+			tag: "icons.Card",
+			unforwarded: true,
+		});
+	});
 });
 
 describe("buildCoverageReport — raw locator sweep", () => {

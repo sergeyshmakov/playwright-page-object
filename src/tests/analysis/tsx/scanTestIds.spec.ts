@@ -109,6 +109,27 @@ describe("scanFileElements — element metadata", () => {
 		]);
 	});
 
+	// JSX resolves any dotted tag as a member expression: `<icons.Button/>` reads
+	// `icons.Button` out of scope, whatever the namespace segment's case. Judging
+	// the tag by that segment made it a host element, so the id written on it was
+	// inventoried as a rendered DOM attribute instead of an unproven prop.
+	it("treats a dotted tag as a component whatever the namespace's case", () => {
+		const { elements, occurrences } = scan(
+			'    <icons.Button data-testid="Save" />',
+		);
+		expect(elements[0].nodeType).toBe("component");
+		expect(occurrences[0]).toMatchObject({
+			tag: "icons.Button",
+			unforwarded: true,
+		});
+	});
+
+	it("keeps a bare lowercase tag a host element", () => {
+		const { elements, occurrences } = scan('    <div data-testid="Panel" />');
+		expect(elements[0].nodeType).toBe("element");
+		expect(occurrences[0].unforwarded).toBeUndefined();
+	});
+
 	it("flags elements rendered behind `&&`", () => {
 		const { occurrences } = scan(
 			'    <div>{cond && <span data-testid="Late" />}</div>',

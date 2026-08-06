@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AnalysisLimitError } from "../../analysis/diagnostics";
 import { resolveRelativeModule } from "../../analysis/util/resolve";
 import { Workspace } from "../../analysis/workspace";
 import { makeWorkspace } from "./helpers/inMemory";
@@ -85,6 +86,32 @@ describe("Workspace.acquire", () => {
 		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 1 })).toThrow(
 			/exceeds the 1 file limit/,
 		);
+	});
+
+	/**
+	 * `staleAfterMs` is a per-call freshness policy, not part of what the
+	 * workspace *contains*, so it stays out of the cache key and the caller
+	 * asking now decides how fresh the answer has to be. Keying on it instead
+	 * would build a second project over the same files; ignoring it left a
+	 * caller that asked for immediate rescans blind to new files for as long as
+	 * the first caller's interval.
+	 */
+	it("applies the caller's staleAfterMs to a cached workspace", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const first = Workspace.acquire({
+			projectRoot: root,
+			staleAfterMs: 60_000,
+		});
+		// Spends the free first re-glob every freshly built workspace gets.
+		Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 });
+		write(root, "src/b.ts", "export const b = 1;");
+		expect(
+			rels(Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 })),
+		).toEqual(["src/a.ts"]);
+
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		expect(ws).toBe(first);
+		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
 	});
 
 	it("treats different analysis options as different workspaces", () => {
@@ -209,6 +236,91 @@ describe("Workspace.revalidate", () => {
 		touch(root, "src/a.ts", 60);
 		ws.revalidate();
 		expect(ws.currentEpoch).toBe(before + 1);
+	});
+});
+
+/**
+ * One cap, one rule, wherever the file came from: the project never holds more
+ * analysable files than `maxFiles`. Whatever addition breaks that is undone and
+ * reported, and the condition is re-detected on every later call — a cap that
+ * could be walked past by simply calling again is not a cap.
+ */
+describe("Workspace maxFiles enforcement", () => {
+	const capped = {
+		"tsconfig.json": JSON.stringify({
+			compilerOptions: { target: "ES2022", noEmit: true },
+			include: ["src"],
+		}),
+		"src/a.ts":
+			'import { helper } from "../shared/helper.js";\nexport const a = helper;',
+		"src/b.ts": "export const b = 1;",
+		"shared/helper.js": "export const helper = 1;",
+	};
+
+	function parsed(ws: Workspace): string[] {
+		return ws.project
+			.getSourceFiles()
+			.map((file) => ws.rel(file.getFilePath()));
+	}
+
+	// The resolver adds files long after the constructor's cap check, so nothing
+	// counted them: one tool call could pull the workspace over `--max-files` for
+	// the rest of the session without ever reporting `max_files_exceeded`.
+	it("refuses a resolver-added file that breaks the cap", () => {
+		const root = scratch(capped);
+		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 2 });
+		expect(() =>
+			resolveRelativeModule(
+				ws.project,
+				ws.project.getSourceFileOrThrow("a.ts"),
+				"../shared/helper.js",
+			),
+		).toThrow(AnalysisLimitError);
+		// Rolled back: the project is exactly what it was before the add.
+		expect(parsed(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
+	it("still resolves an on-demand import that fits inside the cap", () => {
+		const root = scratch(capped);
+		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 3 });
+		expect(
+			resolveRelativeModule(
+				ws.project,
+				ws.project.getSourceFileOrThrow("a.ts"),
+				"../shared/helper.js",
+			),
+		).toBeDefined();
+		expect(parsed(ws)).toContain("shared/helper.js");
+	});
+
+	it("cannot be bypassed by retrying a rescan that broke the cap", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		const options = { projectRoot: root, maxFiles: 2, staleAfterMs: 0 };
+		const ws = Workspace.acquire(options);
+		write(root, "src/c.ts", "export const c = 1;");
+
+		expect(() => ws.revalidate()).toThrow(AnalysisLimitError);
+		// The retry must not find a cached workspace that quietly kept the file.
+		expect(() => Workspace.acquire(options)).toThrow(AnalysisLimitError);
+		expect(() => ws.revalidate()).toThrow(AnalysisLimitError);
+		expect(parsed(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
+	it("recovers once the extra files are gone", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		const options = { projectRoot: root, maxFiles: 2, staleAfterMs: 0 };
+		Workspace.acquire(options);
+		write(root, "src/c.ts", "export const c = 1;");
+		expect(() => Workspace.acquire(options)).toThrow(AnalysisLimitError);
+
+		fs.rmSync(path.join(root, "src/c.ts"));
+		expect(rels(Workspace.acquire(options))).toEqual(["src/a.ts", "src/b.ts"]);
 	});
 });
 

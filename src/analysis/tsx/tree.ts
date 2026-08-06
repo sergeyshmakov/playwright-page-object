@@ -20,6 +20,7 @@ import {
 	resolveComponentRef,
 } from "./componentGraph";
 import {
+	isComponentTag,
 	isConditionallyRendered,
 	isRepeated,
 	type ScannedElement,
@@ -644,7 +645,9 @@ class TreeBuilder {
 		const position = owner.sourceFile.getLineAndColumnAtPos(opening.getStart());
 		const node: UiNode = {
 			tag,
-			nodeType: /^[A-Z]/.test(tag.split(".")[0]) ? "component" : "element",
+			// Same predicate the scan uses, so an id's `unforwarded` flag and the
+			// node it hangs off can never disagree about what the tag is.
+			nodeType: isComponentTag(tag) ? "component" : "element",
 			file: owner.file,
 			loc: {
 				file: owner.file,

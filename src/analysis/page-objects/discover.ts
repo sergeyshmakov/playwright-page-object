@@ -207,11 +207,19 @@ export function runDiscovery(
 	const ctx = createAnalysisContext(ws);
 	const files = selectFiles(ws, options);
 	const classes = new Map<string, DiscoveredClass>();
-	// Before the snapshot below, not after it: reading the attribute is what
-	// parses `playwright.config.*`, and its notes (an unresolvable
-	// `testIdAttribute`, an unresolvable `testDir`) land in `ws.warnings`. Taken
-	// the other way round the snapshot predates them and this index — the only
-	// payload that carries workspace warnings — silently drops every one.
+	// Before the snapshot below, not after it: reading the config is what parses
+	// `playwright.config.*`, and its notes (an unresolvable `testIdAttribute`, an
+	// unresolvable `testDir`, an unrecognised config shape) land in
+	// `ws.warnings`. Taken the other way round the snapshot predates them and
+	// this index — the only payload that carries workspace warnings — silently
+	// drops every one.
+	//
+	// `ws.playwright()` rather than `ws.testIdAttribute()` alone, because an
+	// explicit `attribute` option short-circuits the attribute read before it
+	// reaches the config: the override decides which attribute wins, never
+	// whether the config is read. Both go through the same per-epoch memo, so
+	// this is one parse either way.
+	ws.playwright();
 	const attribute = ws.testIdAttribute();
 	const warnings: Diagnostic[] = [...ws.warnings];
 

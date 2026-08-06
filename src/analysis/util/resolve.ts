@@ -8,6 +8,7 @@ import {
 	SyntaxKind,
 } from "ts-morph";
 import type { DynamicReason } from "../types";
+import { admitAddedFile } from "./fileBudget";
 import { toPosix } from "./paths";
 
 export type RefKind = "class" | "function" | "variable" | "other";
@@ -127,13 +128,19 @@ function loadFromBase(project: Project, base: string): SourceFile | undefined {
 		if (!/\.[cm]?[jt]sx?$/.test(candidate)) {
 			continue;
 		}
+		let added: SourceFile | undefined;
 		try {
-			const added = project.addSourceFileAtPathIfExists(candidate);
-			if (added) {
-				return added;
-			}
+			added = project.addSourceFileAtPathIfExists(candidate);
 		} catch {
 			// A path that cannot be stat'ed is simply not a candidate.
+			continue;
+		}
+		if (added) {
+			// Outside the `try`: the cap gate throws `AnalysisLimitError`, and
+			// swallowing that here would let an on-demand load grow the workspace
+			// past `--max-files` unreported. It rolls the addition back first.
+			admitAddedFile(project, added);
+			return added;
 		}
 	}
 	return undefined;

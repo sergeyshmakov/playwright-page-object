@@ -22,6 +22,7 @@ import type {
 	SourceLoc,
 	TestIdAttributeSource,
 } from "./types";
+import { registerFileAdmission } from "./util/fileBudget";
 import {
 	foldPath,
 	isDeclarationFile,
@@ -74,6 +75,11 @@ function normalizeRoot(projectRoot: string): string {
  * Cache identity. Every option that changes what the workspace *contains* or
  * how it is analysed belongs here: reusing a workspace built with a laxer
  * `maxFiles` would silently defeat a later caller's safety cap.
+ *
+ * `revalidate` and `staleAfterMs` are deliberately absent. They say how fresh
+ * *this* call needs the answer, not what the workspace holds, so keying on them
+ * would build a second project over the same files; {@link Workspace.acquire}
+ * applies the incoming value to the cached workspace instead.
  */
 function workspaceKey(options: WorkspaceOptions): string {
 	return [
@@ -110,6 +116,10 @@ export class Workspace {
 	private readonly memoCache = new Map<string, MemoEntry>();
 	private epoch = 0;
 	private lastGlobAt = 0;
+	/** Per-call freshness policy; the latest caller's value wins (see `acquire`). */
+	private staleAfterMs: number;
+	/** Set once the workspace is in the LRU, so it can evict itself. */
+	private cacheKey: string | null = null;
 	private playwrightInfo: {
 		epoch: number;
 		value: PlaywrightConfigInfo;
@@ -127,6 +137,12 @@ export class Workspace {
 		this.root = normalizeRoot(options.projectRoot);
 		this.tsconfigPath = tsconfigPath;
 		this.inMemory = inMemory;
+		this.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+		// The resolver adds files straight to the `Project`; this is how they reach
+		// the same cap as everything else.
+		registerFileAdmission(project, (added) => {
+			this.admitResolvedFile(added);
+		});
 		this.recordMtimes();
 		this.enforceMaxFiles();
 	}
@@ -140,6 +156,12 @@ export class Workspace {
 			// Refresh recency.
 			Workspace.cache.delete(key);
 			Workspace.cache.set(key, existing);
+			// Latest caller wins. `staleAfterMs` is a freshness policy, not part of
+			// the workspace's identity, so a caller asking for immediate rescans
+			// gets them even though an earlier caller built the workspace with a
+			// long interval — and an omitted value means this caller wants the
+			// default, not whatever the first one happened to pass.
+			existing.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
 			if (options.revalidate !== false) {
 				existing.revalidate();
 			}
@@ -147,6 +169,7 @@ export class Workspace {
 		}
 
 		const created = Workspace.create(options);
+		created.cacheKey = key;
 		Workspace.cache.set(key, created);
 		while (Workspace.cache.size > LRU_SIZE) {
 			const oldest = Workspace.cache.keys().next();
@@ -441,8 +464,8 @@ export class Workspace {
 		}
 
 		const now = Date.now();
-		const staleAfter = this.options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
-		if (now - this.lastGlobAt >= staleAfter) {
+		const rescanned: SourceFile[] = [];
+		if (now - this.lastGlobAt >= this.staleAfterMs) {
 			this.lastGlobAt = now;
 			const before = new Set(
 				this.project.getSourceFiles().map((file) => file.getFilePath()),
@@ -450,6 +473,7 @@ export class Workspace {
 			try {
 				for (const sourceFile of this.rescan()) {
 					if (!before.has(sourceFile.getFilePath())) {
+						rescanned.push(sourceFile);
 						result.added.push(this.rel(sourceFile.getFilePath()));
 					}
 				}
@@ -465,7 +489,10 @@ export class Workspace {
 		) {
 			this.recordMtimes();
 			this.bumpEpoch();
-			this.enforceMaxFiles();
+			// The rescan is the one thing here that can grow the project, so it is
+			// what gets rolled back when the growth breaks the cap — and what makes
+			// this workspace's scope unviable, so it also leaves the cache.
+			this.enforceMaxFiles(rescanned, true);
 		}
 		return result;
 	}
@@ -510,12 +537,88 @@ export class Workspace {
 		}
 	}
 
-	private enforceMaxFiles(): void {
+	/**
+	 * The one place the `maxFiles` cap is applied, whatever the files came from.
+	 *
+	 * Semantics, deliberately uniform across the constructor, the per-call
+	 * rescan and the resolver's on-demand loads: **the project never holds more
+	 * analysable files than `maxFiles`**. An addition that would break that is
+	 * rolled back, the workspace leaves the LRU, and `AnalysisLimitError` (wired
+	 * to `max_files_exceeded`) is raised. The rolled-back files are still on
+	 * disk, so the very next call re-detects the same violation and raises again
+	 * — retrying can no longer walk past the cap, which is what happened while
+	 * the check ran *after* the mutation and only when something had changed.
+	 *
+	 * Rollback rather than "leave it oversized and keep throwing" because an
+	 * over-cap project is precisely the memory and parse cost the cap exists to
+	 * refuse. `evictOnFailure` is for the case where the workspace's own scan
+	 * set outgrew the cap: its scope is no longer viable, so dropping it from
+	 * the LRU lets the next `acquire` rebuild and refuse an oversized tsconfig
+	 * in {@link precheckMaxFiles}, before any source is parsed. A single
+	 * out-of-scope import is not that — the scan set is still fine, and
+	 * rebuilding the whole project on every call would only re-parse it to fail
+	 * in the same place.
+	 */
+	private enforceMaxFiles(
+		rollback: readonly SourceFile[] = [],
+		evictOnFailure = false,
+	): void {
 		const limit = this.options.maxFiles ?? DEFAULT_MAX_FILES;
-		const count = this.sourceFiles().length;
-		if (count > limit) {
-			throw new AnalysisLimitError(limit, count);
+		const count = this.analysableCount();
+		if (count <= limit) {
+			return;
 		}
+		for (const sourceFile of rollback) {
+			this.mtimes.delete(toPosix(sourceFile.getFilePath()));
+			this.project.removeSourceFile(sourceFile);
+		}
+		this.fileList = null;
+		// Those files are still on disk. Without this the next sweep inside the
+		// throttle window would skip the re-glob, see nothing added and quietly
+		// analyse the truncated project it was just left with.
+		this.lastGlobAt = 0;
+		if (evictOnFailure && this.cacheKey !== null) {
+			if (Workspace.cache.get(this.cacheKey) === this) {
+				Workspace.cache.delete(this.cacheKey);
+			}
+			this.cacheKey = null;
+		}
+		throw new AnalysisLimitError(limit, count);
+	}
+
+	/**
+	 * Cap gate for a file the resolver added on demand.
+	 *
+	 * The cheap raw count comes first: the analysable set is a subset of the
+	 * project's files, so nothing can be over the cap while the raw count is
+	 * not, and this runs on every on-demand load.
+	 */
+	private admitResolvedFile(added: SourceFile): void {
+		const limit = this.options.maxFiles ?? DEFAULT_MAX_FILES;
+		if (this.project.getSourceFiles().length <= limit) {
+			return;
+		}
+		this.enforceMaxFiles([added]);
+	}
+
+	/**
+	 * Live count of what the cap governs.
+	 *
+	 * Counted fresh rather than through `sourceFiles()`: that list is memoized
+	 * per epoch, and files added since — by the resolver, or by the rescan being
+	 * checked right now — are exactly the ones the cap has to see.
+	 */
+	private analysableCount(): number {
+		const include = this.options.include ?? [];
+		const exclude = this.options.exclude ?? [];
+		let count = 0;
+		for (const sourceFile of this.project.getSourceFiles()) {
+			const absolute = sourceFile.getFilePath();
+			if (isAnalysable(absolute, this.rel(absolute), include, exclude)) {
+				count += 1;
+			}
+		}
+		return count;
 	}
 }
 

@@ -30,9 +30,20 @@ export interface ScannedElement {
 	loc: SourceLoc;
 }
 
-function isComponentTag(tag: string): boolean {
-	const head = tag.split(".")[0];
-	return /^[A-Z]/.test(head);
+/**
+ * Whether a JSX tag names a component rather than a host element.
+ *
+ * Single source of truth for the scan, the tree and anything else that has to
+ * make the call. Two rules, both JSX's own: a capitalised bare tag is an
+ * identifier read out of scope, and *any* dotted tag is a member expression —
+ * `<icons.Button/>` reads `icons.Button` from scope however the namespace
+ * segment is spelled. Judging a dotted tag by that segment made
+ * `<icons.Button data-testid="Save"/>` a host element, so the id written on it
+ * was inventoried as a rendered DOM attribute instead of the unproven prop it
+ * is, and the tree walked past a component boundary it should have reported.
+ */
+export function isComponentTag(tag: string): boolean {
+	return tag.includes(".") || /^[A-Z]/.test(tag);
 }
 
 /** Name standing in for a component the source does not name: the file's own. */
