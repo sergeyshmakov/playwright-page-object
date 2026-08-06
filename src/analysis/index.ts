@@ -22,11 +22,20 @@ export {
 	type TsConfigLocation,
 } from "./config/tsconfig";
 export {
+	classifySelector,
+	type SelectorClassification,
+} from "./coverage/classify";
+export {
 	buildCoverageReport,
 	type CoverageOptions,
+	partitionInventory,
 } from "./coverage/mapCoverage";
-export { matchSelectorToUi, probesFromPattern } from "./coverage/match";
-export { editDistance, nearestIds } from "./coverage/suggest";
+export {
+	isCatchAllPattern,
+	matchSelectorToUi,
+	probesFromPattern,
+} from "./coverage/match";
+export { editDistance, nearestFiles, nearestIds } from "./coverage/suggest";
 export {
 	AnalysisLimitError,
 	AnalysisTargetError,

@@ -388,20 +388,21 @@ function hasAnySpread(element: JsxOpeningLike): boolean {
 }
 
 /**
- * Flat inventory of every test id in one file.
+ * Flat inventory of every test id in an already-scanned element list.
  *
  * An id written on a component tag is inventoried like any other — dropping it
- * would make a page object that selects it look dead — but it is flagged
- * `unforwarded`, because a prop only reaches the DOM if the component passes it
- * to a host element. Proving that is the tree walk's job, not this scan's.
+ * would make a page object that selects it look dead — but its `reach` is
+ * `"component-prop"`, because a prop only reaches the DOM if the component
+ * passes it to a host element. Proving that is the tree walk's job, not this
+ * scan's, and until it is proven the scan says exactly that rather than
+ * implying the id renders.
  */
-export function scanFileTestIds(
-	sourceFile: SourceFile,
-	attribute: string,
+export function occurrencesFromElements(
+	elements: ScannedElement[],
 	relFile: string,
 ): TestIdOccurrence[] {
 	const out: TestIdOccurrence[] = [];
-	for (const element of scanFileElements(sourceFile, attribute, relFile)) {
+	for (const element of elements) {
 		for (const value of element.testIds) {
 			const occurrence: TestIdOccurrence = {
 				value,
@@ -409,6 +410,7 @@ export function scanFileTestIds(
 				loc: element.loc,
 				tag: element.tag,
 				component: element.component,
+				reach: element.nodeType === "component" ? "component-prop" : "element",
 			};
 			if (element.conditional) {
 				occurrence.conditional = true;
@@ -416,11 +418,20 @@ export function scanFileTestIds(
 			if (element.repeated) {
 				occurrence.repeated = true;
 			}
-			if (element.nodeType === "component") {
-				occurrence.unforwarded = true;
-			}
 			out.push(occurrence);
 		}
 	}
 	return out;
+}
+
+/** Flat inventory of every test id in one file. */
+export function scanFileTestIds(
+	sourceFile: SourceFile,
+	attribute: string,
+	relFile: string,
+): TestIdOccurrence[] {
+	return occurrencesFromElements(
+		scanFileElements(sourceFile, attribute, relFile),
+		relFile,
+	);
 }

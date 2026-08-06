@@ -21,6 +21,28 @@ function methodsOf(
 	return readMethods(fixture.cls, fixture.imports, fixture.ctx, options);
 }
 
+/** `Host extends Base`, where `Base` declares `fromBase()` in another file. */
+function inheritanceFixture(body = "  own() {}") {
+	return classFixture(
+		[
+			PRELUDE,
+			'import { Base } from "./base";',
+			"export class Host extends Base {",
+			body,
+			"}",
+		].join("\n"),
+		"Host",
+		{
+			"src/base.ts": [
+				'import { PageObject } from "playwright-page-object";',
+				"export class Base extends PageObject {",
+				"  fromBase() {}",
+				"}",
+			].join("\n"),
+		},
+	);
+}
+
 describe("readMethods", () => {
 	it("lists public methods with syntactic signatures", () => {
 		const methods = methodsOf(
@@ -65,6 +87,67 @@ describe("readMethods", () => {
 		expect(methods[0]).toMatchObject({ name: "total", kind: "getter" });
 	});
 
+	// `total(): number` for a getter is a `TypeError` an agent only finds at run
+	// time: it writes `await page.total()` and the property is not callable.
+	it("renders an accessor as a property read, not as a call", () => {
+		const getter = methodsOf("  get total(): number { return 1; }");
+		expect(getter[0].signature).toBe("get total: number");
+
+		const bare = methodsOf("  get total() { return 1; }");
+		expect(bare[0].signature).toBe("get total");
+
+		const setter = methodsOf("  set total(value: number) { void value; }");
+		expect(setter[0]).toMatchObject({
+			kind: "setter",
+			signature: "set total(value: number)",
+			returnType: null,
+		});
+	});
+
+	it("records visibility, so a protected helper is not read as public API", () => {
+		const methods = methodsOf(
+			["  protected shared() {}", "  open() {}"].join("\n"),
+		);
+		expect(
+			methods.map((method) => [method.name, method.visibility]).sort(),
+		).toEqual([
+			["open", "public"],
+			["shared", "protected"],
+		]);
+	});
+
+	// `apply = async () => {}` is callable exactly like a method and is the usual
+	// way to bind `this`. Dropping it hid a whole style of page object.
+	it("reports an arrow-function class property as a method", () => {
+		const methods = methodsOf(
+			"  apply = async (code: string): Promise<void> => { void code; };",
+		);
+		expect(methods[0]).toMatchObject({
+			name: "apply",
+			kind: "method",
+			isAsync: true,
+			declaredAsProperty: true,
+			signature: "apply(code: string): Promise<void>",
+			returnType: "Promise<void>",
+		});
+	});
+
+	it("keeps a plain data field out of the method list", () => {
+		const methods = methodsOf(
+			["  count = 0;", "  label: string = 'x';"].join("\n"),
+		);
+		expect(methods).toEqual([]);
+	});
+
+	it("flags a static arrow property as static", () => {
+		const methods = methodsOf("  static make = () => 1;");
+		expect(methods[0]).toMatchObject({
+			name: "make",
+			isStatic: true,
+			declaredAsProperty: true,
+		});
+	});
+
 	it("does not list a decorated accessor as a method", () => {
 		const methods = methodsOf(
 			['  @Selector("x")\n  accessor field!: Locator;', "  run() {}"].join(
@@ -102,31 +185,46 @@ describe("readMethods", () => {
 		expect(checked[0].returnType).toBe("number");
 	});
 
-	it("adds project-local base-class methods only when asked", () => {
-		const extra = {
-			"src/base.ts": [
-				'import { PageObject } from "playwright-page-object";',
-				"export class Base extends PageObject {",
-				"  fromBase() {}",
-				"}",
-			].join("\n"),
-		};
-		const header = "export class Host extends Base {";
-		const withImport = `${PRELUDE}\nimport { Base } from "./base";`;
-		const fixture = classFixture(
-			[withImport, header, "  own() {}", "}"].join("\n"),
-			"Host",
-			extra,
-		);
-		const own = readMethods(fixture.cls, fixture.imports, fixture.ctx);
-		expect(own.map((method) => method.name)).toEqual(["own"]);
-		const inherited = readMethods(fixture.cls, fixture.imports, fixture.ctx, {
-			includeInherited: true,
-		});
-		expect(inherited.map((method) => method.name).sort()).toEqual([
+	// A base class's helpers really are on every subclass's prototype. Reporting
+	// only the subclass's own made the surface a subset of the truth, and an
+	// agent that cannot see `fromBase` writes a second one.
+	it("lists project-local base-class methods by default", () => {
+		const fixture = inheritanceFixture();
+		const byDefault = readMethods(fixture.cls, fixture.imports, fixture.ctx);
+		expect(byDefault.map((method) => method.name).sort()).toEqual([
 			"fromBase",
 			"own",
 		]);
+		const base = byDefault.find((method) => method.name === "fromBase");
+		expect(base).toMatchObject({ inherited: true, declaredIn: "Base" });
+		expect(
+			byDefault.find((method) => method.name === "own")?.inherited,
+		).toBeUndefined();
+	});
+
+	it("returns only the class's own methods when asked", () => {
+		const fixture = inheritanceFixture();
+		const own = readMethods(fixture.cls, fixture.imports, fixture.ctx, {
+			includeInherited: false,
+		});
+		expect(own.map((method) => method.name)).toEqual(["own"]);
+	});
+
+	// The prototype chain does not care about `private`: an own member of that
+	// name is what a call resolves to, and it does not compile. Reporting the
+	// base's public one would advertise a call that fails to typecheck.
+	it("lets a private subclass override shadow a public base method", () => {
+		const fixture = inheritanceFixture("  private fromBase() {}");
+		const methods = readMethods(fixture.cls, fixture.imports, fixture.ctx);
+		expect(methods.map((method) => method.name)).toEqual([]);
+	});
+
+	it("still shadows with a public override, reporting it once", () => {
+		const fixture = inheritanceFixture("  fromBase(): void {}");
+		const methods = readMethods(fixture.cls, fixture.imports, fixture.ctx);
+		expect(methods.map((method) => method.name)).toEqual(["fromBase"]);
+		expect(methods[0].inherited).toBeUndefined();
+		expect(methods[0].signature).toBe("fromBase(): void");
 	});
 
 	it("renders optional and rest parameters", () => {

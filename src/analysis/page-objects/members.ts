@@ -105,7 +105,15 @@ export interface MemberRead {
 	inherited?: boolean;
 }
 
-function visibilityOf(member: ClassMemberTypes): MemberNode["visibility"] {
+/**
+ * A member's declared visibility, `#name` included.
+ *
+ * Shared with the method reader so a class's selectors and its methods can
+ * never disagree about what "private" means on the same declaration.
+ */
+export function visibilityOf(
+	member: ClassMemberTypes,
+): MemberNode["visibility"] {
 	const name = Node.hasName(member) ? member.getName() : "";
 	if (typeof name === "string" && name.startsWith("#")) {
 		return "private";

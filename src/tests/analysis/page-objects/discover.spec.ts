@@ -111,6 +111,34 @@ describe("discoverPageObjects", () => {
 		});
 	});
 
+	// The count in the index and the list in the tree are read as the same
+	// number by anyone comparing them, so they have to be counted the same way.
+	it("counts inherited methods, the way the tree lists them", () => {
+		const index = discoverPageObjects(
+			makeWorkspace({
+				...FILES,
+				"e2e/Base.ts": [
+					libImport("RootPageObject"),
+					"export class Base extends RootPageObject {",
+					"  async login() {}",
+					"  async logout() {}",
+					"}",
+				].join("\n"),
+				"e2e/HomePage.ts": ROOT.replace(
+					"export class HomePage extends RootPageObject {",
+					"export class HomePage extends Base {\n  // eslint-disable-next-line\n  static readonly _u = 0;",
+				).replace(
+					'import { Row } from "./Row";',
+					'import { Row } from "./Row";\nimport { Base } from "./Base";',
+				),
+			}),
+		);
+		const home = index.pageObjects.find(
+			(entry) => entry.className === "HomePage",
+		);
+		expect(home?.counts.methods).toBe(3);
+	});
+
 	it("orders fixture-bound roots first, then nested objects, then controls", () => {
 		const index = discoverPageObjects(makeWorkspace(FILES), {
 			includeControls: true,

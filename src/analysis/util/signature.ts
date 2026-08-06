@@ -1,8 +1,11 @@
 import type {
+	ArrowFunction,
 	ConstructorDeclaration,
+	FunctionExpression,
 	GetAccessorDeclaration,
 	MethodDeclaration,
 	ParameterDeclaration,
+	PropertyDeclaration,
 	SetAccessorDeclaration,
 } from "ts-morph";
 
@@ -62,6 +65,64 @@ export function renderReturnType(
 	if (mode === "checked") {
 		try {
 			return renderType(node.getReturnType().getText(node));
+		} catch {
+			return null;
+		}
+	}
+	return null;
+}
+
+/**
+ * Renders an accessor as the thing a caller writes, not as a method.
+ *
+ * `total(): number` for a getter is a lie an agent acts on: it writes
+ * `page.total()` and gets a `TypeError`. A getter reads as a property and a
+ * setter as an assignment, so the signature says `get total: number` and
+ * `set total(value: number)` — the `get`/`set` word carries the call syntax and
+ * the shape carries the type.
+ */
+export function renderAccessor(
+	node: GetAccessorDeclaration | SetAccessorDeclaration,
+	kind: "getter" | "setter",
+	mode: SignatureMode,
+): string {
+	const name = node.getName();
+	if (kind === "setter") {
+		return `set ${name}(${renderParameters(node.getParameters())})`;
+	}
+	const returnType = renderReturnType(node, mode);
+	return returnType ? `get ${name}: ${returnType}` : `get ${name}`;
+}
+
+/**
+ * Renders a class property that holds a function as the call it supports.
+ *
+ * `run = async (n: number) => {}` is callable exactly like a method, and an
+ * agent reading a bare property name has no way to tell. The rendered form is
+ * deliberately method-shaped for that reason; `MethodInfo.declaredAsProperty`
+ * carries the distinction for anything that needs it.
+ */
+export function renderFunctionProperty(
+	property: PropertyDeclaration,
+	fn: ArrowFunction | FunctionExpression,
+	mode: SignatureMode,
+): string {
+	const head = `${property.getName()}(${renderParameters(fn.getParameters())})`;
+	const returnType = renderFunctionReturnType(fn, mode);
+	return returnType ? `${head}: ${returnType}` : head;
+}
+
+export function renderFunctionReturnType(
+	fn: ArrowFunction | FunctionExpression,
+	mode: SignatureMode,
+): string | null {
+	const annotated = fn.getReturnTypeNode();
+	if (annotated) {
+		return renderType(annotated.getText());
+	}
+	if (mode === "checked") {
+		try {
+			return renderType(fn.getReturnType().getText(fn));
 		} catch {
 			return null;
 		}

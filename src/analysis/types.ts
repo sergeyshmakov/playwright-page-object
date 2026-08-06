@@ -70,7 +70,18 @@ export type DiagnosticCode =
 	| "inventory-scope-gap"
 	// coverage
 	| "raw-locators-disabled"
-	| "unforwarded-prop";
+	/** Ids written as a prop on a component tag with no forwarding proven. */
+	| "testid-forwarding-unproven"
+	/** `assumeForwarded` was on, so unproven prop ids were counted as rendered. */
+	| "forwarding-assumed"
+	/** Enough selectors land on unproven props that the report is worth re-running. */
+	| "forwarding-unproven-widespread"
+	/** A test-id pattern matches every id, so it can prove nothing about any of them. */
+	| "unanchored-testid-pattern"
+	/** Nothing in the scan is matchable, so the coverage ratio has no denominator. */
+	| "no-matchable-testids"
+	/** Component tags come from modules outside the scanned sources. */
+	| "ui-scope-incomplete";
 
 export interface Diagnostic {
 	code: DiagnosticCode;
@@ -107,8 +118,21 @@ export type DynamicReason =
 	| "identifier-unresolved"
 	| "custom-selector"
 	| "unsupported-syntax"
-	/** Only matched a test id written as a prop on a component tag (see `TestIdOccurrence.unforwarded`). */
-	| "unforwarded-prop";
+	/**
+	 * Only matched a test id written as a prop on a component tag, and nothing
+	 * proved the component forwards it (see `TestIdOccurrence.reach`).
+	 */
+	| "forwarding-unproven"
+	/**
+	 * The pattern has no literal anchor left once its `.+` / `.*` holes are
+	 * removed, so it matches every id and proves nothing about any of them.
+	 */
+	| "unanchored-pattern"
+	/**
+	 * The selector's literal appears inside a test id the source builds at
+	 * runtime, so the element probably exists but the value cannot be read.
+	 */
+	| "dynamic-testid-expression";
 
 export interface DynamicValue {
 	kind: "dynamic";
@@ -211,7 +235,22 @@ export interface MethodInfo {
 	kind: "method" | "getter" | "setter";
 	signature: string;
 	isAsync: boolean;
+	/**
+	 * `private` and `#private` members are never reported at all, so the only two
+	 * states a listed method can be in are the two a test author can call.
+	 */
+	visibility: "public" | "protected";
 	isStatic?: boolean;
+	/** Declared on a project-local base class rather than on this one. */
+	inherited?: true;
+	/** Name of the class that declares it. Only set when {@link inherited}. */
+	declaredIn?: string;
+	/**
+	 * Written as a class property holding a function (`run = async () => {}`)
+	 * rather than with method syntax. It is callable all the same, but it is an
+	 * own property, so it shadows rather than overrides.
+	 */
+	declaredAsProperty?: true;
 	returnType: string | null;
 	doc?: string;
 	loc: SourceLoc;
@@ -456,17 +495,23 @@ export interface TestIdOccurrence {
 	repeated?: boolean;
 	viaProp?: string;
 	/**
-	 * The attribute sits on a *component* tag, so it is a prop rather than a DOM
-	 * attribute: `<Card data-testid="save"/>` renders that id only if `Card`
-	 * forwards the prop to a host element, and a component that ignores it makes
-	 * the id disappear at runtime.
+	 * How far the written attribute was proven to travel towards the DOM.
 	 *
-	 * The occurrence is kept — it is a real fact about the source — but coverage
-	 * treats it as unproven rather than rendered. Forwarding that the tree walk
-	 * *does* prove is recorded as its own occurrence on the host element, with
-	 * `viaProp` / no flag, and that one is what coverage matches against.
+	 * - `"element"` — written directly on a host element. It renders.
+	 * - `"forwarded"` — written as a prop somewhere, and the walk proved it lands
+	 *   on a host element here. It renders.
+	 * - `"component-prop"` — written on a *component* tag and nothing proved it
+	 *   goes any further: `<Card data-testid="save"/>` renders that id only if
+	 *   `Card` passes the prop to a host element, and a component that ignores it
+	 *   makes the id disappear at runtime.
+	 *
+	 * The occurrence is kept in every case — it is a real fact about the source —
+	 * but coverage counts only the first two as rendered. Required rather than
+	 * optional on purpose: "the flag is absent" and "the reach is unknown" are
+	 * not the same claim, and reading one as the other is what makes a coverage
+	 * number confidently wrong.
 	 */
-	unforwarded?: true;
+	reach: "element" | "forwarded" | "component-prop";
 }
 
 export interface ComponentInfo {
@@ -506,6 +551,16 @@ export interface TestIdTree {
 	/** Always complete across every scanned file, whatever the fidelity. */
 	inventory: TestIdOccurrence[];
 	components: Record<string, ComponentInfo>;
+	/**
+	 * Non-relative module specifiers that supply component tags the scan could
+	 * not resolve to a file inside the workspace. Sorted, capped at 10.
+	 *
+	 * Evidence of *scope*, not of failure: a repository whose components come
+	 * from a sibling package nobody put in scope renders test ids this scan can
+	 * never see, and a coverage report that does not say so reads as proof those
+	 * ids do not exist.
+	 */
+	externalModules: string[];
 	warnings: Diagnostic[];
 	truncated?: boolean;
 	stats: {
@@ -513,6 +568,8 @@ export interface TestIdTree {
 		occurrences: number;
 		dynamic: number;
 		parseMs: number;
+		/** Component tags resolved to one of {@link TestIdTree.externalModules}. */
+		externalComponentTags: number;
 		/** Nodes emitted into `roots`. */
 		nodes: number;
 		/** Nodes with a structural `unresolved` reason (`spread-props` excluded). */
@@ -610,7 +667,47 @@ export interface UiTestId {
 	patternFlags?: string;
 	prefix?: string | null;
 	occurrences: TestIdOccurrence[];
+	/**
+	 * The group only exists in the rendered side because `assumeForwarded` was
+	 * on: every occurrence in it is a `component-prop`.
+	 */
+	assumed?: true;
 }
+
+/** Where a selector was written: in a page-object class, or inline in a call. */
+export type SelectorOrigin = "page-object" | "raw";
+
+/** A UI test id coverage could not treat as rendered, and why. */
+export interface UnknownTestId {
+	reason: "dynamic-value" | "forwarding-unproven" | "unanchored-pattern";
+	occurrence: TestIdOccurrence;
+	/** The offending pattern, for `"unanchored-pattern"`. */
+	patternSource?: string;
+}
+
+/** What the report knows about a selector it could neither match nor call dead. */
+export interface UnknownSelectorEvidence {
+	/** Rendered-but-unproven ids the selector matched. */
+	testIds?: string[];
+	/** Where one of those ids is written. */
+	loc?: SourceLoc;
+	/** Source text of the dynamic expression the selector's literal appears in. */
+	raw?: string;
+	/**
+	 * Ids the selector would also have matched, outranked by the evidence above.
+	 * Nothing is silently dropped: the weaker match is reported, not deleted.
+	 */
+	alsoMatchesRendered?: string[];
+}
+
+/** The six lists a {@link CoverageReport} ships, as addressable names. */
+export type CoverageBucket =
+	| "matched"
+	| "uncoveredTestIds"
+	| "deadSelectors"
+	| "nonTestIdSelectors"
+	| "unknownSelectors"
+	| "unknownTestIds";
 
 export interface CoverageReport {
 	schemaVersion: 1;
@@ -620,12 +717,36 @@ export interface CoverageReport {
 		matchableUiTestIds: number;
 		coveredUiTestIds: number;
 		testIdSelectors: number;
+		/** Selectors read from direct locator calls rather than from a decorator. */
+		rawSelectors: number;
+		/** Length of `matched`, which counts pairs and so can exceed either side. */
+		matched: number;
 		deadSelectors: number;
 		nonTestIdSelectors: number;
 		unknownSelectors: number;
 		unknownTestIds: number;
-		/** `coveredUiTestIds / matchableUiTestIds`, 0..1. `1` when nothing is matchable. */
-		coverage: number;
+		/** Length of `uncoveredTestIds`, so a capped list still reports its size. */
+		uncoveredTestIds: number;
+		/** Ids quarantined for matching everything (see `unanchored-pattern`). */
+		catchAllTestIds: number;
+		/** Prop ids promoted to rendered because `assumeForwarded` was on. */
+		assumedForwardedTestIds?: number;
+		/** Static rendered ids the selectors were compared against. */
+		staticUiIdsCompared: number;
+		/**
+		 * `coveredUiTestIds / matchableUiTestIds`, 0..1, or `null` when nothing was
+		 * matchable. A ratio of zero over zero used to ship as `1`, which is the
+		 * one number in this report nobody double-checks.
+		 */
+		coverage: number | null;
+	};
+	/** What the two sides of the comparison were drawn from. */
+	scope: {
+		uiFilesScanned: number;
+		pageObjectFilesScanned: number;
+		/** Non-relative modules supplying component tags, sorted, capped at 10. */
+		externalComponentModules: string[];
+		externalComponentTags: number;
 	};
 	matched: Array<{
 		selector: {
@@ -634,6 +755,7 @@ export interface CoverageReport {
 			loc: SourceLoc;
 			kind: SelectorKind;
 			text: string;
+			origin: SelectorOrigin;
 		};
 		ui: {
 			id: string | null;
@@ -642,18 +764,26 @@ export interface CoverageReport {
 		};
 		confidence: MatchConfidence;
 		probe?: string;
+		/** The id only counts as rendered because `assumeForwarded` was on. */
+		forwarding?: "assumed";
 	}>;
 	uncoveredTestIds: Array<{
 		id: string | null;
 		patternSource: string | null;
 		occurrences: TestIdOccurrence[];
 		suggestion: string;
+		/**
+		 * Selectors that matched this id speculatively but were credited to a
+		 * stronger piece of evidence elsewhere. It may well be covered.
+		 */
+		speculativeSelectors?: string[];
 	}>;
 	deadSelectors: Array<{
 		defId: string;
 		memberPath: string;
 		loc: SourceLoc;
 		text: string;
+		origin: SelectorOrigin;
 		nearestTestIds: string[];
 	}>;
 	nonTestIdSelectors: Array<{
@@ -669,7 +799,9 @@ export interface CoverageReport {
 		loc: SourceLoc;
 		reason: DynamicReason;
 		raw: string;
+		origin: SelectorOrigin;
+		evidence?: UnknownSelectorEvidence;
 	}>;
-	unknownTestIds: TestIdOccurrence[];
+	unknownTestIds: UnknownTestId[];
 	warnings: Diagnostic[];
 }

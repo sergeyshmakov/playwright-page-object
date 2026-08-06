@@ -36,6 +36,9 @@ const PAGE_OBJECT = {
 	].join("\n"),
 };
 
+/** A template hole in fixture *source*, assembled so it is not one here. */
+const hole = (name: string): string => `\${${name}}`;
+
 function report(extra: Record<string, string> = {}, options = {}) {
 	return buildCoverageReport(
 		makeWorkspace({ ...UI, ...PAGE_OBJECT, ...extra }),
@@ -128,7 +131,10 @@ describe("buildCoverageReport — dynamic UI ids", () => {
 		expect(result.summary.unknownTestIds).toBe(1);
 		expect(result.summary.matchableUiTestIds).toBe(1);
 		expect(result.summary.coverage).toBe(1);
-		expect(result.unknownTestIds[0].value.kind).toBe("dynamic");
+		expect(result.unknownTestIds[0]).toMatchObject({
+			reason: "dynamic-value",
+		});
+		expect(result.unknownTestIds[0].occurrence.value.kind).toBe("dynamic");
 	});
 });
 
@@ -176,7 +182,7 @@ describe("buildCoverageReport — ids written on a component tag", () => {
 		expect(result.unknownSelectors).toContainEqual(
 			expect.objectContaining({
 				memberPath: "GhostPage.Ghost",
-				reason: "unforwarded-prop",
+				reason: "forwarding-unproven",
 			}),
 		);
 	});
@@ -184,11 +190,11 @@ describe("buildCoverageReport — ids written on a component tag", () => {
 	it("keeps the occurrence in the report instead of dropping it", () => {
 		expect(result.summary.unknownTestIds).toBe(1);
 		expect(result.unknownTestIds[0]).toMatchObject({
-			tag: "Card",
-			unforwarded: true,
+			reason: "forwarding-unproven",
+			occurrence: { tag: "Card", reach: "component-prop" },
 		});
 		expect(result.warnings.map((diagnostic) => diagnostic.code)).toContain(
-			"unforwarded-prop",
+			"testid-forwarding-unproven",
 		);
 	});
 
@@ -234,12 +240,12 @@ describe("buildCoverageReport — ids written on a component tag", () => {
 		expect(namespaced.unknownSelectors).toContainEqual(
 			expect.objectContaining({
 				memberPath: "GhostPage.Ghost",
-				reason: "unforwarded-prop",
+				reason: "forwarding-unproven",
 			}),
 		);
 		expect(namespaced.unknownTestIds[0]).toMatchObject({
-			tag: "icons.Card",
-			unforwarded: true,
+			reason: "forwarding-unproven",
+			occurrence: { tag: "icons.Card", reach: "component-prop" },
 		});
 	});
 });
@@ -288,6 +294,433 @@ describe("buildCoverageReport — raw locator sweep", () => {
 		);
 		expect(matched?.selector.kind).toBe("testIdPattern");
 		expect(matched?.ui.id).toBe("Orphan");
+	});
+});
+
+/**
+ * The field failure this whole cluster exists for.
+ *
+ * One element whose test id is a bare template hole compiles to `^.+$`. Matched like
+ * any other pattern it covered every selector in the repository — about 1340 of
+ * them — reported a healthy score, and emptied the dead-selector list, so the
+ * report was simultaneously perfect and useless.
+ */
+describe("buildCoverageReport — a pattern that matches everything", () => {
+	const CATCH_ALL = {
+		"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+		"src/App.tsx": [
+			"export default function App() {",
+			"  const id = String(Math.random());",
+			`  return <main><div data-testid={\`${hole("id")}\`} /></main>;`,
+			"}",
+		].join("\n"),
+		"e2e/WidePage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			"@RootSelector()",
+			"export class WidePage extends RootPageObject {",
+			'  @Selector("Alpha")',
+			"  accessor A!: Locator;",
+			'  @Selector("Beta")',
+			"  accessor B!: Locator;",
+			'  @Selector("Gamma")',
+			"  accessor C!: Locator;",
+			"}",
+		].join("\n"),
+	};
+
+	const result = buildCoverageReport(makeWorkspace(CATCH_ALL));
+
+	it("fabricates no matches at all", () => {
+		expect(result.matched).toEqual([]);
+		expect(result.summary.matchableUiTestIds).toBe(0);
+		expect(result.summary.catchAllTestIds).toBe(1);
+	});
+
+	it("still reports the three selectors that really do match nothing", () => {
+		expect(
+			result.deadSelectors.map((entry) => entry.memberPath).sort(),
+		).toEqual(["WidePage.A", "WidePage.B", "WidePage.C"]);
+	});
+
+	it("keeps the quarantined occurrence, labelled with why", () => {
+		const quarantined = result.unknownTestIds.filter(
+			(entry) => entry.reason === "unanchored-pattern",
+		);
+		expect(quarantined).toHaveLength(1);
+		expect(quarantined[0].patternSource).toBe("^.+$");
+		expect(quarantined[0].occurrence.file).toBe("src/App.tsx");
+	});
+
+	it("says out loud that it excluded it, with a place to look", () => {
+		const warning = result.warnings.find(
+			(diagnostic) => diagnostic.code === "unanchored-testid-pattern",
+		);
+		expect(warning?.severity).toBe("warning");
+		expect(warning?.message).toContain("src/App.tsx");
+		expect(warning?.loc?.file).toBe("src/App.tsx");
+	});
+
+	it("refuses to score a comparison with no denominator", () => {
+		expect(result.summary.coverage).toBeNull();
+		expect(result.warnings.map((entry) => entry.code)).toContain(
+			"no-matchable-testids",
+		);
+	});
+});
+
+describe("buildCoverageReport — a selector that matches everything", () => {
+	it("reports an empty list pattern as unknown, not as total coverage", () => {
+		const result = report({
+			"e2e/EverythingPage.ts": [
+				libImport("ListRootSelector", "RootPageObject"),
+				'@ListRootSelector("")',
+				"export class EverythingPage extends RootPageObject {}",
+			].join("\n"),
+		});
+		expect(result.unknownSelectors).toContainEqual(
+			expect.objectContaining({
+				memberPath: "EverythingPage",
+				reason: "unanchored-pattern",
+			}),
+		);
+		expect(
+			result.matched.map((entry) => entry.selector.memberPath),
+		).not.toContain("EverythingPage");
+	});
+});
+
+/**
+ * The other half of the contradiction: the same report listed an id under
+ * `unknownTestIds` because it could not read the expression, and listed the
+ * selector for that id under `deadSelectors` because it had not matched.
+ */
+describe("buildCoverageReport — literals inside runtime-built ids", () => {
+	const RUNTIME = {
+		"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+		"src/App.tsx": [
+			"declare function formatTID(name: string, index: number): string;",
+			"export default function App() {",
+			"  return <main><li data-testid={formatTID(RoomsCategoryItem, 1)} /></main>;",
+			"}",
+			"declare const RoomsCategoryItem: string;",
+		].join("\n"),
+	};
+
+	const pageObject = (id: string) => ({
+		"e2e/RoomsPage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			"@RootSelector()",
+			"export class RoomsPage extends RootPageObject {",
+			`  @Selector(${JSON.stringify(id)})`,
+			"  accessor Item!: Locator;",
+			"}",
+		].join("\n"),
+	});
+
+	it("reports the selector as unreadable rather than dead", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({ ...RUNTIME, ...pageObject("RoomsCategoryItem") }),
+		);
+		expect(result.deadSelectors).toEqual([]);
+		const unknown = result.unknownSelectors.find(
+			(entry) => entry.memberPath === "RoomsPage.Item",
+		);
+		expect(unknown?.reason).toBe("dynamic-testid-expression");
+		expect(unknown?.evidence?.raw).toContain("formatTID");
+		expect(unknown?.evidence?.loc?.file).toBe("src/App.tsx");
+	});
+
+	it("does not let a two-character literal buy a selector out of dead", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({ ...RUNTIME, ...pageObject("ID") }),
+		);
+		expect(result.deadSelectors.map((entry) => entry.memberPath)).toEqual([
+			"RoomsPage.Item",
+		]);
+	});
+});
+
+describe("buildCoverageReport — no denominator", () => {
+	it("returns null coverage and names both causes when the attribute is wrong", () => {
+		const result = report({}, { attribute: "data-qa" });
+		expect(result.summary.matchableUiTestIds).toBe(0);
+		expect(result.summary.coverage).toBeNull();
+		const warning = result.warnings.find(
+			(entry) => entry.code === "no-matchable-testids",
+		);
+		expect(warning?.severity).toBe("warning");
+		expect(warning?.message).toContain("data-qa");
+		expect(warning?.message).toContain("different attribute");
+		expect(warning?.message).toContain("scanned sources");
+		expect(warning?.data?.attributeSource).toBe("param");
+	});
+
+	it("reports how many static ids the selectors were compared against", () => {
+		expect(report().summary.staticUiIdsCompared).toBe(3);
+		expect(
+			report({}, { attribute: "data-qa" }).summary.staticUiIdsCompared,
+		).toBe(0);
+	});
+});
+
+/**
+ * The old sweep looked for `getByTestId` in `*.spec.ts` and nothing else, so a
+ * repository whose tests are named `checkout.e2e.ts`, or that reaches rows with
+ * `filterByHasTestId`, got told its ids were unused.
+ */
+describe("buildCoverageReport — widened direct-locator sweep", () => {
+	const on = { includeRawLocators: true };
+
+	it("finds a call in a file that is not named like a spec", () => {
+		const result = report(
+			{
+				"e2e/helpers.ts": [
+					"declare const list: { getItemByTestId(id: string): unknown };",
+					'export const first = () => list.getItemByTestId("Orphan");',
+				].join("\n"),
+			},
+			on,
+		);
+		expect(result.uncoveredTestIds.map((entry) => entry.id)).not.toContain(
+			"Orphan",
+		);
+		const match = result.matched.find((entry) => entry.ui.id === "Orphan");
+		expect(match?.selector.defId).toBe("e2e/helpers.ts");
+		expect(match?.selector.origin).toBe("raw");
+	});
+
+	it("reads the other three call names this library exposes", () => {
+		const result = report(
+			{
+				"e2e/filters.ts": [
+					"declare const list: { filterByHasTestId(id: RegExp): unknown };",
+					"export const rows = () => list.filterByHasTestId(/Orph/);",
+				].join("\n"),
+			},
+			on,
+		);
+		const match = result.matched.find(
+			(entry) => entry.selector.defId === "e2e/filters.ts",
+		);
+		expect(match?.selector.kind).toBe("testIdPattern");
+		expect(match?.ui.id).toBe("Orphan");
+	});
+
+	it("turns a template-literal argument into a pattern instead of dropping it", () => {
+		const result = report(
+			{
+				"e2e/template.ts": [
+					"declare const page: { getByTestId(id: string): unknown };",
+					"declare const i: number;",
+					`export const row = () => page.getByTestId(\`Promo${hole("i")}\`);`,
+				].join("\n"),
+			},
+			on,
+		);
+		const match = result.matched.find(
+			(entry) => entry.selector.defId === "e2e/template.ts",
+		);
+		expect(match?.selector.kind).toBe("testIdPattern");
+		expect(match?.ui.id).toBe("PromoCodeInput");
+	});
+
+	it("reports an unreadable argument as unknown rather than saying nothing", () => {
+		const result = report(
+			{
+				"e2e/dynamic.ts": [
+					"declare const page: { getByTestId(id: string): unknown };",
+					"declare function buildId(): string;",
+					"export const x = () => page.getByTestId(buildId());",
+				].join("\n"),
+			},
+			on,
+		);
+		expect(result.unknownSelectors).toContainEqual(
+			expect.objectContaining({ defId: "e2e/dynamic.ts", origin: "raw" }),
+		);
+	});
+
+	it("counts the sweep's own contribution", () => {
+		const files = {
+			"e2e/helpers.ts": [
+				"declare const list: { getItemByTestId(id: string): unknown };",
+				'export const first = () => list.getItemByTestId("Orphan");',
+			].join("\n"),
+		};
+		expect(report(files, on).summary.rawSelectors).toBe(1);
+		expect(report(files).summary.rawSelectors).toBe(0);
+	});
+});
+
+describe("buildCoverageReport — assuming forwarding", () => {
+	const FILES = {
+		"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+		"src/App.tsx": [
+			'import Card from "./Card";',
+			"export default function App() {",
+			'  return <main><Card data-testid="Ghost" /></main>;',
+			"}",
+		].join("\n"),
+		"src/Card.tsx": [
+			"export default function Card(props: { children?: unknown }) {",
+			"  return <div>{props.children as never}</div>;",
+			"}",
+		].join("\n"),
+		"e2e/GhostPage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			"@RootSelector()",
+			"export class GhostPage extends RootPageObject {",
+			'  @Selector("Ghost")',
+			"  accessor Ghost!: Locator;",
+			"}",
+		].join("\n"),
+	};
+
+	it("promotes the prop id and labels every place the assumption shows", () => {
+		const result = buildCoverageReport(makeWorkspace(FILES), {
+			assumeForwarded: true,
+		});
+		expect(result.summary.matchableUiTestIds).toBe(1);
+		expect(result.summary.assumedForwardedTestIds).toBe(1);
+		expect(result.matched).toHaveLength(1);
+		expect(result.matched[0].forwarding).toBe("assumed");
+		expect(result.unknownSelectors).toEqual([]);
+		const warning = result.warnings.find(
+			(entry) => entry.code === "forwarding-assumed",
+		);
+		expect(warning?.severity).toBe("warning");
+	});
+
+	it("says nothing about assuming anything when the flag is off", () => {
+		const result = buildCoverageReport(makeWorkspace(FILES));
+		expect(result.summary.assumedForwardedTestIds).toBeUndefined();
+		expect(result.warnings.map((entry) => entry.code)).not.toContain(
+			"forwarding-assumed",
+		);
+	});
+
+	it("suggests the flag once enough selectors land in the unproven bucket", () => {
+		const many = {
+			...FILES,
+			"src/App.tsx": [
+				'import Card from "./Card";',
+				"export default function App() {",
+				"  return (",
+				"    <main>",
+				'      <Card data-testid="Ghost" />',
+				'      <Card data-testid="Phantom" />',
+				'      <Card data-testid="Wraith" />',
+				"    </main>",
+				"  );",
+				"}",
+			].join("\n"),
+			"e2e/GhostPage.ts": [
+				'import type { Locator } from "@playwright/test";',
+				libImport("RootPageObject", "RootSelector", "Selector"),
+				"@RootSelector()",
+				"export class GhostPage extends RootPageObject {",
+				'  @Selector("Ghost")',
+				"  accessor A!: Locator;",
+				'  @Selector("Phantom")',
+				"  accessor B!: Locator;",
+				'  @Selector("Wraith")',
+				"  accessor C!: Locator;",
+				"}",
+			].join("\n"),
+		};
+		const result = buildCoverageReport(makeWorkspace(many));
+		const widespread = result.warnings.find(
+			(entry) => entry.code === "forwarding-unproven-widespread",
+		);
+		expect(widespread?.severity).toBe("info");
+		expect(widespread?.data?.unproven).toBe(3);
+	});
+});
+
+/**
+ * A monorepo pointed at one app renders half its UI from sibling packages. Test
+ * ids in those are invisible here, so every selector for one reads as dead —
+ * and the report used to say so without a word about the scope it was reading.
+ */
+describe("buildCoverageReport — component tags from outside the scan", () => {
+	const EXTERNAL = {
+		"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+		"src/App.tsx": [
+			'import { Gapped } from "@design/ui";',
+			"export default function App() {",
+			'  return <main><Gapped /><div data-testid="Local" /></main>;',
+			"}",
+		].join("\n"),
+	};
+
+	const pageObject = (id: string) => ({
+		"e2e/AppPage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			"@RootSelector()",
+			"export class AppPage extends RootPageObject {",
+			`  @Selector(${JSON.stringify(id)})`,
+			"  accessor Thing!: Locator;",
+			"}",
+		].join("\n"),
+	});
+
+	it("counts the boundary and names the module", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({ ...EXTERNAL, ...pageObject("Local") }),
+		);
+		expect(result.scope.externalComponentModules).toEqual(["@design/ui"]);
+		expect(result.scope.externalComponentTags).toBe(1);
+		expect(result.scope.uiFilesScanned).toBeGreaterThan(0);
+		expect(result.scope.pageObjectFilesScanned).toBeGreaterThan(0);
+	});
+
+	it("stays informational while nothing looks broken", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({ ...EXTERNAL, ...pageObject("Local") }),
+		);
+		expect(result.deadSelectors).toEqual([]);
+		expect(
+			result.warnings.find((entry) => entry.code === "ui-scope-incomplete")
+				?.severity,
+		).toBe("info");
+	});
+
+	it("becomes a warning the moment a selector reads as dead", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({ ...EXTERNAL, ...pageObject("InsideGapped") }),
+		);
+		expect(result.deadSelectors).toHaveLength(1);
+		const scope = result.warnings.find(
+			(entry) => entry.code === "ui-scope-incomplete",
+		);
+		expect(scope?.severity).toBe("warning");
+		expect(scope?.message).toContain("@design/ui");
+		expect(scope?.message).not.toContain("monorepo");
+	});
+
+	it("does not count a relative import as a boundary", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({
+				...EXTERNAL,
+				"src/App.tsx": [
+					'import { Gapped } from "./Gapped";',
+					"export default function App() {",
+					'  return <main><Gapped /><div data-testid="Local" /></main>;',
+					"}",
+				].join("\n"),
+				"src/Gapped.tsx":
+					'export function Gapped() { return <b data-testid="Inner" />; }',
+				...pageObject("Local"),
+			}),
+		);
+		expect(result.scope.externalComponentTags).toBe(0);
+		expect(result.warnings.map((entry) => entry.code)).not.toContain(
+			"ui-scope-incomplete",
+		);
 	});
 });
 

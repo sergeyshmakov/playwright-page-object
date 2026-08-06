@@ -324,7 +324,7 @@ describe("test ids written on a component tag", () => {
 	// The attribute is a prop until something forwards it to a host element. The
 	// occurrence is still inventoried — a page object selecting it must not read
 	// as dead — but flagged, so coverage does not count it as rendered.
-	it("flags the call-site occurrence as unforwarded", () => {
+	it("reports the call-site occurrence as an unproven component prop", () => {
 		const { tree } = treeFor({
 			"src/App.tsx": [
 				'import Card from "./Card";',
@@ -337,10 +337,10 @@ describe("test ids written on a component tag", () => {
 			].join("\n"),
 		});
 		const ghost = tree.inventory.find((entry) => entry.value.value === "Ghost");
-		expect(ghost).toMatchObject({ tag: "Card", unforwarded: true });
+		expect(ghost).toMatchObject({ tag: "Card", reach: "component-prop" });
 	});
 
-	it("leaves the proven host-element occurrence unflagged", () => {
+	it("marks the proven host-element occurrence as forwarded", () => {
 		const { tree } = treeFor({
 			"src/App.tsx": [
 				'import Btn from "./Btn";',
@@ -355,10 +355,10 @@ describe("test ids written on a component tag", () => {
 		const occurrences = tree.inventory.filter(
 			(entry) => entry.value.value === "Real",
 		);
-		expect(occurrences.map((entry) => [entry.tag, entry.unforwarded])).toEqual(
+		expect(occurrences.map((entry) => [entry.tag, entry.reach])).toEqual(
 			expect.arrayContaining([
-				["Btn", true],
-				["button", undefined],
+				["Btn", "component-prop"],
+				["button", "forwarded"],
 			]),
 		);
 	});

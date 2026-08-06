@@ -25,12 +25,14 @@ import {
 	type ComponentDefinition,
 	collectComponents,
 	componentReturnExpressions,
+	ExternalModuleCensus,
 	resolveComponentRef,
 } from "./componentGraph";
 import {
 	isComponentTag,
 	isConditionallyRendered,
 	isRepeated,
+	occurrencesFromElements,
 	readExpressionValue,
 	type ScannedElement,
 	scanFileElements,
@@ -556,11 +558,16 @@ export function buildTestIdTree(
 
 	const inventory: TestIdOccurrence[] = [];
 	const scannedPaths = new Set<string>();
+	// One JSX descent per file feeds both the inventory and the scope census.
+	const census = new ExternalModuleCensus(ws);
 	for (const sourceFile of files) {
 		const rel = ws.rel(sourceFile.getFilePath());
-		inventory.push(...scanFileTestIds(sourceFile, attribute, rel));
+		const elements = scanFileElements(sourceFile, attribute, rel);
+		inventory.push(...occurrencesFromElements(elements, rel));
+		census.add(sourceFile, elements);
 		scannedPaths.add(sourceFile.getFilePath());
 	}
+	const externals = census.evidence();
 
 	const components = collectComponents(ws, files);
 	const budget = new Budget(
@@ -639,12 +646,14 @@ export function buildTestIdTree(
 		roots,
 		inventory,
 		components,
+		externalModules: externals.modules,
 		warnings: dedupeDiagnostics(warnings),
 		stats: {
 			files: files.length + extraFiles,
 			occurrences: inventory.length,
 			dynamic,
 			parseMs: Date.now() - startedAt,
+			externalComponentTags: externals.tags,
 			nodes: shape.nodes,
 			unresolved: shape.unresolved,
 			unresolvedByReason: shape.unresolvedByReason,
@@ -747,6 +756,10 @@ function mergeResolvedOccurrences(
 				loc: node.loc,
 				tag: node.tag,
 				component: node.component,
+				// One hop of forwarding proven, but when the id landed on another
+				// component rather than on a host element it is still a prop, and
+				// still unproven.
+				reach: node.nodeType === "component" ? "component-prop" : "forwarded",
 			};
 			if (node.conditional) {
 				occurrence.conditional = true;
@@ -756,11 +769,6 @@ function mergeResolvedOccurrences(
 			}
 			if (node.viaProp) {
 				occurrence.viaProp = node.viaProp;
-			}
-			// One hop of forwarding proven, but the id landed on another component
-			// rather than on a host element: still a prop, still unproven.
-			if (node.nodeType === "component") {
-				occurrence.unforwarded = true;
 			}
 			const identity = [
 				key,
@@ -1298,8 +1306,8 @@ class TreeBuilder {
 		const position = owner.sourceFile.getLineAndColumnAtPos(opening.getStart());
 		const node: UiNode = {
 			tag,
-			// Same predicate the scan uses, so an id's `unforwarded` flag and the
-			// node it hangs off can never disagree about what the tag is.
+			// Same predicate the scan uses, so an id's `reach` and the node it hangs
+			// off can never disagree about what the tag is.
 			nodeType: isComponentTag(tag) ? "component" : "element",
 			file: owner.file,
 			loc: {

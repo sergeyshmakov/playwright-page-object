@@ -1,6 +1,7 @@
 import { Node, SyntaxKind } from "ts-morph";
-import { dedupeDiagnostics, info } from "../diagnostics";
+import { dedupeDiagnostics, info, warn } from "../diagnostics";
 import { discoverInternal } from "../page-objects/discover";
+import { readExpressionValue } from "../tsx/scanTestIds";
 import { buildTestIdTree } from "../tsx/tree";
 import type {
 	CoverageReport,
@@ -10,100 +11,165 @@ import type {
 	SourceLoc,
 	TestIdOccurrence,
 	UiTestId,
+	UnknownSelectorEvidence,
+	UnknownTestId,
 } from "../types";
 import { literalPrefixOf, parseRegexLiteral } from "../util/literal";
-import { keyFold } from "../util/paths";
+import { keyFold, matchesAnyGlob } from "../util/paths";
 import type { Workspace } from "../workspace";
-import { matchSelectorToUi } from "./match";
+import {
+	type ClassifySides,
+	classifySelector,
+	indexSide,
+	labelOf,
+	type Match,
+} from "./classify";
+import { isCatchAllPattern } from "./match";
 import { nearestIds } from "./suggest";
 
 export interface CoverageOptions {
 	attribute?: string;
-	/** Also sweep spec files for direct `getByTestId(...)` calls. */
+	/** Also sweep the sources for direct `getByTestId(...)`-family calls. */
 	includeRawLocators?: boolean;
 	uiInclude?: string[];
 	poInclude?: string[];
+	/**
+	 * Count a test id written on a component tag as rendered.
+	 *
+	 * The honest default is not to: a prop only reaches the DOM if the component
+	 * forwards it. But a codebase whose design system forwards props as a rule
+	 * knows that about itself, and for those the unproven bucket is noise. Every
+	 * id and every match the flag changes is labelled, so the assumption is never
+	 * invisible in the output.
+	 */
+	assumeForwarded?: boolean;
 }
 
-const SPEC_FILE = /\.(spec|test)\.[cm]?[jt]sx?$/;
+/** Locator calls whose first argument is a test id. */
+const RAW_CALL_NAMES = new Set([
+	"getByTestId",
+	"getItemByTestId",
+	"filterByItemTestId",
+	"filterByHasTestId",
+]);
 
 /**
- * Groups the flat inventory into one record per distinct id or pattern.
+ * Cheap pre-filter for the raw sweep: every call name above contains it.
  *
- * Three buckets, because there are three states and not two:
- *
- * - `testIds` — ids proven to reach the DOM. Only these are matchable, so only
- *   these drive the coverage ratio and the "nobody selects this" list.
- * - `unproven` — ids written as a prop on a component tag
- *   (`TestIdOccurrence.unforwarded`). Whether they render depends on a
- *   component the scan did not see through, so counting them as rendered would
- *   invent coverage and listing them as uncovered would invent work. They are
- *   kept aside so a selector that matches one can be reported as unknown rather
- *   than dead.
- * - `unknown` — values that are not statically knowable at all.
+ * The sweep reads the same files discovery does, which in a real repository is
+ * thousands. Descending into every `CallExpression` of every one of them costs
+ * more than the rest of the report put together; a substring test on the file
+ * text skips the overwhelming majority for the price of a scan.
  */
-export function groupUiTestIds(inventory: TestIdOccurrence[]): {
-	testIds: UiTestId[];
-	unproven: UiTestId[];
-	unknown: TestIdOccurrence[];
-} {
-	const proven = group(
-		inventory.filter((occurrence) => !occurrence.unforwarded),
-	);
-	const unproven = group(
-		inventory.filter((occurrence) => occurrence.unforwarded),
-	);
-	return {
-		testIds: proven.testIds,
-		unproven: unproven.testIds,
-		unknown: [...proven.unknown, ...unproven.unknown],
-	};
+const RAW_CALL_MARKER = "TestId";
+
+/** Evidence entries are for reading, not for exhaustive enumeration. */
+const MAX_EVIDENCE_IDS = 5;
+
+export interface InventoryPartition {
+	/** Ids proven to reach the DOM, grouped. Only these are matchable. */
+	rendered: UiTestId[];
+	/** Ids written as a prop on a component tag, with no forwarding proven. */
+	prop: UiTestId[];
+	/** Patterns that match every id, quarantined before they can match one. */
+	catchAll: TestIdOccurrence[];
+	/** Values that are not statically knowable at all. */
+	dynamic: TestIdOccurrence[];
 }
 
-function group(inventory: TestIdOccurrence[]): {
-	testIds: UiTestId[];
-	unknown: TestIdOccurrence[];
-} {
-	const byKey = new Map<string, UiTestId>();
-	const unknown: TestIdOccurrence[] = [];
+function addTo(
+	byKey: Map<string, UiTestId>,
+	key: string,
+	occurrence: TestIdOccurrence,
+	make: () => UiTestId,
+	promoted: boolean,
+): void {
+	const existing = byKey.get(key);
+	if (existing) {
+		existing.occurrences.push(occurrence);
+		// One genuinely rendered occurrence is enough: the group no longer owes its
+		// existence to the assumption, so it must not be labelled as if it did.
+		if (!promoted) {
+			existing.assumed = undefined;
+		}
+		return;
+	}
+	const entry = make();
+	if (promoted) {
+		entry.assumed = true;
+	}
+	byKey.set(key, entry);
+}
+
+/**
+ * Splits the flat inventory into the four states coverage can distinguish.
+ *
+ * Four, not two, because "rendered" and "not rendered" cannot express the two
+ * cases that actually cause wrong reports: an id nobody has proven reaches the
+ * DOM, and a pattern so loose it matches everything. Counting the first as
+ * rendered invents coverage; matching against the second invents it wholesale.
+ */
+export function partitionInventory(
+	inventory: TestIdOccurrence[],
+	assumeForwarded = false,
+): InventoryPartition {
+	const renderedByKey = new Map<string, UiTestId>();
+	const propByKey = new Map<string, UiTestId>();
+	const catchAll: TestIdOccurrence[] = [];
+	const dynamic: TestIdOccurrence[] = [];
 
 	for (const occurrence of inventory) {
 		const value = occurrence.value;
+		const isProp = occurrence.reach === "component-prop";
+		const promoted = isProp && assumeForwarded;
+		const target = isProp && !assumeForwarded ? propByKey : renderedByKey;
+
 		if (value.kind === "static" && value.value !== undefined) {
-			const key = `s:${value.value}`;
-			const existing = byKey.get(key);
-			if (existing) {
-				existing.occurrences.push(occurrence);
-			} else {
-				byKey.set(key, {
-					id: value.value,
+			const id = value.value;
+			addTo(
+				target,
+				`s:${id}`,
+				occurrence,
+				() => ({
+					id,
 					patternSource: null,
-					prefix: value.value,
+					prefix: id,
 					occurrences: [occurrence],
-				});
-			}
+				}),
+				promoted,
+			);
 			continue;
 		}
 		if (value.kind === "pattern" && value.regex) {
-			const key = `p:${value.regex.source}`;
-			const existing = byKey.get(key);
-			if (existing) {
-				existing.occurrences.push(occurrence);
-			} else {
-				byKey.set(key, {
+			if (isCatchAllPattern(value.regex.source)) {
+				catchAll.push(occurrence);
+				continue;
+			}
+			const regex = value.regex;
+			addTo(
+				target,
+				`p:${regex.source}`,
+				occurrence,
+				() => ({
 					id: null,
-					patternSource: value.regex.source,
-					patternFlags: value.regex.flags,
+					patternSource: regex.source,
+					patternFlags: regex.flags,
 					prefix: value.prefix ?? null,
 					occurrences: [occurrence],
-				});
-			}
+				}),
+				promoted,
+			);
 			continue;
 		}
-		unknown.push(occurrence);
+		dynamic.push(occurrence);
 	}
 
-	return { testIds: [...byKey.values()], unknown };
+	return {
+		rendered: [...renderedByKey.values()],
+		prop: [...propByKey.values()],
+		catchAll,
+		dynamic,
+	};
 }
 
 /**
@@ -220,22 +286,53 @@ function toUsage(
 	return usage;
 }
 
-/** Direct `page.getByTestId("X")` calls in spec files. */
-function sweepRawLocators(ws: Workspace): SelectorUsage[] {
+/** The call name, whether written as `page.getByTestId` or bare. */
+function rawCallName(call: Node): string | null {
+	if (!Node.isCallExpression(call)) {
+		return null;
+	}
+	const callee = call.getExpression();
+	if (Node.isPropertyAccessExpression(callee)) {
+		return callee.getName();
+	}
+	if (Node.isIdentifier(callee)) {
+		return callee.getText();
+	}
+	return null;
+}
+
+/**
+ * Direct locator calls anywhere in the analysed sources.
+ *
+ * Two things were wrong with sweeping `*.spec.ts` for `getByTestId` alone. The
+ * file filter assumed a naming convention — a repository whose Playwright tests
+ * live in `checkout.e2e.ts`, or whose selectors sit in a helper module, got a
+ * report claiming ids were unused when a call site was three lines away. And
+ * `getByTestId` is one of four call names this library's own list page object
+ * exposes, so `filterByHasTestId("Row")` counted for nothing.
+ *
+ * The argument is read with the same reader the JSX scan uses, so a template
+ * literal becomes a pattern instead of being dropped, and an expression nobody
+ * can evaluate becomes an honest `unknown` instead of silence.
+ */
+function sweepRawLocators(
+	ws: Workspace,
+	poInclude: string[] | undefined,
+): SelectorUsage[] {
 	const usages: SelectorUsage[] = [];
 	for (const sourceFile of ws.sourceFiles()) {
 		const rel = ws.rel(sourceFile.getFilePath());
-		if (!SPEC_FILE.test(rel)) {
+		if (poInclude && poInclude.length > 0 && !matchesAnyGlob(rel, poInclude)) {
+			continue;
+		}
+		if (!sourceFile.getFullText().includes(RAW_CALL_MARKER)) {
 			continue;
 		}
 		for (const call of sourceFile.getDescendantsOfKind(
 			SyntaxKind.CallExpression,
 		)) {
-			const callee = call.getExpression();
-			if (
-				!Node.isPropertyAccessExpression(callee) ||
-				callee.getName() !== "getByTestId"
-			) {
+			const name = rawCallName(call);
+			if (name === null || !RAW_CALL_NAMES.has(name)) {
 				continue;
 			}
 			const [argument] = call.getArguments();
@@ -243,31 +340,19 @@ function sweepRawLocators(ws: Workspace): SelectorUsage[] {
 				continue;
 			}
 			const loc = ws.loc(call);
-			const text = call.getText().replace(/\s+/g, " ").slice(0, 200);
-			if (
-				Node.isStringLiteral(argument) ||
-				Node.isNoSubstitutionTemplateLiteral(argument)
-			) {
-				usages.push({
-					defId: rel,
-					memberPath: `${rel}:${loc.line}`,
-					loc,
-					kind: "testId",
-					text,
-					testId: argument.getLiteralValue(),
-					dynamic: false,
-					origin: "raw",
-				});
-				continue;
-			}
+			const base = {
+				defId: rel,
+				memberPath: `${rel}:${loc.line}`,
+				loc,
+				text: call.getText().replace(/\s+/g, " ").slice(0, 200),
+				origin: "raw" as const,
+			};
+
 			if (Node.isRegularExpressionLiteral(argument)) {
 				const regex = parseRegexLiteral(argument.getText());
 				usages.push({
-					defId: rel,
-					memberPath: `${rel}:${loc.line}`,
-					loc,
+					...base,
 					kind: "testIdPattern",
-					text,
 					pattern: {
 						source: regex.source,
 						flags: regex.flags,
@@ -276,9 +361,45 @@ function sweepRawLocators(ws: Workspace): SelectorUsage[] {
 						literalPrefix: literalPrefixOf(regex.source),
 					},
 					dynamic: false,
-					origin: "raw",
 				});
+				continue;
 			}
+
+			const [value] = readExpressionValue(argument).values;
+			if (!value) {
+				continue;
+			}
+			if (value.kind === "static" && value.value !== undefined) {
+				usages.push({
+					...base,
+					kind: "testId",
+					testId: value.value,
+					dynamic: false,
+				});
+				continue;
+			}
+			if (value.kind === "pattern" && value.regex) {
+				usages.push({
+					...base,
+					kind: "testIdPattern",
+					pattern: {
+						source: value.regex.source,
+						flags: value.regex.flags,
+						origin: "string",
+						matchMode: "regex",
+						literalPrefix:
+							value.prefix ?? literalPrefixOf(value.regex.source) ?? null,
+					},
+					dynamic: false,
+				});
+				continue;
+			}
+			usages.push({
+				...base,
+				kind: "testId",
+				dynamic: true,
+				reason: value.reason ?? "computed-expression",
+			});
 		}
 	}
 	return usages;
@@ -292,6 +413,13 @@ function suggestionFor(ui: UiTestId): string {
 		return `@ListSelector(${JSON.stringify(ui.prefix)})`;
 	}
 	return `@ListSelector(${JSON.stringify(ui.patternSource ?? "")})`;
+}
+
+function labelsOf(matches: Match[]): string[] {
+	return [...new Set(matches.map((match) => labelOf(match.ui)))].slice(
+		0,
+		MAX_EVIDENCE_IDS,
+	);
 }
 
 /**
@@ -322,16 +450,21 @@ export function buildCoverageReport(
 	const discovery = discoverInternal(ws, { include: options.poInclude });
 	warnings.push(...discovery.index.warnings);
 
-	const { testIds, unproven, unknown } = groupUiTestIds(uiTree.inventory);
+	const assumeForwarded = options.assumeForwarded === true;
+	const partition = partitionInventory(uiTree.inventory, assumeForwarded);
 	const usages = [
 		...collectSelectorUsages(discovery),
-		...(options.includeRawLocators ? sweepRawLocators(ws) : []),
+		...(options.includeRawLocators
+			? sweepRawLocators(ws, options.poInclude)
+			: []),
 	];
 
 	const matched: CoverageReport["matched"] = [];
 	const nonTestIdSelectors: CoverageReport["nonTestIdSelectors"] = [];
 	const unknownSelectors: CoverageReport["unknownSelectors"] = [];
+	const deadSelectors: CoverageReport["deadSelectors"] = [];
 	const testIdUsages: SelectorUsage[] = [];
+	let catchAllSelectors = 0;
 
 	for (const usage of usages) {
 		if (usage.kind === "custom" || usage.dynamic) {
@@ -341,10 +474,26 @@ export function buildCoverageReport(
 				loc: usage.loc,
 				reason: usage.reason ?? "custom-selector",
 				raw: usage.text,
+				origin: usage.origin,
 			});
 			continue;
 		}
 		if (usage.kind === "testId" || usage.kind === "testIdPattern") {
+			// `@ListSelector("")` compiles to `new RegExp("")`, which matches every
+			// id in the repository. Matching it would credit the selector with
+			// covering the whole app; the honest answer is that it proves nothing.
+			if (usage.pattern && isCatchAllPattern(usage.pattern.source)) {
+				catchAllSelectors += 1;
+				unknownSelectors.push({
+					defId: usage.defId,
+					memberPath: usage.memberPath,
+					loc: usage.loc,
+					reason: "unanchored-pattern",
+					raw: usage.text,
+					origin: usage.origin,
+				});
+				continue;
+			}
 			testIdUsages.push(usage);
 			continue;
 		}
@@ -360,117 +509,173 @@ export function buildCoverageReport(
 		});
 	}
 
+	const renderedIndex = indexSide(partition.rendered);
+	const propIndex = indexSide(partition.prop);
+	const sides: ClassifySides = {
+		renderedById: renderedIndex.byId,
+		renderedStatic: renderedIndex.statics,
+		renderedPatterns: renderedIndex.patterns,
+		propById: propIndex.byId,
+		propStatic: propIndex.statics,
+		propPatterns: propIndex.patterns,
+		unknownRaw: partition.dynamic,
+	};
+
 	const coveredUi = new Set<UiTestId>();
-	const liveSelectors = new Set<SelectorUsage>();
+	const speculativeCredit = new Map<UiTestId, string[]>();
+	let unprovenSelectors = 0;
 
 	for (const usage of testIdUsages) {
-		for (const ui of testIds) {
-			const outcome = matchSelectorToUi(
-				{ testId: usage.testId, pattern: usage.pattern },
-				ui,
-			);
-			if (!outcome) {
-				continue;
+		const selector = { testId: usage.testId, pattern: usage.pattern };
+		const classification = classifySelector(selector, sides);
+
+		if (classification.verdict === "matched") {
+			for (const match of classification.matches) {
+				coveredUi.add(match.ui);
+				matched.push({
+					selector: {
+						defId: usage.defId,
+						memberPath: usage.memberPath,
+						loc: usage.loc,
+						kind: usage.kind,
+						text: usage.text,
+						origin: usage.origin,
+					},
+					ui: {
+						id: match.ui.id,
+						patternSource: match.ui.patternSource,
+						occurrences: match.ui.occurrences.map(
+							(occurrence) => occurrence.loc,
+						),
+					},
+					confidence: match.outcome.confidence,
+					...(match.outcome.probe ? { probe: match.outcome.probe } : {}),
+					...(match.ui.assumed ? { forwarding: "assumed" as const } : {}),
+				});
 			}
-			coveredUi.add(ui);
-			liveSelectors.add(usage);
-			matched.push({
-				selector: {
-					defId: usage.defId,
-					memberPath: usage.memberPath,
-					loc: usage.loc,
-					kind: usage.kind,
-					text: usage.text,
-				},
-				ui: {
-					id: ui.id,
-					patternSource: ui.patternSource,
-					occurrences: ui.occurrences.map((occurrence) => occurrence.loc),
-				},
-				confidence: outcome.confidence,
-				...(outcome.probe ? { probe: outcome.probe } : {}),
-			});
-		}
-	}
-
-	const staticIds = testIds
-		.map((ui) => ui.id)
-		.filter((id): id is string => id !== null);
-
-	const uncoveredTestIds: CoverageReport["uncoveredTestIds"] = testIds
-		.filter((ui) => !coveredUi.has(ui))
-		.map((ui) => ({
-			id: ui.id,
-			patternSource: ui.patternSource,
-			occurrences: ui.occurrences,
-			suggestion: suggestionFor(ui),
-		}))
-		.sort((a, b) =>
-			String(a.id ?? a.patternSource).localeCompare(
-				String(b.id ?? b.patternSource),
-			),
-		);
-
-	const deadSelectors: CoverageReport["deadSelectors"] = [];
-	for (const usage of testIdUsages) {
-		if (liveSelectors.has(usage)) {
 			continue;
 		}
-		// Matches an id that is only written as a prop on a component tag: the
-		// selector may well be live, and calling it dead would send a reader to
-		// delete working code. Report the uncertainty instead.
-		const matchesUnproven = unproven.some((ui) =>
-			matchSelectorToUi({ testId: usage.testId, pattern: usage.pattern }, ui),
-		);
-		if (matchesUnproven) {
+
+		if (classification.verdict === "forwarding-unproven") {
+			unprovenSelectors += 1;
+			const evidence: UnknownSelectorEvidence = {
+				testIds: labelsOf(classification.matches),
+			};
+			const witness = classification.matches[0]?.ui.occurrences[0];
+			if (witness) {
+				evidence.loc = witness.loc;
+			}
+			if (classification.outranked.length > 0) {
+				evidence.alsoMatchesRendered = labelsOf(classification.outranked);
+				for (const match of classification.outranked) {
+					const credited = speculativeCredit.get(match.ui);
+					if (credited) {
+						credited.push(usage.memberPath);
+					} else {
+						speculativeCredit.set(match.ui, [usage.memberPath]);
+					}
+				}
+			}
 			unknownSelectors.push({
 				defId: usage.defId,
 				memberPath: usage.memberPath,
 				loc: usage.loc,
-				reason: "unforwarded-prop",
+				reason: "forwarding-unproven",
 				raw: usage.text,
+				origin: usage.origin,
+				evidence,
 			});
 			continue;
 		}
+
+		if (classification.verdict === "dynamic-testid-expression") {
+			const [witness] = classification.occurrences;
+			unknownSelectors.push({
+				defId: usage.defId,
+				memberPath: usage.memberPath,
+				loc: usage.loc,
+				reason: "dynamic-testid-expression",
+				raw: usage.text,
+				origin: usage.origin,
+				evidence: { raw: witness.value.raw, loc: witness.loc },
+			});
+			continue;
+		}
+
 		deadSelectors.push({
 			defId: usage.defId,
 			memberPath: usage.memberPath,
 			loc: usage.loc,
 			text: usage.text,
+			origin: usage.origin,
 			nearestTestIds: nearestIds(
 				usage.testId ?? usage.pattern?.literalPrefix ?? "",
-				staticIds,
+				renderedIndex.byId.keys(),
 			),
 		});
 	}
 	deadSelectors.sort((a, b) => a.memberPath.localeCompare(b.memberPath));
 
-	if (unproven.length > 0) {
-		warnings.push(
-			info(
-				"unforwarded-prop",
-				`${unproven.length} test id(s) are written as a prop on a component tag and no forwarding to a host element could be proven; they are listed under unknownTestIds rather than counted as rendered.`,
-			),
-		);
-	}
+	const uncoveredTestIds: CoverageReport["uncoveredTestIds"] =
+		partition.rendered
+			.filter((ui) => !coveredUi.has(ui))
+			.map((ui) => {
+				const speculative = speculativeCredit.get(ui);
+				return {
+					id: ui.id,
+					patternSource: ui.patternSource,
+					occurrences: ui.occurrences,
+					suggestion: suggestionFor(ui),
+					...(speculative ? { speculativeSelectors: speculative } : {}),
+				};
+			})
+			.sort((a, b) =>
+				String(a.id ?? a.patternSource).localeCompare(
+					String(b.id ?? b.patternSource),
+				),
+			);
 
-	if (!options.includeRawLocators) {
-		warnings.push(
-			info(
-				"raw-locators-disabled",
-				"Direct `getByTestId(...)` calls in spec files were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them.",
-			),
-		);
-	}
-
-	const matchable = testIds.length;
-	// Unproven ids are reported, never dropped: each occurrence still carries its
-	// location and its `unforwarded` flag, so a reader can go and check whether
-	// the component forwards the prop.
-	const unknownTestIds = [
-		...unknown,
-		...unproven.flatMap((ui) => ui.occurrences),
+	const unknownTestIds: UnknownTestId[] = [
+		...partition.dynamic.map((occurrence) => ({
+			reason: "dynamic-value" as const,
+			occurrence,
+		})),
+		...partition.prop.flatMap((ui) =>
+			ui.occurrences.map((occurrence) => ({
+				reason: "forwarding-unproven" as const,
+				occurrence,
+			})),
+		),
+		...partition.catchAll.map((occurrence) => ({
+			reason: "unanchored-pattern" as const,
+			occurrence,
+			...(occurrence.value.regex
+				? { patternSource: occurrence.value.regex.source }
+				: {}),
+		})),
 	];
+
+	const matchable = partition.rendered.length;
+	const assumedGroups = partition.rendered.filter((ui) => ui.assumed).length;
+	const rawSelectors = usages.filter((usage) => usage.origin === "raw").length;
+
+	warnings.push(
+		...coverageWarnings({
+			attribute,
+			partition,
+			matchable,
+			uiTree,
+			assumeForwarded,
+			assumedGroups,
+			unprovenSelectors,
+			catchAllSelectors,
+			testIdSelectors: testIdUsages.length,
+			deadCount: deadSelectors.length,
+			includeRawLocators: options.includeRawLocators === true,
+			poInclude: options.poInclude,
+		}),
+	);
+
 	return {
 		schemaVersion: 1,
 		attribute: attribute.attribute,
@@ -479,11 +684,25 @@ export function buildCoverageReport(
 			matchableUiTestIds: matchable,
 			coveredUiTestIds: coveredUi.size,
 			testIdSelectors: testIdUsages.length,
+			rawSelectors,
+			matched: matched.length,
 			deadSelectors: deadSelectors.length,
 			nonTestIdSelectors: nonTestIdSelectors.length,
 			unknownSelectors: unknownSelectors.length,
 			unknownTestIds: unknownTestIds.length,
-			coverage: matchable === 0 ? 1 : coveredUi.size / matchable,
+			uncoveredTestIds: uncoveredTestIds.length,
+			catchAllTestIds: partition.catchAll.length,
+			...(assumeForwarded ? { assumedForwardedTestIds: assumedGroups } : {}),
+			staticUiIdsCompared: renderedIndex.statics.length,
+			// Zero of zero used to ship as `1`. A report that says "100 % covered"
+			// because it found nothing to cover is the most expensive lie in here.
+			coverage: matchable === 0 ? null : coveredUi.size / matchable,
+		},
+		scope: {
+			uiFilesScanned: uiTree.stats.files,
+			pageObjectFilesScanned: discovery.index.stats.filesScanned,
+			externalComponentModules: uiTree.externalModules,
+			externalComponentTags: uiTree.stats.externalComponentTags,
 		},
 		matched,
 		uncoveredTestIds,
@@ -495,4 +714,184 @@ export function buildCoverageReport(
 		// environment warnings, so every one of those arrives here twice.
 		warnings: dedupeDiagnostics(warnings),
 	};
+}
+
+interface WarningInputs {
+	attribute: { attribute: string; source: string };
+	partition: InventoryPartition;
+	matchable: number;
+	uiTree: ReturnType<typeof buildTestIdTree>;
+	assumeForwarded: boolean;
+	assumedGroups: number;
+	unprovenSelectors: number;
+	catchAllSelectors: number;
+	testIdSelectors: number;
+	deadCount: number;
+	includeRawLocators: boolean;
+	poInclude: string[] | undefined;
+}
+
+/** Share of test-id selectors landing on unproven props that is worth naming. */
+const WIDESPREAD_SHARE = 0.25;
+const WIDESPREAD_COUNT = 3;
+
+/**
+ * Everything the numbers alone cannot say.
+ *
+ * The rule for every message here: name the count, name a place to look, and
+ * name the remedy in terms of the analysis rather than of any one front end's
+ * flags. The engine is consumed by the MCP server, by tests and by anything
+ * embedding it later, so a message that spells `--src-dir` is wrong advice in
+ * two of those three — the MCP layer translates into flags where it can.
+ */
+function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
+	const out: Diagnostic[] = [];
+	const { partition } = inputs;
+	const propOccurrences = partition.prop.reduce(
+		(total, ui) => total + ui.occurrences.length,
+		0,
+	);
+
+	if (inputs.matchable === 0) {
+		const total = inputs.uiTree.stats.occurrences;
+		out.push(
+			warn(
+				"no-matchable-testids",
+				`No rendered test id could be used as a coverage denominator: 0 of ${total} occurrence(s) across ${inputs.uiTree.stats.files} scanned UI file(s) are matchable ` +
+					`(${partition.dynamic.length} built at runtime, ${propOccurrences} written as an unproven component prop, ${partition.catchAll.length} matching every id). ` +
+					`The attribute read was "${inputs.attribute.attribute}" (from ${inputs.attribute.source}). ` +
+					"Either the components write a different attribute than the one resolved, or the scanned sources do not contain the UI at all. " +
+					"Re-run with the attribute the components actually write, or with the application sources in scope. Until then the coverage ratio is null rather than a score.",
+				undefined,
+				{
+					attribute: inputs.attribute.attribute,
+					attributeSource: inputs.attribute.source,
+					occurrences: total,
+					files: inputs.uiTree.stats.files,
+				},
+			),
+		);
+	}
+
+	if (partition.catchAll.length > 0) {
+		const [sample] = partition.catchAll;
+		const distinct = new Set(
+			partition.catchAll.map(
+				(occurrence) => occurrence.value.regex?.source ?? "",
+			),
+		);
+		out.push(
+			warn(
+				"unanchored-testid-pattern",
+				`${partition.catchAll.length} test id expression(s) in ${distinct.size} distinct pattern(s) match every possible id (for example \`${sample.value.raw}\` at ${sample.file}:${sample.loc.line}). ` +
+					"They are excluded from matching: counted, each would have made every selector in the project look covered and emptied the dead-selector list. " +
+					"Give those elements a literal prefix to make them matchable.",
+				sample.loc,
+				{ count: partition.catchAll.length, patterns: distinct.size },
+			),
+		);
+	}
+
+	if (inputs.catchAllSelectors > 0) {
+		out.push(
+			warn(
+				"unanchored-testid-pattern",
+				`${inputs.catchAllSelectors} selector(s) declare a pattern that matches every id, so they are reported as unknown rather than credited with covering everything.`,
+				undefined,
+				{ selectors: inputs.catchAllSelectors },
+			),
+		);
+	}
+
+	if (partition.prop.length > 0) {
+		out.push(
+			info(
+				"testid-forwarding-unproven",
+				`${partition.prop.length} test id(s) are written as a prop on a component tag and no forwarding to a host element could be proven; they are listed under unknownTestIds rather than counted as rendered.`,
+			),
+		);
+	}
+
+	if (inputs.assumeForwarded) {
+		out.push(
+			warn(
+				"forwarding-assumed",
+				`Forwarding was assumed rather than proven: ${inputs.assumedGroups} test id(s) written only as a component prop are counted as rendered. Every affected match carries forwarding: "assumed" and every affected id is flagged; re-run without the assumption for the proven-only picture.`,
+				undefined,
+				{ assumed: inputs.assumedGroups },
+			),
+		);
+	}
+
+	if (
+		!inputs.assumeForwarded &&
+		inputs.unprovenSelectors > 0 &&
+		(inputs.unprovenSelectors >= WIDESPREAD_COUNT ||
+			(inputs.testIdSelectors > 0 &&
+				inputs.unprovenSelectors / inputs.testIdSelectors >= WIDESPREAD_SHARE))
+	) {
+		out.push(
+			info(
+				"forwarding-unproven-widespread",
+				`${inputs.unprovenSelectors} of ${inputs.testIdSelectors} test-id selector(s) match only ids written as component props. That is the signature of a component library that forwards props as a matter of course; if this one does, re-run assuming forwarding to see them as matches.`,
+				undefined,
+				{
+					unproven: inputs.unprovenSelectors,
+					selectors: inputs.testIdSelectors,
+				},
+			),
+		);
+	}
+
+	if (inputs.uiTree.stats.externalComponentTags > 0) {
+		const modules = inputs.uiTree.externalModules;
+		out.push(
+			inputs.deadCount > 0
+				? warn(
+						"ui-scope-incomplete",
+						scopeMessage(inputs, modules),
+						undefined,
+						{
+							tags: inputs.uiTree.stats.externalComponentTags,
+							modules: modules.length,
+						},
+					)
+				: info(
+						"ui-scope-incomplete",
+						scopeMessage(inputs, modules),
+						undefined,
+						{
+							tags: inputs.uiTree.stats.externalComponentTags,
+							modules: modules.length,
+						},
+					),
+		);
+	}
+
+	if (!inputs.includeRawLocators) {
+		out.push(
+			info(
+				"raw-locators-disabled",
+				"Direct locator calls (getByTestId, getItemByTestId, filterByItemTestId, filterByHasTestId) were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them.",
+			),
+		);
+	} else if (inputs.poInclude && inputs.poInclude.length > 0) {
+		out.push(
+			info(
+				"raw-locators-disabled",
+				`The direct-locator sweep was limited to the same file scope as the page-object side (${inputs.poInclude.join(", ")}), so calls written anywhere else were not counted.`,
+			),
+		);
+	}
+
+	return out;
+}
+
+function scopeMessage(inputs: WarningInputs, modules: string[]): string {
+	const named = modules.length > 0 ? modules.join(", ") : "unresolved modules";
+	return (
+		`${inputs.uiTree.stats.externalComponentTags} component tag(s) come from ${modules.length} module(s) outside the scanned sources (${named}). ` +
+		"Test ids rendered inside them are invisible here, so an id may exist without appearing in this report and a selector for one reads as dead. " +
+		"If those modules are part of this repository, re-run with the scan rooted where they live, or with their directories added to the scanned sources."
+	);
 }

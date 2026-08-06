@@ -71,6 +71,36 @@ describe("example/ — end-to-end coverage", () => {
 		expect(report.summary.unknownTestIds).toBe(0);
 	});
 
+	// The widened sweep reads every file discovery reads, not just `*.spec.ts`.
+	// The `includes("TestId")` pre-filter is what keeps that from becoming a
+	// second full AST descent over the repository, so its cost is asserted.
+	it("keeps the widened locator sweep close to the report it rides on", () => {
+		const ws = exampleWorkspace();
+		buildCoverageReport(ws); // Warm the parse and the discovery memo.
+
+		const plainStarted = Date.now();
+		buildCoverageReport(ws);
+		const plain = Date.now() - plainStarted;
+
+		const sweptStarted = Date.now();
+		const swept = buildCoverageReport(ws, { includeRawLocators: true });
+		const withSweep = Date.now() - sweptStarted;
+
+		expect(swept.summary.rawSelectors).toBeGreaterThan(0);
+		expect(withSweep).toBeLessThan(Math.max(250, plain * 6));
+	});
+
+	it("reads all four locator call names, not just getByTestId", () => {
+		const swept = buildCoverageReport(exampleWorkspace(), {
+			includeRawLocators: true,
+		});
+		const raw = swept.matched
+			.filter((entry) => entry.selector.origin === "raw")
+			.map((entry) => entry.selector.text);
+		expect(raw.some((text) => text.includes("getItemByTestId"))).toBe(true);
+		expect(raw.some((text) => text.includes("filterByItemTestId"))).toBe(true);
+	});
+
 	it("computes a coverage ratio strictly between 0 and 1", () => {
 		expect(report.summary.coverage).toBeGreaterThan(0);
 		expect(report.summary.coverage).toBeLessThan(1);

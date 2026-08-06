@@ -1,3 +1,5 @@
+import { foldPath, normalizeRelPath } from "../util/paths";
+
 /**
  * Levenshtein distance, iterative two-row form.
  *
@@ -70,4 +72,82 @@ export function nearestIds(
 			: a.distance - b.distance,
 	);
 	return scored.slice(0, limit).map((entry) => entry.id);
+}
+
+function basenameOf(folded: string): string {
+	return folded.slice(folded.lastIndexOf("/") + 1);
+}
+
+function byDistanceThenName(
+	a: { file: string; distance: number },
+	b: { file: string; distance: number },
+): number {
+	return a.distance === b.distance
+		? a.file.localeCompare(b.file)
+		: a.distance - b.distance;
+}
+
+/**
+ * Files worth naming after a path that matched nothing, best first.
+ *
+ * Three tiers, because a caller who writes an unmatched path has made one of
+ * three mistakes and they are not equally likely: they wrote a trailing segment
+ * of the real path (`Home.ts` for `e2e/Home.ts`), they got the directory wrong
+ * but the basename right, or they mistyped. Dumping the whole file list instead
+ * — which is what this replaces, at 305 entries in one field test — buries the
+ * answer in the noise and costs more tokens than the payload it accompanies.
+ *
+ * Case is folded exactly where the filesystem folds it, so a Windows caller's
+ * `E2E/home.ts` still finds `e2e/Home.ts` and a Linux one's does not.
+ */
+export function nearestFiles(
+	wanted: string,
+	files: Iterable<string>,
+	limit = 8,
+): string[] {
+	const list = [...new Set(files)];
+	const target = foldPath(normalizeRelPath(wanted));
+	const base = basenameOf(target);
+
+	const suffixed: string[] = [];
+	const sameBasename: string[] = [];
+	const rest: string[] = [];
+	for (const file of list) {
+		const candidate = foldPath(normalizeRelPath(file));
+		if (candidate === target || candidate.endsWith(`/${target}`)) {
+			suffixed.push(file);
+		} else if (basenameOf(candidate) === base) {
+			sameBasename.push(file);
+		} else {
+			rest.push(file);
+		}
+	}
+
+	const baseCeiling = Math.max(2, Math.ceil(base.length / 3));
+	const pathCeiling = Math.max(2, Math.ceil(target.length / 3));
+	const nearBasename: Array<{ file: string; distance: number }> = [];
+	const nearPath: Array<{ file: string; distance: number }> = [];
+	for (const file of rest) {
+		const candidate = foldPath(normalizeRelPath(file));
+		const distance = editDistance(base, basenameOf(candidate));
+		if (distance <= baseCeiling) {
+			nearBasename.push({ file, distance });
+			continue;
+		}
+		const full = editDistance(target, candidate);
+		if (full <= pathCeiling) {
+			nearPath.push({ file, distance: full });
+		}
+	}
+	nearBasename.sort(byDistanceThenName);
+	nearPath.sort(byDistanceThenName);
+
+	return [
+		...new Set([
+			...suffixed.sort(),
+			...sameBasename.sort(),
+			...nearBasename.map((entry) => entry.file),
+			...nearPath.map((entry) => entry.file),
+		]),
+	].slice(0, limit);
 }

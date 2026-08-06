@@ -337,6 +337,58 @@ describe("buildTestIdTree — graph traversal", () => {
 		expect(tree.roots[0].children).toEqual([]);
 	});
 
+	/**
+	 * Scope evidence, not a diagnosis. In a monorepo scanned at one app, whole
+	 * packages of components are invisible; a report that cannot say so reads as
+	 * proof that the ids inside them do not exist.
+	 */
+	it("records which bare module a component tag came from", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+				"src/App.tsx": [
+					'import { Button } from "@acme/ui";',
+					'import Card from "@acme/ui/card";',
+					"export default function App() { return <div><Button /><Card /></div>; }",
+				].join("\n"),
+			}),
+		);
+		expect(tree.externalModules).toEqual(["@acme/ui", "@acme/ui/card"]);
+		expect(tree.stats.externalComponentTags).toBe(2);
+	});
+
+	it("counts nothing for a component reached by a relative import", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+				"src/App.tsx": [
+					'import { Button } from "./Button";',
+					"export default function App() { return <Button />; }",
+				].join("\n"),
+				"src/Button.tsx":
+					'export function Button() { return <b data-testid="B" />; }',
+			}),
+		);
+		expect(tree.externalModules).toEqual([]);
+		expect(tree.stats.externalComponentTags).toBe(0);
+	});
+
+	// `react` is a bare specifier in every one of these files and contributes
+	// nothing: `<div>` is not a component tag, so nothing resolves through it.
+	it("ignores a bare import that supplies no component tag", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+				"src/App.tsx": [
+					'import { useState } from "react";',
+					'export default function App() { void useState; return <div data-testid="A" />; }',
+				].join("\n"),
+			}),
+		);
+		expect(tree.externalModules).toEqual([]);
+		expect(tree.stats.externalComponentTags).toBe(0);
+	});
+
 	it("merges multiple returns under #branch wrappers", () => {
 		const tree = buildTestIdTree(
 			makeWorkspace({

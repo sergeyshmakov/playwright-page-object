@@ -120,14 +120,16 @@ describe("scanFileElements — element metadata", () => {
 		expect(elements[0].nodeType).toBe("component");
 		expect(occurrences[0]).toMatchObject({
 			tag: "icons.Button",
-			unforwarded: true,
+			reach: "component-prop",
 		});
 	});
 
 	it("keeps a bare lowercase tag a host element", () => {
 		const { elements, occurrences } = scan('    <div data-testid="Panel" />');
 		expect(elements[0].nodeType).toBe("element");
-		expect(occurrences[0].unforwarded).toBeUndefined();
+		// Required, not absent: "nobody set the flag" and "the id reaches the DOM"
+		// are different claims, and the scan has to make the second one out loud.
+		expect(occurrences[0].reach).toBe("element");
 	});
 
 	it("flags elements rendered behind `&&`", () => {

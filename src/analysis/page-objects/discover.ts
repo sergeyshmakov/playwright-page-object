@@ -339,8 +339,12 @@ export function runDiscovery(
 			entry.rootSelector = read.selector;
 			entry.warnings.push(...read.warnings);
 		}
+		// Explicit, not defaulted: `counts.methods` here and the method list in
+		// `get_page_object_tree` have to be the same number, and the two call
+		// sites drifting apart is exactly how they stopped being one.
 		entry.methods = readMethods(entry.declaration, entry.imports, ctx, {
 			signatureMode: options.signatureMode,
+			includeInherited: true,
 		});
 		for (const member of entry.members) {
 			// An inherited member's diagnostics belong to the base class that

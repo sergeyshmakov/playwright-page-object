@@ -15,13 +15,19 @@ import type {
 } from "../types";
 import { defKey } from "../util/paths";
 import {
+	isRelativeSpecifier,
 	type RefResolution,
 	type ResolveOptions,
 	resolveIdentifier,
+	resolveModuleSpecifier,
 } from "../util/resolve";
 import { isWorkspaceLocal } from "../util/workspaceRoot";
 import type { Workspace } from "../workspace";
-import { fallbackComponentName, readExpressionValue } from "./scanTestIds";
+import {
+	fallbackComponentName,
+	readExpressionValue,
+	type ScannedElement,
+} from "./scanTestIds";
 
 export type ComponentFunction =
 	| FunctionDeclaration
@@ -378,6 +384,115 @@ function nearestFunction(node: Node): Node | undefined {
 		current = current.getParent();
 	}
 	return undefined;
+}
+
+/** Local binding name to module specifier, for non-relative imports only. */
+function nonRelativeImportBindings(
+	sourceFile: SourceFile,
+): Map<string, string> {
+	const bindings = new Map<string, string>();
+	for (const declaration of sourceFile.getImportDeclarations()) {
+		const specifier = declaration.getModuleSpecifierValue();
+		if (isRelativeSpecifier(specifier)) {
+			continue;
+		}
+		const defaultImport = declaration.getDefaultImport();
+		if (defaultImport) {
+			bindings.set(defaultImport.getText(), specifier);
+		}
+		const namespaceImport = declaration.getNamespaceImport();
+		if (namespaceImport) {
+			bindings.set(namespaceImport.getText(), specifier);
+		}
+		for (const named of declaration.getNamedImports()) {
+			const local = named.getAliasNode() ?? named.getNameNode();
+			bindings.set(local.getText(), specifier);
+		}
+	}
+	return bindings;
+}
+
+/** Evidence that the scanned sources are not the whole UI. */
+export interface ExternalModuleEvidence {
+	/** Sorted, capped list of specifiers supplying component tags. */
+	modules: string[];
+	/** Component tags whose head resolved to one of those modules. */
+	tags: number;
+}
+
+const MAX_EXTERNAL_MODULES = 10;
+
+/**
+ * Counts component tags rendered from modules outside the scanned sources.
+ *
+ * This is how the report tells "no page object selects this id" apart from
+ * "the element rendering it is in a package nobody put in scope". In a monorepo
+ * pointed at one app, whole design systems and sibling feature packages live
+ * behind bare specifiers, their test ids are invisible, and every selector for
+ * them looks dead. The count is not a diagnosis — a genuinely external `react`
+ * import contributes nothing because `<div>` is not a component tag — but it is
+ * the difference between a report that is wrong and one that says it might be.
+ *
+ * Non-relative specifiers only: a relative import is by construction a file the
+ * scan either saw or deliberately scoped out, and `inventory-scope-gap` already
+ * covers the latter.
+ */
+export class ExternalModuleCensus {
+	private readonly modules = new Set<string>();
+	/** Specifier to "resolves outside the workspace", resolved at most once. */
+	private readonly outside = new Map<string, boolean>();
+	private tagCount = 0;
+
+	constructor(private readonly ws: Workspace) {}
+
+	add(sourceFile: SourceFile, elements: ScannedElement[]): void {
+		let bindings: Map<string, string> | undefined;
+		for (const element of elements) {
+			if (element.nodeType !== "component") {
+				continue;
+			}
+			// Deferred: a file with no component tags never pays for the import walk.
+			bindings ??= nonRelativeImportBindings(sourceFile);
+			if (bindings.size === 0) {
+				return;
+			}
+			const specifier = bindings.get(element.tag.split(".")[0]);
+			if (specifier === undefined || !this.isOutside(sourceFile, specifier)) {
+				continue;
+			}
+			this.tagCount += 1;
+			this.modules.add(specifier);
+		}
+	}
+
+	evidence(): ExternalModuleEvidence {
+		return {
+			modules: [...this.modules].sort().slice(0, MAX_EXTERNAL_MODULES),
+			tags: this.tagCount,
+		};
+	}
+
+	private isOutside(fromFile: SourceFile, specifier: string): boolean {
+		const cached = this.outside.get(specifier);
+		if (cached !== undefined) {
+			return cached;
+		}
+		let outside: boolean;
+		try {
+			const resolved = resolveModuleSpecifier(
+				this.ws.project,
+				fromFile,
+				specifier,
+			);
+			outside =
+				resolved === undefined ||
+				!isWorkspaceLocal(this.ws.project, resolved.getFilePath());
+		} catch {
+			outside = true;
+		}
+		this.outside.set(specifier, outside);
+		return outside;
+	}
 }
 
 /** Every function component declared in the scanned files. */

@@ -116,14 +116,21 @@ describe("every payload carries the environment verdict", () => {
 	});
 
 	// The number that made the failure invisible in the field: nothing matched,
-	// nothing was matchable, so the ratio came out perfect.
-	it("still reports the misleadingly perfect coverage, but not silently", () => {
+	// nothing was matchable, so the ratio came out perfect. It is `null` now —
+	// there is no denominator — and the report says so in its own warning as
+	// well as in the environment one.
+	it("refuses to score a comparison it could not make", () => {
 		const report = buildCoverageReport(workspace());
 		expect(report.summary.matchableUiTestIds).toBe(0);
-		expect(report.summary.coverage).toBe(1);
-		expect(report.warnings.map((warning) => warning.code)).toContain(
-			"attribute-mismatch",
+		expect(report.summary.coverage).toBeNull();
+		const codes = report.warnings.map((warning) => warning.code);
+		expect(codes).toContain("attribute-mismatch");
+		expect(codes).toContain("no-matchable-testids");
+		const blocked = report.warnings.find(
+			(warning) => warning.code === "no-matchable-testids",
 		);
+		expect(blocked?.message).toContain("data-testid");
+		expect(blocked?.data?.attributeSource).toBeDefined();
 	});
 
 	// A caller passing the right attribute has fixed the problem for that call;

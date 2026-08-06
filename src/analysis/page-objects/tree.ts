@@ -1,4 +1,4 @@
-import { nearestIds } from "../coverage/suggest";
+import { nearestFiles, nearestIds } from "../coverage/suggest";
 import {
 	AnalysisTargetError,
 	dedupeDiagnostics,
@@ -37,6 +37,9 @@ export interface TreeOptions {
 
 const DEFAULT_MAX_DEPTH = 8;
 const DEFAULT_MAX_NODES = 300;
+/** A candidate list is for choosing from, not for enumerating a repository. */
+const MAX_CANDIDATES = 10;
+const MAX_FILE_SUGGESTIONS = 8;
 
 const FILE_EXTENSIONS = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 
@@ -95,7 +98,11 @@ function resolveTarget(
 			throw new AnalysisTargetError(
 				"file_not_found",
 				`No class "${name}" in "${file}".`,
-				{ candidates: sameName.map((candidate) => candidate.key) },
+				{
+					candidates: sameName
+						.map((candidate) => candidate.key)
+						.slice(0, MAX_CANDIDATES),
+				},
 			);
 		}
 		throw new AnalysisTargetError(
@@ -127,18 +134,26 @@ function resolveTarget(
 			throw new AnalysisTargetError(
 				"ambiguous_class",
 				`"${file}" declares ${inFile.length} page objects; specify one as "${file}#ClassName".`,
-				{ candidates: inFile.map((entry) => entry.key).sort() },
+				{
+					candidates: inFile
+						.map((entry) => entry.key)
+						.sort()
+						.slice(0, MAX_CANDIDATES),
+				},
 			);
 		}
+		// Ranked, not dumped: one field-test repository has 305 page-object files,
+		// and listing every one of them buries the answer and costs more tokens
+		// than the tree the caller was asking for.
 		throw new AnalysisTargetError(
 			"file_not_found",
 			`No page objects found in "${file}".`,
 			{
-				suggestions: [
-					...new Set(
-						[...discovery.classes.values()].map((entry) => entry.file),
-					),
-				].sort(),
+				suggestions: nearestFiles(
+					file,
+					[...discovery.classes.values()].map((entry) => entry.file),
+					MAX_FILE_SUGGESTIONS,
+				),
 			},
 		);
 	}
@@ -151,7 +166,12 @@ function resolveTarget(
 		throw new AnalysisTargetError(
 			"ambiguous_class",
 			`${matches.length} classes are named "${trimmed}"; pass "path.ts#${trimmed}" instead.`,
-			{ candidates: matches.map((entry) => entry.key).sort() },
+			{
+				candidates: matches
+					.map((entry) => entry.key)
+					.sort()
+					.slice(0, MAX_CANDIDATES),
+			},
 		);
 	}
 	throw new AnalysisTargetError(
@@ -203,10 +223,45 @@ export function buildPageObjectTree(
 			return;
 		}
 		if (!budget.spend()) {
+			// Silently dropping the stub left a member pointing at a `$ref` that is
+			// not in `defs`, which reads as "unresolvable" rather than "we ran out
+			// of room" — the outline said `(unresolved)` about a class the library
+			// itself ships.
 			truncated = true;
+			warnings.push(
+				warn(
+					"node-budget-reached",
+					`Node budget of ${budget.maxNodes} definitions reached; the library stub "${splitDefKey(ref).name}" was left out and references to it do not resolve.`,
+				),
+			);
 			return;
 		}
 		defs[ref] = externalStub(ref);
+	};
+
+	/**
+	 * Whether expanding this class one level further would produce anything.
+	 *
+	 * A leaf page object — every member a plain `Locator` — has nothing below it,
+	 * so stopping at it is not a truncation and saying so invents a hole the
+	 * caller then pays depth to go and look for. The check errs towards reporting
+	 * the cut: an edge that *might* resolve counts as expandable.
+	 */
+	const wouldExpand = (entry: DiscoveredClass): boolean => {
+		for (const member of entry.members) {
+			for (const edge of member.edges) {
+				if (edge.external || !edge.declaration) {
+					if (edge.ref.startsWith(`${LIBRARY_PACKAGE}#`) && !defs[edge.ref]) {
+						return true;
+					}
+					continue;
+				}
+				if (discovery.classes.has(keyFold(edge.ref))) {
+					return true;
+				}
+			}
+		}
+		return false;
 	};
 
 	const ensure = (entry: DiscoveredClass, depth: number): void => {
@@ -236,6 +291,10 @@ export function buildPageObjectTree(
 		defs[entry.key] = node;
 
 		if (!budget.allowsDepth(depth + 1)) {
+			if (!wouldExpand(entry)) {
+				// Nothing below it, so the boundary is where the tree ends anyway.
+				return;
+			}
 			node.expanded = false;
 			truncated = true;
 			const diagnostic = info(

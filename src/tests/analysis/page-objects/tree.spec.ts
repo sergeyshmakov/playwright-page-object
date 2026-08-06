@@ -132,6 +132,30 @@ describe("buildPageObjectTree — budgets", () => {
 		);
 	});
 
+	// A leaf has nothing below it, so the depth boundary is where the tree ends
+	// anyway. Reporting a cut there invents a hole the caller then pays another
+	// call and a bigger depth to go and look for.
+	it("does not call a leaf truncated just because the depth ran out on it", () => {
+		const tree = buildPageObjectTree(
+			makeWorkspace({
+				"e2e/Leaf.ts": [
+					PRELUDE,
+					"export class Leaf extends PageObject {",
+					'  @Selector("a")',
+					"  accessor A!: Locator;",
+					"}",
+				].join("\n"),
+			}),
+			"Leaf",
+			{ maxDepth: 1 },
+		);
+		expect(tree.truncated).toBeUndefined();
+		expect(tree.defs["e2e/Leaf.ts#Leaf"].expanded).toBe(true);
+		expect(tree.warnings.map((diag) => diag.code)).not.toContain(
+			"depth-limit-reached",
+		);
+	});
+
 	it("emits stubs once the node budget is gone", () => {
 		const tree = buildPageObjectTree(makeWorkspace(SHARED), "HomePage", {
 			maxNodes: 2,
@@ -229,6 +253,54 @@ describe("buildPageObjectTree — target resolution", () => {
 			buildPageObjectTree(makeWorkspace(SHARED), "e2e/Nope.ts");
 		} catch (thrown) {
 			expect((thrown as AnalysisTargetError).code).toBe("file_not_found");
+		}
+	});
+
+	/**
+	 * The suggestion list used to be every page-object file in the repository,
+	 * sorted. At 305 files that is a wall of text costing more tokens than the
+	 * tree the caller asked for, with the answer somewhere inside it.
+	 */
+	it("ranks file suggestions and caps them at eight", () => {
+		expect.assertions(3);
+		const many: Record<string, string> = {};
+		for (let index = 0; index < 20; index += 1) {
+			many[`e2e/area${index}/Other.ts`] = [
+				libImport("PageObject"),
+				`export class Other${index} extends PageObject {}`,
+			].join("\n");
+		}
+		many["e2e/deep/nested/HomePage.ts"] = [
+			libImport("PageObject"),
+			"export class HomePage extends PageObject {}",
+		].join("\n");
+
+		try {
+			buildPageObjectTree(makeWorkspace(many), "HomePage.ts");
+		} catch (thrown) {
+			const error = thrown as AnalysisTargetError;
+			expect(error.code).toBe("file_not_found");
+			// A caller who wrote a trailing segment meant that file, so it leads.
+			expect(error.suggestions?.[0]).toBe("e2e/deep/nested/HomePage.ts");
+			expect(error.suggestions?.length).toBeLessThanOrEqual(8);
+		}
+	});
+
+	it("caps an ambiguous candidate list at ten", () => {
+		expect.assertions(2);
+		const many: Record<string, string> = {};
+		for (let index = 0; index < 14; index += 1) {
+			many[`e2e/area${index}/Page.ts`] = [
+				libImport("PageObject"),
+				"export class Page extends PageObject {}",
+			].join("\n");
+		}
+		try {
+			buildPageObjectTree(makeWorkspace(many), "Page");
+		} catch (thrown) {
+			const error = thrown as AnalysisTargetError;
+			expect(error.code).toBe("ambiguous_class");
+			expect(error.candidates).toHaveLength(10);
 		}
 	});
 });

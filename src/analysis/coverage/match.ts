@@ -20,6 +20,30 @@ export interface MatchOutcome {
  */
 export const PROBE_SUBSTITUTIONS = ["1", "abc", "x-y_0"];
 
+/**
+ * Whether a test-id pattern matches literally every id.
+ *
+ * `data-testid={id}` on one element compiles to the pattern `^.+$`. Matched
+ * like any other pattern it "covers" every selector in the repository — in one
+ * field test a single such element fabricated matches for about 1340 selectors
+ * and emptied the dead-selector list, turning the report from a tool into a
+ * source of false confidence.
+ *
+ * The test is deliberately syntactic: strip the anchors, delete every `.+` and
+ * `.*` hole, and a pattern is a catch-all exactly when nothing is left. What
+ * remains has to be a literal the id must contain, so `^Cart_.+$` keeps `Cart_`
+ * and stays a real pattern, and `^\..+$` keeps the escaped dot and does too.
+ */
+export function isCatchAllPattern(source: string): boolean {
+	const body = source.replace(/^\^/, "").replace(/\$$/, "");
+	return body.replace(/\.[+*]/g, "") === "";
+}
+
+/** A UI test id whose pattern matches everything, so it can prove nothing. */
+export function isCatchAllUi(ui: UiTestId): boolean {
+	return ui.patternSource !== null && isCatchAllPattern(ui.patternSource);
+}
+
 export function probesFromPattern(ui: UiTestId): string[] {
 	const source = ui.patternSource;
 	if (!source) {
@@ -71,6 +95,12 @@ export function matchSelectorToUi(
 	selector: SelectorSide,
 	ui: UiTestId,
 ): MatchOutcome | null {
+	// Second line of defence. The pipeline quarantines catch-alls before they
+	// reach here, but this function is exported and called from three other
+	// places, and every one of them would otherwise "match" everything.
+	if (isCatchAllUi(ui)) {
+		return null;
+	}
 	if (selector.testId !== undefined) {
 		if (ui.id !== null && ui.id === selector.testId) {
 			return { confidence: "exact" };
@@ -100,23 +130,29 @@ export function matchSelectorToUi(
 		}
 	}
 
-	// Last resort: literal-prefix containment in either direction. Catches
-	// patterns whose holes the probes could not satisfy (digits-only, say).
-	// The prefixes are stripped of their regex flags, so an `i` on either side
-	// has to be re-applied here or `/cartitem_/i` misses `CartItem_1`.
+	return prefixOverlap(selector.pattern, ui) ? { confidence: "prefix" } : null;
+}
+
+/**
+ * Literal-prefix containment in either direction — the last resort.
+ *
+ * Catches patterns whose holes the probes could not satisfy (digits-only, say).
+ * The prefixes are stripped of their regex flags, so an `i` on either side has
+ * to be re-applied here or `/cartitem_/i` misses `CartItem_1`.
+ */
+export function prefixOverlap(pattern: PatternInfo, ui: UiTestId): boolean {
 	const insensitive =
-		(selector.pattern.flags ?? "").includes("i") ||
+		(pattern.flags ?? "").includes("i") ||
 		(ui.patternFlags ?? "").includes("i");
 	const fold = (value: string) => (insensitive ? value.toLowerCase() : value);
-	const selectorPrefix = selector.pattern.literalPrefix;
+	const selectorPrefix = pattern.literalPrefix;
 	const uiPrefix = ui.prefix ?? null;
-	if (
-		selectorPrefix &&
-		uiPrefix &&
+	return (
+		selectorPrefix !== null &&
+		selectorPrefix !== "" &&
+		uiPrefix !== null &&
+		uiPrefix !== "" &&
 		(fold(uiPrefix).includes(fold(selectorPrefix)) ||
 			fold(selectorPrefix).includes(fold(uiPrefix)))
-	) {
-		return { confidence: "prefix" };
-	}
-	return null;
+	);
 }

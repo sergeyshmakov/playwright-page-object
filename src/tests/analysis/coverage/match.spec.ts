@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	isCatchAllPattern,
 	matchSelectorToUi,
 	probesFromPattern,
 } from "../../../analysis/coverage/match";
@@ -144,6 +145,46 @@ describe("matchSelectorToUi", () => {
 		expect(
 			matchSelectorToUi({ pattern: fromRegex("[") }, staticUi("X")),
 		).toBeNull();
+	});
+});
+
+/**
+ * `data-testid={id}` on one element compiles to `^.+$`. Left in the pool it
+ * matched every selector in the repository: in one field test that single
+ * element fabricated matches for about 1340 selectors and emptied the
+ * dead-selector list entirely.
+ */
+describe("isCatchAllPattern", () => {
+	it.each([
+		["^.+$", true],
+		["^.*$", true],
+		[".+", true],
+		["", true],
+		["^.+.+$", true],
+		["^.+_row$", false],
+		["^Cart_.+$", false],
+		["^\\..+$", false],
+		["^Row$", false],
+		["_", false],
+	])("%s -> %s", (source, expected) => {
+		expect(isCatchAllPattern(source)).toBe(expected);
+	});
+
+	it("never matches anything, whatever the selector", () => {
+		const anything = patternUi("^.+$", null);
+		expect(matchSelectorToUi({ testId: "Whatever" }, anything)).toBeNull();
+		expect(
+			matchSelectorToUi({ pattern: fromMask("Row_") }, anything),
+		).toBeNull();
+		expect(
+			matchSelectorToUi({ pattern: fromRegex("^.+$") }, anything),
+		).toBeNull();
+	});
+
+	it("still matches a pattern that keeps a literal anchor", () => {
+		expect(
+			matchSelectorToUi({ testId: "Cart_1" }, patternUi("^Cart_.+$", "Cart_")),
+		).toEqual({ confidence: "pattern" });
 	});
 });
 
