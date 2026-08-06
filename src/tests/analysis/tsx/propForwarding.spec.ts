@@ -125,7 +125,11 @@ describe("one-hop prop forwarding", () => {
 		expect(button?.viaProp).toBeUndefined();
 	});
 
-	it("leaves a defaulted prop dynamic when the call site passes nothing", () => {
+	// Reversed deliberately. The call site passes nothing, spreads nothing, and
+	// the parameter declares the value right there — the id that renders is
+	// "Fallback", and reporting it dynamic sent agents looking for a value the
+	// source states outright.
+	it("resolves a parameter default when the call site passes nothing", () => {
 		const { nodes } = treeFor({
 			"src/App.tsx": [
 				'import Btn from "./Btn";',
@@ -138,7 +142,12 @@ describe("one-hop prop forwarding", () => {
 			].join("\n"),
 		});
 		const button = nodes.find((node) => node.tag === "button");
-		expect(button?.testId?.kind).toBe("dynamic");
+		expect(button?.testId).toMatchObject({
+			kind: "static",
+			value: "Fallback",
+		});
+		expect(button?.viaDefault).toBe(true);
+		expect(button?.viaProp).toBe("testId");
 	});
 
 	it("folds a forwarded id into the flat inventory and drops the placeholder", () => {
@@ -176,6 +185,138 @@ describe("one-hop prop forwarding", () => {
 		const button = nodes.find((node) => node.tag === "button");
 		expect(button?.testId).toMatchObject({ kind: "static", value: "Quoted" });
 		expect(button?.viaProp).toBe("id");
+	});
+});
+
+/**
+ * A test id is only a selector if it reaches the DOM. Reporting the *prop name*
+ * as the id when the call site passed nothing put strings like "dataTid" in
+ * front of agents as if they were real ids — a selector that can never match,
+ * invented by the analysis rather than found in the app.
+ *
+ * Every inference below needs positive evidence from the call site, and the
+ * tree root — whose caller is outside the analysed tree — never has any.
+ */
+describe("test ids that provably do not render at a site", () => {
+	const ROW = {
+		"src/Row.tsx": [
+			"export default function Row({ dataTid }: { dataTid?: string }) {",
+			"  return <tr data-testid={dataTid} />;",
+			"}",
+		].join("\n"),
+	};
+
+	const FALLBACK_ROW = {
+		"src/Row.tsx": [
+			"export default function Row({ dataTid }: { dataTid?: string }) {",
+			'  return <tr data-testid={dataTid || "Row"} />;',
+			"}",
+		].join("\n"),
+	};
+
+	function appRendering(site: string): Record<string, string> {
+		return {
+			"src/App.tsx": [
+				'import Row from "./Row";',
+				`export default function App({ x, ...rest }: { x: string }) { return ${site}; }`,
+			].join("\n"),
+		};
+	}
+
+	it("reports no id at all when the prop was not passed", () => {
+		const { tree, nodes } = treeFor({ ...ROW, ...appRendering("<Row />") });
+		const row = nodes.find((node) => node.tag === "tr");
+		expect(row?.testId).toBeUndefined();
+		expect(row?.testIdAbsent).toBe(true);
+		const ids = nodes.map((node) => node.testId?.value);
+		expect(ids).not.toContain("dataTid");
+		expect(
+			tree.roots.length,
+			"sanity: the tree really did reach the row",
+		).toBeGreaterThan(0);
+	});
+
+	it('resolves a `|| "Row"` fallback when the prop provably arrived empty', () => {
+		const { nodes } = treeFor({
+			...FALLBACK_ROW,
+			...appRendering("<Row />"),
+		});
+		const row = nodes.find((node) => node.tag === "tr");
+		expect(row?.testId).toMatchObject({ kind: "static", value: "Row" });
+		expect(row?.viaDefault).toBe(true);
+		expect(row?.viaProp).toBe("dataTid");
+	});
+
+	it("prefers the bound value over the fallback", () => {
+		const { nodes } = treeFor({
+			...FALLBACK_ROW,
+			...appRendering('<Row dataTid="Explicit" />'),
+		});
+		const row = nodes.find((node) => node.tag === "tr");
+		expect(row?.testId).toMatchObject({ value: "Explicit" });
+		expect(row?.viaProp).toBe("dataTid");
+		expect(row?.viaDefault).toBeUndefined();
+	});
+
+	it("stays dynamic when the prop is passed but unreadable", () => {
+		const { nodes } = treeFor({
+			...ROW,
+			...appRendering("<Row dataTid={x} />"),
+		});
+		const row = nodes.find((node) => node.tag === "tr");
+		// The attribute exists; only its value is out of reach. Saying it is
+		// absent would be a different — and false — claim.
+		expect(row?.testId?.kind).toBe("dynamic");
+		expect(row?.testIdAbsent).toBeUndefined();
+	});
+
+	it("refuses to infer absence through a spread at the call site", () => {
+		const { nodes } = treeFor({
+			...ROW,
+			...appRendering("<Row {...rest} />"),
+		});
+		const row = nodes.find((node) => node.tag === "tr");
+		expect(row?.testId?.kind).toBe("dynamic");
+		expect(row?.testIdAbsent).toBeUndefined();
+	});
+
+	it("never suppresses at the tree root, whose call site is outside the tree", () => {
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				"export default function App({ dataTid }: { dataTid?: string }) {",
+				"  return <div data-testid={dataTid} />;",
+				"}",
+			].join("\n"),
+		});
+		const root = nodes.find((node) => node.tag === "div");
+		expect(root?.testId?.kind).toBe("dynamic");
+		expect(root?.testIdAbsent).toBeUndefined();
+	});
+
+	it("folds a defaulted id into the inventory and drops its placeholder", () => {
+		const { tree } = treeFor({
+			...FALLBACK_ROW,
+			...appRendering("<Row />"),
+		});
+		const resolved = tree.inventory.filter(
+			(entry) => entry.value.value === "Row",
+		);
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0].viaProp).toBe("dataTid");
+		expect(
+			tree.inventory.filter((entry) => entry.value.kind === "dynamic"),
+		).toHaveLength(0);
+	});
+
+	it("leaves a suppressed occurrence in the inventory", () => {
+		const { tree } = treeFor({ ...ROW, ...appRendering("<Row />") });
+		// The same component may be rendered with the prop somewhere the walk
+		// never went. Deleting the occurrence would turn a working page-object
+		// selector into a reported dead selector.
+		const dynamic = tree.inventory.filter(
+			(entry) => entry.value.kind === "dynamic" && entry.file === "src/Row.tsx",
+		);
+		expect(dynamic).toHaveLength(1);
 	});
 });
 

@@ -9,7 +9,13 @@ import {
 } from "ts-morph";
 import type { DynamicReason } from "../types";
 import { admitAddedFile } from "./fileBudget";
-import { toPosix } from "./paths";
+import { isIgnoredPath, toPosix } from "./paths";
+import {
+	hasWorkspaceRoot,
+	isUnderWorkspaceRoot,
+	isWorkspaceLocal,
+	linkedWorkspaceDirectory,
+} from "./workspaceRoot";
 
 export type RefKind = "class" | "function" | "variable" | "other";
 
@@ -85,6 +91,13 @@ const EXTENSION_CANDIDATES = [
 	".jsx",
 ];
 
+/**
+ * Cheap string test for a `node_modules` segment.
+ *
+ * Kept as the pre-gate in front of {@link isWorkspaceLocal}, which is the
+ * authority: a workspace package linked into `node_modules` matches this and is
+ * still first-party source.
+ */
 export function isInNodeModules(filePath: string): boolean {
 	return toPosix(filePath).includes("/node_modules/");
 }
@@ -322,15 +335,253 @@ function mappedModuleBases(project: Project, specifier: string): string[] {
 	return [];
 }
 
+/* -------------------------------------------------------------------------- */
+/* Workspace packages behind a node_modules link                              */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Resolves any module specifier the analysed project can own: relative, or
- * non-relative through the tsconfig `paths` table or `baseUrl`.
+ * Outcome of probing a bare specifier for a *linked workspace package*.
+ *
+ * `"built-output"` is a distinct, teachable answer: the package is first-party,
+ * but the only thing resolvable under it is compiled JavaScript, which carries
+ * no JSX and no test ids. Saying so beats both "external dependency" (wrong
+ * about whose code it is) and parsing `dist/` (right about nothing).
+ */
+type WorkspaceProbe =
+	| { kind: "file"; file: SourceFile }
+	| { kind: "built-output" }
+	| { kind: "none" };
+
+const NONE: WorkspaceProbe = { kind: "none" };
+
+/** Directory levels walked up looking for a `node_modules` directory. */
+const MAX_NODE_MODULES_HOPS = 10;
+
+/**
+ * Fields a workspace package may point its source at, most source-like first.
+ * `loadFromBase` maps a built `.js` name back to its `.ts`/`.tsx` sibling, so a
+ * package that only declares `main: "dist/index.js"` still resolves when the
+ * sources sit next to it.
+ */
+const PACKAGE_SOURCE_FIELDS = [
+	"source",
+	"module",
+	"main",
+	"types",
+	"typings",
+] as const;
+
+/** Separator that cannot occur in a path or in a module specifier. */
+const CACHE_FIELD = "\u0000";
+
+interface ProbeCache {
+	/** Importing directory and specifier, joined, to the probe's outcome. */
+	specifiers: Map<string, WorkspaceProbe>;
+	/** Real package directory to the entry bases its `package.json` declares. */
+	entries: Map<string, string[]>;
+}
+
+const probeCaches = new WeakMap<Project, ProbeCache>();
+
+function probeCacheOf(project: Project): ProbeCache {
+	let cache = probeCaches.get(project);
+	if (!cache) {
+		cache = { specifiers: new Map(), entries: new Map() };
+		probeCaches.set(project, cache);
+	}
+	return cache;
+}
+
+/** `@scope/name` or `name`, plus whatever subpath follows it. */
+function splitPackageSpecifier(
+	specifier: string,
+): { name: string; subpath: string } | null {
+	if (specifier.startsWith(".") || specifier.startsWith("/")) {
+		return null;
+	}
+	const segments = specifier.split("/");
+	const spanned = segments[0].startsWith("@") ? 2 : 1;
+	if (segments.length < spanned || segments[spanned - 1] === "") {
+		return null;
+	}
+	return {
+		name: segments.slice(0, spanned).join("/"),
+		subpath: segments.slice(spanned).join("/"),
+	};
+}
+
+/**
+ * Entry path bases a package declares, resolved against its real directory.
+ *
+ * One `package.json` read per package, cached. `exports["."]` is consulted for
+ * the conditions a monorepo uses to point at unbuilt sources; everything else
+ * is the classic field set. Conventional source layouts are appended so a
+ * package with no usable field still resolves.
+ */
+function packageEntryBases(project: Project, realPackageDir: string): string[] {
+	const cache = probeCacheOf(project);
+	const cached = cache.entries.get(realPackageDir);
+	if (cached) {
+		return cached;
+	}
+	const bases: string[] = [];
+	const add = (value: unknown): void => {
+		if (typeof value === "string" && value !== "") {
+			bases.push(path.posix.join(realPackageDir, toPosix(value)));
+		}
+	};
+	let manifest: Record<string, unknown> | undefined;
+	try {
+		const text = project
+			.getFileSystem()
+			.readFileSync(path.posix.join(realPackageDir, "package.json"));
+		const parsed: unknown = JSON.parse(text);
+		if (parsed && typeof parsed === "object") {
+			manifest = parsed as Record<string, unknown>;
+		}
+	} catch {
+		// No manifest, or unreadable: the conventional layouts below still apply.
+	}
+	const root = manifest?.exports;
+	if (root && typeof root === "object") {
+		const dot = (root as Record<string, unknown>)["."] ?? root;
+		if (typeof dot === "string") {
+			add(dot);
+		} else if (dot && typeof dot === "object") {
+			const conditions = dot as Record<string, unknown>;
+			for (const condition of ["source", "development", "import", "default"]) {
+				add(conditions[condition]);
+			}
+		}
+	}
+	for (const field of PACKAGE_SOURCE_FIELDS) {
+		add(manifest?.[field]);
+	}
+	bases.push(path.posix.join(realPackageDir, "src/index"));
+	bases.push(path.posix.join(realPackageDir, "index"));
+	cache.entries.set(realPackageDir, bases);
+	return bases;
+}
+
+/**
+ * Resolves a bare specifier that names a workspace package linked into
+ * `node_modules`.
+ *
+ * `import { Gapped } from "@company/ui"` with no tsconfig `paths` entry never
+ * reaches disk otherwise — it is reported external, and every component the
+ * design system owns becomes a hole in the tree even though its sources are
+ * right there in the repository.
+ *
+ * Hard-capped on purpose, because this is the only code in the engine that
+ * walks directories and reads a `package.json`: at most
+ * {@link MAX_NODE_MODULES_HOPS} levels up and never above the workspace root,
+ * one manifest read per package, every `realpath` cached, and every load still
+ * gated by `admitAddedFile` so `maxFiles` holds. Without a registered root
+ * there is nothing to bound the walk or to judge the link against, so the probe
+ * is off entirely.
+ */
+function probeWorkspacePackage(
+	project: Project,
+	fromFile: SourceFile,
+	specifier: string,
+): WorkspaceProbe {
+	if (!hasWorkspaceRoot(project)) {
+		return NONE;
+	}
+	const split = splitPackageSpecifier(specifier);
+	if (!split) {
+		return NONE;
+	}
+	const fromDirectory = toPosix(fromFile.getDirectoryPath());
+	const cache = probeCacheOf(project);
+	const key = `${fromDirectory}${CACHE_FIELD}${specifier}`;
+	const cached = cache.specifiers.get(key);
+	if (cached) {
+		return cached;
+	}
+	const outcome = probeUncached(project, fromDirectory, split);
+	cache.specifiers.set(key, outcome);
+	return outcome;
+}
+
+function probeUncached(
+	project: Project,
+	fromDirectory: string,
+	split: { name: string; subpath: string },
+): WorkspaceProbe {
+	const fileSystem = project.getFileSystem();
+	let directory = fromDirectory;
+	for (let hop = 0; hop < MAX_NODE_MODULES_HOPS; hop += 1) {
+		const candidate = path.posix.join(directory, "node_modules", split.name);
+		if (fileSystem.directoryExistsSync(candidate)) {
+			// Either the link leads back into the workspace, or this is an ordinary
+			// installed dependency and today's answer stands. One syscall, cached
+			// for every later file in the same package.
+			const real = linkedWorkspaceDirectory(project, candidate);
+			return real === null
+				? NONE
+				: loadWorkspacePackage(project, real, split.subpath);
+		}
+		const parent = path.posix.dirname(directory);
+		if (parent === directory) {
+			break;
+		}
+		// Never above the analysed root: a `node_modules` outside it belongs to
+		// somebody else's project.
+		if (!isUnderWorkspaceRoot(project, parent)) {
+			break;
+		}
+		directory = parent;
+	}
+	return NONE;
+}
+
+/**
+ * Loads a file from inside a linked workspace package, always against the
+ * package's **real** path.
+ *
+ * Loading it under the link path would enter the project as
+ * `node_modules/…`, which `isAnalysable` drops from `sourceFiles()` — the ids
+ * would reach the tree and never reach the inventory, and coverage would call
+ * every selector for them dead.
+ */
+function loadWorkspacePackage(
+	project: Project,
+	realPackageDir: string,
+	subpath: string,
+): WorkspaceProbe {
+	if (subpath !== "") {
+		const found = loadFromBase(
+			project,
+			path.posix.join(realPackageDir, subpath),
+		);
+		return found ? { kind: "file", file: found } : NONE;
+	}
+	let sawBuiltOutput = false;
+	for (const base of packageEntryBases(project, realPackageDir)) {
+		if (isIgnoredPath(base.slice(realPackageDir.length))) {
+			sawBuiltOutput = true;
+			continue;
+		}
+		const found = loadFromBase(project, base);
+		if (found) {
+			return { kind: "file", file: found };
+		}
+	}
+	return sawBuiltOutput ? { kind: "built-output" } : NONE;
+}
+
+/**
+ * Resolves any module specifier the analysed project can own: relative,
+ * non-relative through the tsconfig `paths` table or `baseUrl`, or a bare
+ * specifier naming a workspace package linked into `node_modules`.
  *
  * Without the alias half, a repo that writes `@/components/Cart` has every
  * import classified as external, so nested controls and component trees stop
  * dead at the first aliased hop even though the file is right there in the
- * project. Anything landing in `node_modules` is still rejected — an alias into
- * a dependency is an external module however it is spelled.
+ * project. An alias landing in an *installed* dependency is still rejected —
+ * the engine never parses `node_modules` — but a workspace package linked
+ * through it is first-party source and is resolved to its real path.
  */
 export function resolveModuleSpecifier(
 	project: Project,
@@ -344,15 +595,18 @@ export function resolveModuleSpecifier(
 		// Rejected *before* `loadFromBase`, not after: adding the file to the
 		// project first would parse a dependency into the AST only to throw the
 		// result away, which is exactly the boundary the engine promises to hold.
-		if (isInNodeModules(base)) {
+		// The real-path test is what keeps a `paths` entry that already points at
+		// `node_modules/<workspace-pkg>` from being read as a dependency.
+		if (isInNodeModules(base) && !isWorkspaceLocal(project, base)) {
 			continue;
 		}
 		const found = loadFromBase(project, base);
-		if (found && !isInNodeModules(found.getFilePath())) {
+		if (found && isWorkspaceLocal(project, found.getFilePath())) {
 			return found;
 		}
 	}
-	return undefined;
+	const probed = probeWorkspacePackage(project, fromFile, specifier);
+	return probed.kind === "file" ? probed.file : undefined;
 }
 
 interface ImportBinding {
@@ -617,12 +871,24 @@ function resolveThroughImport(
 	}
 	const target = resolveModuleSpecifier(project, sourceFile, binding.specifier);
 	if (!target) {
-		// A bare specifier the tsconfig does not map is a real dependency.
+		// A bare specifier that maps nowhere and links to no workspace package is
+		// a real dependency.
 		if (!isRelativeSpecifier(binding.specifier)) {
+			// One exception worth naming: a first-party package whose only
+			// resolvable entry is compiled output. "External dependency" is the
+			// wrong thing to tell an agent about code in its own repository.
+			const probed = probeWorkspacePackage(
+				project,
+				sourceFile,
+				binding.specifier,
+			);
 			return {
 				resolved: false,
 				external: true,
-				module: binding.specifier,
+				module:
+					probed.kind === "built-output"
+						? `${binding.specifier} (built output)`
+						: binding.specifier,
 				name: binding.exportedName === "*" ? localName : binding.exportedName,
 			};
 		}
@@ -813,7 +1079,7 @@ export function resolveIdentifier(
 	}
 
 	if (options.preferSyntacticResolution === false) {
-		return checkerFallback(sourceFile, localName);
+		return checkerFallback(project, sourceFile, localName);
 	}
 
 	return {
@@ -825,6 +1091,7 @@ export function resolveIdentifier(
 }
 
 function checkerFallback(
+	project: Project,
 	sourceFile: SourceFile,
 	localName: string,
 ): RefResolution {
@@ -834,7 +1101,7 @@ function checkerFallback(
 	if (identifier) {
 		for (const definition of identifier.getDefinitionNodes()) {
 			const definitionFile = definition.getSourceFile();
-			if (isInNodeModules(definitionFile.getFilePath())) {
+			if (!isWorkspaceLocal(project, definitionFile.getFilePath())) {
 				continue;
 			}
 			return asResolved(definition, definitionFile, localName);

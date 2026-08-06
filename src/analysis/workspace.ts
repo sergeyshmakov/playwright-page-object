@@ -44,6 +44,7 @@ import {
 	toPosix,
 	toPosixRelative,
 } from "./util/paths";
+import { registerWorkspaceRoot } from "./util/workspaceRoot";
 
 export const DEFAULT_TEST_ID_ATTRIBUTE = "data-testid";
 /** Matches the documented `--max-files` default in `src/cli.ts` and the docs. */
@@ -208,6 +209,10 @@ export class Workspace {
 		registerFileAdmission(project, (added) => {
 			this.admitResolvedFile(added);
 		});
+		// Same registry pattern: the resolver classifies files by real path, and it
+		// needs the analysed root to tell a linked workspace package apart from an
+		// installed dependency.
+		registerWorkspaceRoot(project, this.root);
 		this.recordMtimes();
 		this.enforceMaxFiles();
 	}
@@ -423,6 +428,25 @@ export class Workspace {
 		files.sort((a, b) => (a.getFilePath() < b.getFilePath() ? -1 : 1));
 		this.fileList = { epoch: this.epoch, value: files };
 		return files;
+	}
+
+	/**
+	 * Whether one file would appear in {@link sourceFiles}.
+	 *
+	 * The list is memoized per epoch and the resolver adds files to the `Project`
+	 * without bumping it, so a file pulled in mid-analysis is invisible to
+	 * `sourceFiles()` until something else invalidates it. A caller that finds
+	 * such a file has to be able to ask the same membership question the list
+	 * asks, rather than re-deriving the predicate and drifting from it.
+	 */
+	analysable(sourceFile: SourceFile): boolean {
+		const absolute = sourceFile.getFilePath();
+		return isAnalysable(
+			absolute,
+			this.rel(absolute),
+			this.options.include ?? [],
+			this.options.exclude ?? [],
+		);
 	}
 
 	tsFiles(): SourceFile[] {

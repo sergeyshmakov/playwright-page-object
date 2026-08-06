@@ -307,12 +307,16 @@ describe("buildTestIdTree — graph traversal", () => {
 
 	it("stops at a recursive component instead of looping", () => {
 		const tree = buildTestIdTree(makeWorkspace(RECURSIVE));
-		expect(tree.fidelity).toBe("full");
 		const node = tree.roots[0];
 		expect(node.componentRef).toBe("src/Node.tsx#default");
 		const inner = node.children[0].children[0];
 		expect(inner).toMatchObject({ tag: "Node", repeated: true });
 		expect(inner.children).toEqual([]);
+		// The cut subtree is a hole like any other: it used to be a silent empty
+		// node claiming full fidelity over a tree that stops mid-recursion.
+		expect(inner.unresolved).toEqual({ reason: "recursive" });
+		expect(tree.fidelity).toBe("partial");
+		expect(tree.stats.unresolvedByReason).toEqual({ recursive: 1 });
 	});
 
 	it("does not expand a component from another package", () => {

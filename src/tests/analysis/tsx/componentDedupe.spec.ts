@@ -254,6 +254,106 @@ describe("cross-site component de-duplication", () => {
 		expect(tree.truncated).toBeUndefined();
 	});
 
+	// The memo covers the callee's own subtree. Content the *site* passed in is
+	// not part of that subtree, so it stays out of the key — and a memo hit has
+	// to emit it anyway, or the caller's own JSX vanishes at every site after
+	// the first, which is the bug this whole cluster exists to remove.
+	it("still reports a memoized site's own slot children", () => {
+		const { nodes } = treeFor({
+			"src/Card.tsx": [
+				"export default function Card({ children }: { children?: unknown }) {",
+				'  return <div data-testid="Card">{children as never}</div>;',
+				"}",
+			].join("\n"),
+			"src/App.tsx": [
+				'import Card from "./Card";',
+				"export default function App() {",
+				"  return (",
+				"    <div>",
+				'      <Card><span data-testid="A" /></Card>',
+				'      <Card><span data-testid="B" /></Card>',
+				"    </div>",
+				"  );",
+				"}",
+			].join("\n"),
+		});
+
+		const [first, second] = sitesOf(nodes, "Card");
+		expect(first.expandedAt).toBeUndefined();
+		expect(second.expandedAt).toEqual(first.loc);
+		expect(second.children).toHaveLength(1);
+		expect(second.children[0].testId).toMatchObject({ value: "B" });
+		expect(second.children[0].placement).toEqual({
+			kind: "slot",
+			name: "children",
+		});
+		// Differing children must not split the expansion: the callee's subtree
+		// cannot depend on them.
+		expect(first.children.filter((child) => !child.placement)).toHaveLength(1);
+	});
+
+	it("splits the expansion when one site passes a prop and the other does not", () => {
+		const { nodes } = treeFor({
+			"src/Row.tsx": [
+				"export default function Row({ rowId }: { rowId?: string }) {",
+				"  return <tr data-testid={rowId} />;",
+				"}",
+			].join("\n"),
+			"src/App.tsx": [
+				'import Row from "./Row";',
+				"export default function App({ x }: { x: string }) {",
+				"  return (",
+				"    <table>",
+				"      <Row rowId={x} />",
+				"      <Row />",
+				"    </table>",
+				"  );",
+				"}",
+			].join("\n"),
+		});
+
+		const [bound, bare] = sitesOf(nodes, "Row");
+		// Both sites bind nothing statically, so the old key collapsed them — and
+		// then reported the second site's phantom id as the first site's dynamic
+		// one.
+		expect(bound.expandedAt).toBeUndefined();
+		expect(bare.expandedAt).toBeUndefined();
+		expect(bound.children[0].testId?.kind).toBe("dynamic");
+		expect(bound.children[0].testIdAbsent).toBeUndefined();
+		expect(bare.children[0].testId).toBeUndefined();
+		expect(bare.children[0].testIdAbsent).toBe(true);
+	});
+
+	it("does not let a budget cut inside slot children poison the memo", () => {
+		const { nodes } = treeFor({
+			"src/Card.tsx": [
+				"export default function Card({ children }: { children?: unknown }) {",
+				'  return <div data-testid="Card">{children as never}</div>;',
+				"}",
+			].join("\n"),
+			"src/App.tsx": [
+				'import Card from "./Card";',
+				"export default function App() {",
+				"  return (",
+				"    <div>",
+				"      <Card>",
+				'        <span data-testid="S1"><i data-testid="S2" /></span>',
+				"      </Card>",
+				"      <Card />",
+				"    </div>",
+				"  );",
+				"}",
+			].join("\n"),
+		});
+
+		// Both `Card` sites pass nothing as props, so they share an expansion key
+		// even though only one of them passes children.
+		const [first, second] = sitesOf(nodes, "Card");
+		expect(first.expandedAt).toBeUndefined();
+		expect(second.expandedAt).toEqual(first.loc);
+		expect(second.children).toEqual([]);
+	});
+
 	it("keeps the inventory complete when sites are collapsed", () => {
 		const { tree, nodes } = treeFor({
 			...BADGE,

@@ -7,16 +7,21 @@ import {
 	type SourceFile,
 	SyntaxKind,
 } from "ts-morph";
-import type { ComponentInfo, SourceLoc } from "../types";
+import type {
+	ComponentInfo,
+	SourceLoc,
+	TestIdValue,
+	UiUnresolvedReason,
+} from "../types";
 import { defKey } from "../util/paths";
 import {
-	isInNodeModules,
 	type RefResolution,
 	type ResolveOptions,
 	resolveIdentifier,
 } from "../util/resolve";
+import { isWorkspaceLocal } from "../util/workspaceRoot";
 import type { Workspace } from "../workspace";
-import { fallbackComponentName } from "./scanTestIds";
+import { fallbackComponentName, readExpressionValue } from "./scanTestIds";
 
 export type ComponentFunction =
 	| FunctionDeclaration
@@ -34,16 +39,33 @@ export interface ComponentDefinition {
 	propNames: string[];
 	/** Local binding name to prop name for `({ testId: id })`-style aliases. */
 	propAliases: Map<string, string>;
+	/**
+	 * Local binding name to the statically-known default it declares
+	 * (`{ testId = "Row" }`). A dynamic default is left out: the point of the map
+	 * is to answer "what renders when the call site passes nothing", and an
+	 * unreadable default answers nothing.
+	 */
+	propDefaults: Map<string, TestIdValue>;
 	/** `rest` in `({ a, ...rest })`, or the whole parameter name (`props`). */
 	spreadSourceNames: string[];
 	forwardsSpread: boolean;
 	exportKind: "default" | "named";
 }
 
+/**
+ * Subset of {@link UiUnresolvedReason} a tag resolution can produce. Typed
+ * narrowly so the tree can copy it onto a node without widening the wire
+ * vocabulary back to `string`.
+ */
+export type ComponentUnresolvedReason = Extract<
+	UiUnresolvedReason,
+	"identifier-unresolved" | "namespaced-component" | "not-a-function-component"
+>;
+
 export type ComponentResolution =
 	| { kind: "local"; definition: ComponentDefinition }
 	| { kind: "external"; module: string }
-	| { kind: "unresolved"; reason: string };
+	| { kind: "unresolved"; reason: ComponentUnresolvedReason };
 
 function componentFunctionOf(node: Node): ComponentFunction | null {
 	if (Node.isFunctionDeclaration(node)) {
@@ -97,6 +119,7 @@ interface PropsRead {
 	propNames: string[];
 	spreadSourceNames: string[];
 	propAliases: Map<string, string>;
+	propDefaults: Map<string, TestIdValue>;
 }
 
 /**
@@ -111,6 +134,7 @@ function readProps(fn: ComponentFunction): PropsRead {
 		propNames: [],
 		spreadSourceNames: [],
 		propAliases: new Map(),
+		propDefaults: new Map(),
 	};
 	const [parameter] = fn.getParameters();
 	if (!parameter) {
@@ -121,6 +145,7 @@ function readProps(fn: ComponentFunction): PropsRead {
 		const propNames: string[] = [];
 		const spreadSourceNames: string[] = [];
 		const propAliases = new Map<string, string>();
+		const propDefaults = new Map<string, TestIdValue>();
 		for (const element of nameNode.getElements()) {
 			const local = element.getName();
 			if (element.getDotDotDotToken()) {
@@ -135,8 +160,15 @@ function readProps(fn: ComponentFunction): PropsRead {
 			if (propName !== local) {
 				propAliases.set(local, propName);
 			}
+			const initializer = element.getInitializer();
+			if (initializer) {
+				const [value] = readExpressionValue(initializer).values;
+				if (value && value.kind !== "dynamic") {
+					propDefaults.set(local, value);
+				}
+			}
 		}
-		return { propNames, spreadSourceNames, propAliases };
+		return { propNames, spreadSourceNames, propAliases, propDefaults };
 	}
 	if (Node.isIdentifier(nameNode)) {
 		return { ...empty, spreadSourceNames: [nameNode.getText()] };
@@ -240,7 +272,8 @@ export function buildDefinition(
 	}
 	const sourceFile = declaration.getSourceFile();
 	const file = ws.rel(sourceFile.getFilePath());
-	const { propNames, spreadSourceNames, propAliases } = readProps(fn);
+	const { propNames, spreadSourceNames, propAliases, propDefaults } =
+		readProps(fn);
 	// Prefer the declared name over the local alias at the import site, so
 	// `import CartItemComponent from "./CartItem"` still reports `CartItem`.
 	const declaredName = declaredNameOf(declaration) ?? name;
@@ -255,6 +288,7 @@ export function buildDefinition(
 		loc: { file, line: position.line, column: position.column },
 		propNames,
 		propAliases,
+		propDefaults,
 		spreadSourceNames,
 		forwardsSpread: forwardsSpread(fn, spreadSourceNames),
 		exportKind,
@@ -264,9 +298,13 @@ export function buildDefinition(
 /**
  * Resolves a JSX tag to its component definition.
  *
- * Same syntax-first strategy as the page-object resolver, and definitions under
- * `node_modules` are rejected outright: a `<Button>` from a design system is a
- * boundary the scanner reports rather than crosses.
+ * Same syntax-first strategy as the page-object resolver. A definition in an
+ * installed dependency is rejected outright — a `<Button>` from a published
+ * design system is a boundary the scanner reports rather than crosses — but a
+ * workspace package *linked through* `node_modules` is not one: npm, yarn and
+ * pnpm all publish local packages there as symlinks or directory junctions, and
+ * judging them by the link path turns every first-party component into an
+ * external boundary.
  */
 export function resolveComponentRef(
 	ws: Workspace,
@@ -289,7 +327,7 @@ export function resolveComponentRef(
 		}
 		return { kind: "unresolved", reason: "identifier-unresolved" };
 	}
-	if (isInNodeModules(resolution.sourceFile.getFilePath())) {
+	if (!isWorkspaceLocal(project, resolution.sourceFile.getFilePath())) {
 		return { kind: "external", module: "node_modules" };
 	}
 	if (tagName.includes(".")) {

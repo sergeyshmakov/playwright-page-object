@@ -62,6 +62,12 @@ export type DiagnosticCode =
 	| "external-component"
 	| "spread-props"
 	| "prop-forwarding-unsupported"
+	/** One summary per tree whose walk left a structural hole. */
+	| "tree-partial"
+	/** `followComponents: false` stopped the walk at every component tag. */
+	| "components-not-followed"
+	/** A file the resolver pulled in mid-walk is outside the caller's scope. */
+	| "inventory-scope-gap"
 	// coverage
 	| "raw-locators-disabled"
 	| "unforwarded-prop";
@@ -344,9 +350,41 @@ export interface TestIdValue {
 	reason?: DynamicReason;
 }
 
+/**
+ * Why a node's subtree is missing, unproven, or unreadable.
+ *
+ * Everything except `"spread-props"` is a *structural* hole: the runtime tree
+ * has content the walk could not put in `roots`. `"spread-props"` is a value
+ * hole on a node whose children are present.
+ */
+export type UiUnresolvedReason =
+	/* component boundaries — the callee's own subtree is missing */
+	| "external-module"
+	| "identifier-unresolved"
+	| "namespaced-component"
+	| "not-a-function-component"
+	/** The component renders itself on the current ancestor path; the walk cut the cycle. */
+	| "recursive"
+	/** The caller asked for one level only (`followComponents: false`). Not a budget cut. */
+	| "not-followed"
+	| "depth-limit-reached"
+	| "node-budget-reached"
+	/* content the walk could see but not place */
+	/** The expression syntactically contains JSX the walk could not attach to a node. */
+	| "unresolved-jsx"
+	/** An expression that may render UI (a call, an unresolved identifier, a render prop). */
+	| "opaque-expression"
+	/* value-level, not structural */
+	| "spread-props";
+
 export interface UiNode {
 	tag: string;
-	nodeType: "element" | "component" | "branch";
+	/**
+	 * `"unresolved"` is a synthetic marker node (`tag: "#unresolved"`) standing in
+	 * for content the walk could see was there but could not resolve into nodes.
+	 * It never has children and never carries a test id.
+	 */
+	nodeType: "element" | "component" | "branch" | "unresolved";
 	testId?: TestIdValue;
 	file: string;
 	loc: SourceLoc;
@@ -358,14 +396,53 @@ export interface UiNode {
 	componentRef?: string;
 	/**
 	 * Set on a component node whose subtree was already expanded at an earlier
-	 * render site in this same tree, pointing at that site's `loc`. `children` is
-	 * empty: read the subtree there instead. Only ever set when the two sites
-	 * would have produced identical subtrees.
+	 * render site in this same tree, pointing at that site's `loc`. `children`
+	 * holds only the nodes *this* site passed in as content — every one of them
+	 * carries {@link UiNode.placement}. The component's own subtree was expanded
+	 * at the referenced location; read the children there that have no
+	 * `placement`. Only ever set when the two expansions would be identical.
 	 */
 	expandedAt?: SourceLoc;
+	/**
+	 * How this node reached its parent, when the parent is a component element.
+	 *
+	 * Absent means the ordinary case: the parent renders this node in the position
+	 * the source shows. When present, the JSX is declared by the *caller* and was
+	 * handed to the parent component as content — so it is the caller's own source
+	 * and is walked as such, but **where, or whether, the parent renders it is not
+	 * proven**. Read the subtree as "renders somewhere inside this component, or
+	 * not at all".
+	 *
+	 * - `kind: "slot"` — passed as the parent's children (JSX between its tags, or
+	 *   an explicit `children={…}` attribute).
+	 * - `kind: "prop"` — passed as the value of another prop.
+	 *
+	 * `name` is `"children"` for a slot, otherwise the attribute name.
+	 *
+	 * Only the *top* node of each passed expression carries this. Its descendants
+	 * have proven placement relative to their own parent.
+	 */
+	placement?: { kind: "slot" | "prop"; name: string };
 	viaProp?: string;
 	viaSpread?: boolean;
-	unresolved?: { reason: string };
+	/**
+	 * The id came from the component's own fallback — a parameter default
+	 * (`{ testId = "Row" }`) or a `prop || "Row"` / `prop ?? "Row"` expression —
+	 * because the call site provably passed nothing. `viaProp` names the prop that
+	 * was absent.
+	 */
+	viaDefault?: true;
+	/**
+	 * The element writes the test-id attribute, but at this render site the value
+	 * provably resolves to nothing: it reads a prop the call site did not pass,
+	 * the call site spreads nothing, and the prop declares no default. The
+	 * attribute is absent from the DOM here — do not write a selector for it.
+	 *
+	 * Only ever set when the call site is known, so never on the tree root, whose
+	 * caller is outside the analysed tree.
+	 */
+	testIdAbsent?: true;
+	unresolved?: { reason: UiUnresolvedReason };
 	children: UiNode[];
 }
 
@@ -408,10 +485,25 @@ export interface TestIdTree {
 	scanner: "jsx";
 	attribute: string;
 	attributeSource: TestIdAttributeSource;
-	fidelity: "full" | "flat";
+	/**
+	 * Completeness of the **node tree**, not of individual test ids.
+	 *
+	 * - `"full"` — the walk reached everything: no node carries a structural
+	 *   `unresolved` reason and no budget cut fired.
+	 * - `"partial"` — the walk ran, but at least one subtree is missing or its
+	 *   placement is unproven. `roots` is real but has holes; `fidelityReason`
+	 *   and `stats.unresolvedByReason` say where. Never treat the absence of a
+	 *   test id in a partial tree as proof it is not rendered.
+	 * - `"flat"` — no entry component could be rooted; `roots` is empty and only
+	 *   `inventory` is meaningful.
+	 *
+	 * `inventory` is complete in all three states.
+	 */
+	fidelity: "full" | "partial" | "flat";
+	/** Always present when `fidelity !== "full"`. */
 	fidelityReason?: string;
 	roots: UiNode[];
-	/** Always complete across every scanned file, even when `fidelity === "flat"`. */
+	/** Always complete across every scanned file, whatever the fidelity. */
 	inventory: TestIdOccurrence[];
 	components: Record<string, ComponentInfo>;
 	warnings: Diagnostic[];
@@ -421,6 +513,14 @@ export interface TestIdTree {
 		occurrences: number;
 		dynamic: number;
 		parseMs: number;
+		/** Nodes emitted into `roots`. */
+		nodes: number;
+		/** Nodes with a structural `unresolved` reason (`spread-props` excluded). */
+		unresolved: number;
+		/** Breakdown of `unresolved` by reason code. */
+		unresolvedByReason: Record<string, number>;
+		/** Nodes carrying `placement` — content whose DOM position is unproven. */
+		slots: number;
 	};
 }
 
