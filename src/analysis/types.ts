@@ -27,11 +27,20 @@ export type DiagnosticCode =
 	| "no-tsconfig"
 	| "tsconfig-not-found"
 	| "playwright-config-not-found"
+	| "playwright-config-ambiguous"
 	| "config-shape-unrecognized"
+	| "config-merge-unresolved"
 	| "testid-attribute-unresolved"
 	| "testdir-unresolved"
 	| "testid-attribute-maybe-spread"
 	| "testid-attribute-project-override"
+	| "testid-attribute-inherited"
+	| "testid-attribute-conflict"
+	// environment sanity
+	| "attribute-mismatch"
+	| "attribute-no-evidence"
+	| "scope-empty"
+	| "scope-dir-missing"
 	// page objects
 	| "dynamic-selector-arg"
 	| "unresolved-factory-identifier"
@@ -419,9 +428,38 @@ export interface TestIdTree {
 /* Playwright config                                                          */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Which layer of the config stack the resolved `testIdAttribute` came from.
+ *
+ * A Playwright config is routinely a merge — `defineConfig({ ...base, … })`, or
+ * a leaf config importing a shared base one directory up. Reporting only the
+ * chosen *file* would name a file that does not contain the attribute at all.
+ */
+export type TestIdAttributeOrigin =
+	/** Written in the chosen config's own object literal. */
+	| "primary"
+	/** Written in an argument of a merge helper call in the chosen config. */
+	| "merge-layer"
+	/** Written in a config the chosen one imports (one hop). */
+	| "base-config"
+	/** Written in an object spread into the chosen config's literal. */
+	| "spread"
+	/** Not in the chosen config at all; read from another discovered config. */
+	| "sibling-config";
+
 export interface PlaywrightConfigInfo {
 	configFile: string | null;
+	/**
+	 * Every discovered config, ranked, workspace-relative. The chosen one is
+	 * first when discovery picked it; an explicit path is not in this list unless
+	 * discovery found it too.
+	 */
+	candidates: string[];
+	/** Whether {@link configFile} was chosen by discovery or supplied by the caller. */
+	configSource: "discovered" | "explicit" | "none";
 	testIdAttribute: string | undefined;
+	/** Where the resolved {@link testIdAttribute} was written; absent when unresolved. */
+	testIdAttributeFrom?: TestIdAttributeOrigin;
 	/** Workspace-relative posix dir, already resolved against the config's own directory. */
 	testDir: string | undefined;
 	/**

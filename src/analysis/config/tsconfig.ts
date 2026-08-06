@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CompilerOptions } from "ts-morph";
 import { ts } from "ts-morph";
-import { toPosix } from "../util/paths";
+import { ignoredExcludeGlobs, toPosix } from "../util/paths";
 
 export interface TsConfigLocation {
 	/** Absolute path, or `null` when nothing usable was found. */
@@ -146,14 +146,12 @@ export function defaultIncludeGlobs(projectRoot: string): string[] {
 	return SCAN_EXTENSIONS.map((extension) => `${root}/**/*.${extension}`);
 }
 
+/**
+ * The directories every scan prunes, derived from the same
+ * {@link IGNORED_SEGMENTS} list `isAnalysable()` filters on. Two hand-kept lists
+ * drifted: the glob still descended into `out/`, `.git/`, `.next/` and
+ * `.astro/`, parsing files the workspace then discarded.
+ */
 export function defaultExcludeGlobs(projectRoot: string): string[] {
-	const root = toPosix(projectRoot).replace(/\/$/, "");
-	return [
-		`!${root}/**/node_modules/**`,
-		`!${root}/**/dist/**`,
-		`!${root}/**/build/**`,
-		`!${root}/**/coverage/**`,
-		`!${root}/**/playwright-report/**`,
-		`!${root}/**/test-results/**`,
-	];
+	return ignoredExcludeGlobs(toPosix(projectRoot).replace(/\/$/, ""));
 }

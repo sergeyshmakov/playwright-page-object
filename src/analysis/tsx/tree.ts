@@ -269,7 +269,9 @@ export function buildTestIdTree(
 		: ws.testIdAttribute();
 	const attribute = resolvedAttribute.attribute;
 	const files = selectFiles(ws, options);
-	const warnings: Diagnostic[] = [];
+	// The attribute actually used, not the workspace default: a per-call override
+	// is exactly the case where the census has to check the name that was read.
+	const warnings: Diagnostic[] = [...ws.environmentWarnings(attribute)];
 
 	const inventory: TestIdOccurrence[] = [];
 	const elementsByFile = new Map<string, ScannedElement[]>();

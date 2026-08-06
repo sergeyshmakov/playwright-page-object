@@ -192,7 +192,10 @@ export function buildPageObjectTree(
 		options.maxDepth ?? DEFAULT_MAX_DEPTH,
 	);
 	const defs: Record<string, PageObjectNode> = {};
-	const warnings: Diagnostic[] = [];
+	// Seeded, not empty: a tree built against an undiscovered Playwright config
+	// or an out-of-scope source directory is wrong in ways nothing inside the
+	// walk can detect.
+	const warnings: Diagnostic[] = [...ws.environmentWarnings()];
 	let truncated = false;
 
 	const ensureExternal = (ref: string): void => {

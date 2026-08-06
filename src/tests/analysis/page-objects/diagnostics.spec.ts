@@ -19,6 +19,18 @@ function warningsFor(files: Record<string, string>): Diagnostic[] {
 const codes = (diagnostics: Diagnostic[]) =>
 	diagnostics.map((diagnostic) => diagnostic.code);
 
+/**
+ * Every payload now seeds itself with the workspace's environment warnings, and
+ * an in-memory fixture has neither a Playwright config nor a JSX file — so those
+ * two ship with every result here. They are not per-class diagnostics, which is
+ * what this file is about.
+ */
+const ENVIRONMENT_CODES = new Set([
+	"playwright-config-not-found",
+	"scope-empty",
+	"no-tsconfig",
+]);
+
 const PRELUDE = 'import type { Locator, Page } from "@playwright/test";\n';
 
 describe("per-class diagnostics", () => {
@@ -128,6 +140,8 @@ describe("per-class diagnostics", () => {
 				"}",
 			].join("\n"),
 		});
-		expect(warnings).toHaveLength(0);
+		expect(
+			codes(warnings).filter((code) => !ENVIRONMENT_CODES.has(code)),
+		).toEqual([]);
 	});
 });

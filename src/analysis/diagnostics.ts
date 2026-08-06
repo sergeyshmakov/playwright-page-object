@@ -111,9 +111,14 @@ export class AnalysisLimitError extends Error {
 	readonly actual: number;
 
 	constructor(limit: number, actual: number) {
+		// Names no option: the engine is consumed by the MCP server (whose flags are
+		// `--src-dir` / `--max-files`), by tests calling `Workspace.acquire`, and by
+		// anything embedding it later. A message that spells one surface's option
+		// names is wrong advice everywhere else, and the MCP layer already attaches
+		// its own flag-shaped hint.
 		super(
-			`Workspace contains ${actual} source files, which exceeds the ${limit} file limit. ` +
-				"Narrow the analysis with `include` / `exclude` globs, or raise `maxFiles`.",
+			`Analysis scope contains ${actual} source files, more than the configured limit of ${limit}. ` +
+				"Narrow the analysed directories, or raise the file limit.",
 		);
 		this.name = "AnalysisLimitError";
 		this.code = "max_files_exceeded";

@@ -84,7 +84,7 @@ describe("Workspace.acquire", () => {
 		});
 		Workspace.acquire({ projectRoot: root });
 		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 1 })).toThrow(
-			/exceeds the 1 file limit/,
+			/more than the configured limit of 1/,
 		);
 	});
 
@@ -126,6 +126,145 @@ describe("Workspace.acquire", () => {
 				preferSyntacticResolution: false,
 			}),
 		).not.toBe(first);
+	});
+
+	// Which Playwright config is read decides the test-id attribute, which
+	// decides every result. Reusing a workspace built against a different one
+	// would answer the second caller with the first caller's attribute.
+	it("treats a different playwrightConfig as a different workspace", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"one.config.ts": 'export default { use: { testIdAttribute: "one" } };',
+			"two.config.ts": 'export default { use: { testIdAttribute: "two" } };',
+		});
+		const first = Workspace.acquire({
+			projectRoot: root,
+			playwrightConfig: "one.config.ts",
+		});
+		const second = Workspace.acquire({
+			projectRoot: root,
+			playwrightConfig: "two.config.ts",
+		});
+		expect(second).not.toBe(first);
+		expect(first.testIdAttribute().attribute).toBe("one");
+		expect(second.testIdAttribute().attribute).toBe("two");
+	});
+});
+
+/**
+ * A scope that selects nothing is a wrong answer wearing an empty one's
+ * clothes: every tool succeeds, reports nothing, and gives no reason.
+ */
+describe("Workspace scope diagnostics", () => {
+	it("warns when an analysed directory is not on disk", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src", "packages/app"],
+		});
+		const warning = ws.warnings.find(
+			(diagnostic) => diagnostic.code === "scope-dir-missing",
+		);
+		expect(warning?.data?.path).toBe("packages/app");
+		expect(warning?.severity).toBe("warning");
+	});
+
+	it("still builds a usable workspace from the directories that do exist", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src", "nope"],
+		});
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+	});
+
+	// A glob is allowed to match nothing — that is indistinguishable from an
+	// empty directory, and `scope-empty` covers the consequence from the
+	// evidence side. Reporting it here would fire on every legitimate filter.
+	it("says nothing about a glob that happens to match no file", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src/**/*.tsx"],
+		});
+		expect(ws.warnings.map((diagnostic) => diagnostic.code)).not.toContain(
+			"scope-dir-missing",
+		);
+	});
+
+	it("says nothing about an excluded directory that is not there", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const ws = Workspace.acquire({ projectRoot: root, exclude: ["generated"] });
+		expect(ws.warnings.map((diagnostic) => diagnostic.code)).not.toContain(
+			"scope-dir-missing",
+		);
+	});
+
+	it("reports an empty JSX scope through environmentWarnings", () => {
+		const root = scratch({ "e2e/Page.ts": "export class Page {}" });
+		const ws = Workspace.acquire({ projectRoot: root });
+		expect(ws.environmentWarnings().map((one) => one.code)).toContain(
+			"scope-empty",
+		);
+	});
+
+	it("orders the attribute verdict ahead of the config notes", () => {
+		const root = scratch({
+			"src/App.tsx": [
+				'export const App = () => <div data-tid="A"><b data-tid="B" /></div>;',
+			].join("\n"),
+		});
+		const ws = Workspace.acquire({ projectRoot: root });
+		const codes = ws.environmentWarnings().map((one) => one.code);
+		expect(codes[0]).toBe("attribute-mismatch");
+		expect(codes).toContain("playwright-config-not-found");
+	});
+
+	it("memoizes environmentWarnings per epoch and per attribute", () => {
+		const root = scratch({ "src/App.tsx": "export const A = () => <b/>;" });
+		const ws = Workspace.acquire({ projectRoot: root });
+		const first = ws.environmentWarnings();
+		expect(ws.environmentWarnings()).toBe(first);
+		expect(ws.environmentWarnings("data-tid")).not.toBe(first);
+		ws.bumpEpoch();
+		expect(ws.environmentWarnings()).not.toBe(first);
+	});
+});
+
+/**
+ * The config candidate list is the one cache an epoch bump does not clear: an
+ * edit changes what a config *says*, never which files exist, and re-globbing
+ * the repository on every keystroke would put a filesystem walk on the hot path.
+ */
+describe("Workspace config discovery caching", () => {
+	it("keeps the candidate list across an epoch bump", () => {
+		const root = scratch({
+			"playwright.config.ts": "export default {};",
+			"src/a.ts": "export const a = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root });
+		const before = ws.configDiscovery();
+		ws.bumpEpoch();
+		expect(ws.configDiscovery()).toBe(before);
+	});
+
+	it("re-discovers once a config file appears", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		expect(ws.playwright().configFile).toBeNull();
+
+		write(
+			root,
+			"playwright.config.ts",
+			'export default { use: { testIdAttribute: "data-late" } };',
+		);
+		ws.revalidate();
+
+		expect(ws.configDiscovery().candidates).toHaveLength(1);
+		expect(ws.testIdAttribute()).toEqual({
+			attribute: "data-late",
+			source: "playwright-config",
+		});
 	});
 });
 

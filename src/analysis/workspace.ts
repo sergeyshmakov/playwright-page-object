@@ -6,6 +6,11 @@ import {
 	Project,
 	type SourceFile,
 } from "ts-morph";
+import {
+	type ConfigDiscovery,
+	discoverPlaywrightConfigs,
+	isPlaywrightConfigPath,
+} from "./config/configDiscovery";
 import { readPlaywrightConfig } from "./config/playwrightConfig";
 import {
 	defaultExcludeGlobs,
@@ -15,9 +20,16 @@ import {
 	synthesizedCompilerOptions,
 	tsConfigFileNames,
 } from "./config/tsconfig";
-import { AnalysisLimitError, dedupeDiagnostics, info } from "./diagnostics";
+import {
+	AnalysisLimitError,
+	dedupeDiagnostics,
+	info,
+	warn,
+} from "./diagnostics";
+import { attributeVerdict, censusFromText } from "./tsx/attributeCensus";
 import type {
 	Diagnostic,
+	DiagnosticCode,
 	PlaywrightConfigInfo,
 	SourceLoc,
 	TestIdAttributeSource,
@@ -38,11 +50,53 @@ export const DEFAULT_TEST_ID_ATTRIBUTE = "data-testid";
 const DEFAULT_MAX_FILES = 2000;
 const DEFAULT_STALE_AFTER_MS = 1000;
 const LRU_SIZE = 2;
+/**
+ * Environment warnings ship on every payload, so the list has to stay readable.
+ * Eight is more than any single misconfiguration produces; a repository that
+ * trips more than that has one root cause and the ranking puts it first.
+ */
+const MAX_ENVIRONMENT_WARNINGS = 8;
+
+/**
+ * Ordering of environment warnings: what makes the answer wrong, before what
+ * makes it incomplete, before why.
+ */
+function environmentRank(code: DiagnosticCode): number {
+	switch (code) {
+		case "attribute-mismatch":
+		case "attribute-no-evidence":
+		case "testid-attribute-unresolved":
+		case "testid-attribute-conflict":
+		case "testid-attribute-inherited":
+		case "testid-attribute-maybe-spread":
+		case "testid-attribute-project-override":
+			return 0;
+		case "scope-empty":
+		case "scope-dir-missing":
+			return 1;
+		case "playwright-config-not-found":
+		case "playwright-config-ambiguous":
+		case "config-shape-unrecognized":
+		case "config-merge-unresolved":
+		case "testdir-unresolved":
+		case "no-tsconfig":
+		case "tsconfig-not-found":
+			return 2;
+		default:
+			return 3;
+	}
+}
 
 export interface WorkspaceOptions {
 	/** Absolute (or cwd-relative) directory that every emitted path is relative to. */
 	projectRoot: string;
 	tsconfig?: string;
+	/**
+	 * Explicit `playwright.config.*` path. Suppresses discovery entirely: a
+	 * caller who names a config and silently gets a different one read is worse
+	 * off than one told the file is missing.
+	 */
+	playwrightConfig?: string;
 	include?: string[];
 	exclude?: string[];
 	maxFiles?: number;
@@ -85,6 +139,7 @@ function workspaceKey(options: WorkspaceOptions): string {
 	return [
 		foldPath(normalizeRoot(options.projectRoot)),
 		options.tsconfig ?? "",
+		options.playwrightConfig ?? "",
 		(options.include ?? []).join(","),
 		(options.exclude ?? []).join(","),
 		options.attribute ?? "",
@@ -124,6 +179,14 @@ export class Workspace {
 		epoch: number;
 		value: PlaywrightConfigInfo;
 	} | null = null;
+	/**
+	 * Ranked Playwright config paths. Deliberately *not* epoch-scoped: an edit to
+	 * a source file changes what the configs say, never which files exist, and
+	 * re-globbing the repository on every epoch bump would put a filesystem walk
+	 * on the hot path. {@link revalidate} clears it when a config-shaped file
+	 * actually appears.
+	 */
+	private discovery: ConfigDiscovery | null = null;
 	private fileList: { epoch: number; value: SourceFile[] } | null = null;
 
 	private constructor(
@@ -131,12 +194,14 @@ export class Workspace {
 		options: WorkspaceOptions,
 		tsconfigPath: string | null,
 		inMemory: boolean,
+		discovery: ConfigDiscovery | null = null,
 	) {
 		this.project = project;
 		this.options = options;
 		this.root = normalizeRoot(options.projectRoot);
 		this.tsconfigPath = tsconfigPath;
 		this.inMemory = inMemory;
+		this.discovery = discovery;
 		this.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
 		// The resolver adds files straight to the `Project`; this is how they reach
 		// the same cap as everything else.
@@ -149,7 +214,7 @@ export class Workspace {
 
 	/** LRU of 2, keyed by root + tsconfig + include/exclude. */
 	static acquire(rawOptions: WorkspaceOptions): Workspace {
-		const options = withNormalizedScope(rawOptions);
+		const { options, missing } = withNormalizedScope(rawOptions);
 		const key = workspaceKey(options);
 		const existing = Workspace.cache.get(key);
 		if (existing) {
@@ -165,11 +230,13 @@ export class Workspace {
 			if (options.revalidate !== false) {
 				existing.revalidate();
 			}
+			existing.noteMissingScope(missing);
 			return existing;
 		}
 
 		const created = Workspace.create(options);
 		created.cacheKey = key;
+		created.noteMissingScope(missing);
 		Workspace.cache.set(key, created);
 		while (Workspace.cache.size > LRU_SIZE) {
 			const oldest = Workspace.cache.keys().next();
@@ -199,18 +266,27 @@ export class Workspace {
 		options: WorkspaceOptions,
 		meta?: { inMemory?: boolean; tsconfigPath?: string | null },
 	): Workspace {
-		return new Workspace(
+		const normalized = withNormalizedScope(options);
+		const workspace = new Workspace(
 			project,
-			withNormalizedScope(options),
+			normalized.options,
 			meta?.tsconfigPath ?? null,
 			meta?.inMemory ?? true,
 		);
+		workspace.noteMissingScope(normalized.missing);
+		return workspace;
 	}
 
 	private static create(options: WorkspaceOptions): Workspace {
 		const root = normalizeRoot(options.projectRoot);
 		// The Playwright config is read from a throwaway project so that
 		// `testDir` can steer tsconfig discovery before the real one is built.
+		//
+		// The probe deliberately carries no tsconfig: it exists before the real
+		// project's compiler options are known, so a base config imported through
+		// a `paths` alias cannot be followed here. That costs at most one hop of
+		// the layer read during workspace construction; the memoized
+		// `playwright()` on the real workspace redoes it with the right options.
 		const probe = new Project({
 			useInMemoryFileSystem: false,
 			skipAddingFilesFromTsConfig: true,
@@ -218,7 +294,14 @@ export class Workspace {
 			compilerOptions: synthesizedCompilerOptions(),
 		});
 		const probeWorkspace = new Workspace(probe, options, null, false);
-		const playwright = readPlaywrightConfig(probeWorkspace);
+		// One filesystem walk per workspace: the ranked list is handed to the real
+		// workspace below rather than re-globbed there.
+		const discovery = probeWorkspace.configDiscovery();
+		const playwright = readPlaywrightConfig(
+			probeWorkspace,
+			options.playwrightConfig,
+			discovery,
+		);
 		// Playwright defaults `testDir` to the directory holding the config, so a
 		// nested `e2e/playwright.config.ts` that omits it still means `e2e/`.
 		// Passing `undefined` here instead hid an adjacent `e2e/tsconfig.json` and
@@ -280,7 +363,13 @@ export class Workspace {
 			]);
 		}
 
-		const workspace = new Workspace(project, options, located.path, false);
+		const workspace = new Workspace(
+			project,
+			options,
+			located.path,
+			false,
+			discovery,
+		);
 		workspace.warnings.push(...warnings);
 		return workspace;
 	}
@@ -344,23 +433,76 @@ export class Workspace {
 		return this.sourceFiles().filter((file) => isJsxFile(file.getFilePath()));
 	}
 
+	/** Ranked Playwright config candidates, discovered once and cached. */
+	configDiscovery(): ConfigDiscovery {
+		this.discovery ??= discoverPlaywrightConfigs(this.project, this.root);
+		return this.discovery;
+	}
+
 	/** Memoized `playwright.config.*` read, refreshed once per epoch. */
 	playwright(): PlaywrightConfigInfo {
 		if (this.playwrightInfo && this.playwrightInfo.epoch === this.epoch) {
 			return this.playwrightInfo.value;
 		}
-		const value = readPlaywrightConfig(this);
+		const value = readPlaywrightConfig(
+			this,
+			this.options.playwrightConfig,
+			this.configDiscovery(),
+		);
 		this.playwrightInfo = { epoch: this.epoch, value };
-		// A config that could not be read statically silently downgrades the
-		// test-id attribute to `data-testid`; surface why, so consumers can say so
-		// instead of reporting a confidently wrong attribute. "No config at all"
-		// is not news and stays out of the workspace warnings.
-		if (value.configFile !== null && value.notes.length > 0) {
+		// Every note, unconditionally. The old gate dropped everything a *missing*
+		// config had to say — including "several configs exist" and "the one you
+		// named is not there" — on the theory that no config is not news. On a
+		// repository whose config the old fixed-basename probe never found, that
+		// silence was the difference between a wrong answer and a wrong answer
+		// nobody could see.
+		if (value.notes.length > 0) {
 			const merged = dedupeDiagnostics([...this.warnings, ...value.notes]);
 			this.warnings.length = 0;
 			this.warnings.push(...merged);
 		}
 		return value;
+	}
+
+	/**
+	 * Everything wrong with the *environment* this analysis ran in, ordered by
+	 * how badly it invalidates the result.
+	 *
+	 * Every payload seeds its warnings from here. Before this existed only
+	 * `discoverPageObjects` carried `ws.warnings`, so a caller of
+	 * `get_testid_tree` or `map_coverage` on a misconfigured repository received
+	 * an empty tree and a perfect coverage score with nothing at all to indicate
+	 * the attribute had been read off the wrong file.
+	 *
+	 * `effectiveAttribute` is the attribute the caller actually used: per-call
+	 * overrides bypass `testIdAttribute()`, and checking the workspace default
+	 * against sources scanned with a different name would report a mismatch that
+	 * is not there — or miss the one that is.
+	 */
+	environmentWarnings(effectiveAttribute?: string): Diagnostic[] {
+		const resolved = this.testIdAttribute();
+		const attribute = effectiveAttribute ?? resolved.attribute;
+		const source =
+			effectiveAttribute && effectiveAttribute !== resolved.attribute
+				? "param"
+				: resolved.source;
+		return this.memo(`env-warnings::${attribute}`, [], () => {
+			// First, and not for tidiness: this is what parses the Playwright config
+			// and merges its notes into `this.warnings`.
+			this.playwright();
+			const collected: Diagnostic[] = [];
+			const verdict = attributeVerdict(censusFromText(this, attribute), source);
+			if (verdict) {
+				collected.push(verdict);
+			}
+			collected.push(...this.warnings);
+			return dedupeDiagnostics(collected)
+				.sort(
+					(left, right) =>
+						environmentRank(left.code) - environmentRank(right.code),
+				)
+				.slice(0, MAX_ENVIRONMENT_WARNINGS);
+		});
 	}
 
 	/**
@@ -400,6 +542,36 @@ export class Workspace {
 		const value = compute();
 		this.memoCache.set(key, { signature, value });
 		return value;
+	}
+
+	/**
+	 * Records scope directories that are not on disk.
+	 *
+	 * A `--src-dir` naming a directory that does not exist expands to a glob that
+	 * matches nothing, and the analysis then reports an empty project as if the
+	 * repository were empty. The stat has already happened inside
+	 * {@link normalizeScopePattern}; this is only where its verdict is said out
+	 * loud. A *glob* matching nothing is not reported here — that is
+	 * indistinguishable from a legitimately empty directory, and `scope-empty`
+	 * covers it from the evidence side.
+	 */
+	private noteMissingScope(missing: string[]): void {
+		if (missing.length === 0) {
+			return;
+		}
+		for (const directory of missing) {
+			this.warnings.push(
+				warn(
+					"scope-dir-missing",
+					`The analysed directory "${directory}" does not exist under ${toPosix(this.root)}; nothing from it is in scope.`,
+					undefined,
+					{ path: directory },
+				),
+			);
+		}
+		const merged = dedupeDiagnostics(this.warnings);
+		this.warnings.length = 0;
+		this.warnings.push(...merged);
 	}
 
 	/** Test hook: forces every epoch-scoped cache to miss. */
@@ -480,6 +652,18 @@ export class Workspace {
 			} catch {
 				// A glob that matches nothing is not an error.
 			}
+		}
+
+		// A newly created Playwright config changes which file the analysis should
+		// be reading, and the candidate list is the one cache an epoch bump does
+		// not clear. Adding `playwright.config.ts` to a repository that had none
+		// must not require a server restart.
+		if (
+			result.added.some(isPlaywrightConfigPath) ||
+			result.removed.some(isPlaywrightConfigPath)
+		) {
+			this.discovery = null;
+			this.playwrightInfo = null;
 		}
 
 		if (
@@ -729,19 +913,30 @@ function relativizeToRoot(root: string, pattern: string): string {
 }
 
 /**
- * Whether a scope pattern names one file rather than a directory.
+ * One `stat` answering both questions a scope pattern raises: whether it names
+ * a single file rather than a directory, and whether it is there at all.
  *
- * Disk wins when the path exists, because a directory may perfectly well be
- * called `foo.config` or `.config` — treating it as a file by its trailing dot
- * segment left the pattern matching nothing at all and produced a silently
- * empty project. Only when nothing is there to stat does the extension decide,
- * and then only for extensions the scanner can really select a file with.
+ * Disk wins on the first question when the path exists, because a directory may
+ * perfectly well be called `foo.config` or `.config` — treating it as a file by
+ * its trailing dot segment left the pattern matching nothing at all and produced
+ * a silently empty project. Only when nothing is there to stat does the
+ * extension decide, and then only for extensions the scanner can really select
+ * a file with.
+ *
+ * Both answers come from one syscall: asking twice cost a second `stat` per
+ * pattern and let the two verdicts disagree.
  */
-function looksLikeSingleFile(root: string, body: string): boolean {
+function statScope(
+	root: string,
+	body: string,
+): { singleFile: boolean; exists: boolean } {
 	try {
-		return fs.statSync(path.resolve(root, body)).isFile();
+		return {
+			singleFile: fs.statSync(path.resolve(root, body)).isFile(),
+			exists: true,
+		};
 	} catch {
-		return SOURCE_FILE_EXTENSION.test(body);
+		return { singleFile: SOURCE_FILE_EXTENSION.test(body), exists: false };
 	}
 }
 
@@ -753,38 +948,67 @@ function looksLikeSingleFile(root: string, body: string): boolean {
  * only ever equals the directory entry itself - never `src/page.ts`. Patterns
  * that already carry glob magic, or that name a single file, are left alone.
  */
-function normalizeScopePattern(root: string, pattern: string): string {
+function normalizeScopePattern(
+	root: string,
+	pattern: string,
+): { pattern: string; missing?: string } {
 	const negated = pattern.startsWith("!");
 	const body = relativizeToRoot(root, negated ? pattern.slice(1) : pattern)
 		.replace(/\/+$/, "")
 		.replace(/^\.\//, "");
 	let normalized: string;
+	let missing: string | undefined;
 	if (body === "" || body === ".") {
 		normalized = DIRECTORY_EXPANSION;
-	} else if (GLOB_MAGIC.test(body) || looksLikeSingleFile(root, body)) {
+	} else if (GLOB_MAGIC.test(body)) {
 		normalized = body;
 	} else {
-		normalized = `${body}/${DIRECTORY_EXPANSION}`;
+		const stat = statScope(root, body);
+		normalized = stat.singleFile ? body : `${body}/${DIRECTORY_EXPANSION}`;
+		if (!stat.exists) {
+			missing = body;
+		}
 	}
-	return negated ? `!${normalized}` : normalized;
+	const out = negated ? `!${normalized}` : normalized;
+	// A missing *exclusion* excludes nothing, which is what the caller wanted
+	// anyway; only a missing inclusion silently empties the scope.
+	return missing !== undefined && !negated
+		? { pattern: out, missing }
+		: { pattern: out };
 }
 
 /**
  * Normalizes the scoping options once, at the workspace boundary, so every
  * consumer (`addSourceFilesAtPaths`, `sourceFiles()`, `rescan()`) sees the
- * same globs.
+ * same globs — and reports back which of them name nothing on disk.
  */
-function withNormalizedScope(options: WorkspaceOptions): WorkspaceOptions {
+function withNormalizedScope(options: WorkspaceOptions): {
+	options: WorkspaceOptions;
+	missing: string[];
+} {
 	if (!options.include?.length && !options.exclude?.length) {
-		return options;
+		return { options, missing: [] };
 	}
 	const root = normalizeRoot(options.projectRoot);
-	const normalize = (patterns: string[] | undefined) =>
-		patterns?.map((pattern) => normalizeScopePattern(root, pattern));
+	const missing: string[] = [];
+	const normalize = (patterns: string[] | undefined, collect: boolean) =>
+		patterns?.map((pattern) => {
+			const result = normalizeScopePattern(root, pattern);
+			if (collect && result.missing !== undefined) {
+				missing.push(result.missing);
+			}
+			return result.pattern;
+		});
 	return {
-		...options,
-		include: normalize(options.include),
-		exclude: normalize(options.exclude),
+		options: {
+			...options,
+			include: normalize(options.include, true),
+			// An `exclude` naming a directory that is not there excludes exactly the
+			// nothing the caller wanted excluded. Only a missing *include* silently
+			// empties the analysed scope.
+			exclude: normalize(options.exclude, false),
+		},
+		missing,
 	};
 }
 

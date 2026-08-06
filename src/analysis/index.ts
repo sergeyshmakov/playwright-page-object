@@ -9,6 +9,13 @@
  * become `warnings: Diagnostic[]`; only a missing target throws, as
  * {@link AnalysisTargetError}.
  */
+export {
+	CONFIG_GLOB,
+	type ConfigDiscovery,
+	discoverPlaywrightConfigs,
+	MAX_CONFIG_CANDIDATES,
+	rankConfigCandidates,
+} from "./config/configDiscovery";
 export { readPlaywrightConfig } from "./config/playwrightConfig";
 export {
 	locateTsConfig,
@@ -32,6 +39,11 @@ export {
 } from "./page-objects/discover";
 export { toInlineTree } from "./page-objects/inline";
 export { buildPageObjectTree, type TreeOptions } from "./page-objects/tree";
+export {
+	type AttributeCensus,
+	attributeVerdict,
+	censusFromText,
+} from "./tsx/attributeCensus";
 export {
 	buildTestIdTree,
 	type TestIdTreeOptions,

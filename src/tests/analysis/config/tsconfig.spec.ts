@@ -335,8 +335,29 @@ describe("maxFiles pre-scan", () => {
 		});
 		Workspace.reset();
 		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 2 })).toThrow(
-			/3 source files, which exceeds the 2 file limit/,
+			/3 source files, more than the configured limit of 2/,
 		);
+	});
+
+	// The engine is consumed by the MCP server, by embedders and by tests; only
+	// the MCP layer knows what its flags are called. An engine message naming
+	// `maxFiles` / `include` sent every other caller looking for options that do
+	// not exist on the surface they are holding.
+	it("names no caller-specific option in the limit message", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		Workspace.reset();
+		let message = "";
+		try {
+			Workspace.acquire({ projectRoot: root, maxFiles: 1 });
+		} catch (error) {
+			message = error instanceof Error ? error.message : String(error);
+		}
+		expect(message).toContain("Narrow the analysed directories");
+		expect(message).not.toMatch(/maxFiles|include|exclude/);
 	});
 
 	// The pre-scan counts a raw tsconfig file list, which includes declaration

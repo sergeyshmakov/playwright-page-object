@@ -1,5 +1,5 @@
 import { Node, SyntaxKind } from "ts-morph";
-import { info } from "../diagnostics";
+import { dedupeDiagnostics, info } from "../diagnostics";
 import { discoverInternal } from "../page-objects/discover";
 import { buildTestIdTree } from "../tsx/tree";
 import type {
@@ -309,7 +309,9 @@ export function buildCoverageReport(
 	const attribute = options.attribute
 		? { attribute: options.attribute, source: "param" as const }
 		: ws.testIdAttribute();
-	const warnings: Diagnostic[] = [];
+	const warnings: Diagnostic[] = [
+		...ws.environmentWarnings(attribute.attribute),
+	];
 
 	const uiTree = buildTestIdTree(ws, {
 		attribute: attribute.attribute,
@@ -489,6 +491,8 @@ export function buildCoverageReport(
 		nonTestIdSelectors,
 		unknownSelectors,
 		unknownTestIds,
-		warnings,
+		// The UI tree and the page-object index both seed themselves from the same
+		// environment warnings, so every one of those arrives here twice.
+		warnings: dedupeDiagnostics(warnings),
 	};
 }

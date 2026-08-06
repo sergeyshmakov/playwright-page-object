@@ -102,7 +102,15 @@ export function splitDefKey(key: string): { file: string; name: string } {
 	return { file: key.slice(0, hash), name: key.slice(hash + 1) };
 }
 
-const IGNORED_SEGMENTS = new Set([
+/**
+ * Directory names the engine never reads, whatever it is looking for.
+ *
+ * Exported because it is the single source of truth for two different shapes of
+ * the same rule: {@link isIgnoredPath} filters a path after the fact, and
+ * {@link ignoredExcludeGlobs} prunes the same directories *during* a glob, which
+ * is what keeps a repository-wide sweep from descending into `node_modules`.
+ */
+export const IGNORED_SEGMENTS = [
 	"node_modules",
 	"dist",
 	"build",
@@ -113,7 +121,15 @@ const IGNORED_SEGMENTS = new Set([
 	"test-results",
 	".next",
 	".astro",
-]);
+] as const;
+
+const IGNORED_SEGMENT_SET: ReadonlySet<string> = new Set(IGNORED_SEGMENTS);
+
+/** Negated globs pruning {@link IGNORED_SEGMENTS} under an absolute posix root. */
+export function ignoredExcludeGlobs(rootPosix: string): string[] {
+	const root = rootPosix.replace(/\/+$/, "");
+	return IGNORED_SEGMENTS.map((segment) => `!${root}/**/${segment}/**`);
+}
 
 /**
  * True when a path produced by {@link toPosixRelative} did not stay inside the
@@ -133,7 +149,7 @@ export function isOutsideRoot(relPosix: string): boolean {
 /** True when the posix path crosses a directory the engine never wants to read. */
 export function isIgnoredPath(relPosix: string): boolean {
 	for (const segment of relPosix.split("/")) {
-		if (IGNORED_SEGMENTS.has(segment)) {
+		if (IGNORED_SEGMENT_SET.has(segment)) {
 			return true;
 		}
 	}

@@ -221,7 +221,9 @@ export function runDiscovery(
 	// this is one parse either way.
 	ws.playwright();
 	const attribute = ws.testIdAttribute();
-	const warnings: Diagnostic[] = [...ws.warnings];
+	const warnings: Diagnostic[] = [
+		...ws.environmentWarnings(attribute.attribute),
+	];
 
 	const register = (
 		declaration: ClassDeclaration,
