@@ -311,6 +311,149 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	it("reports ambiguous_component when two files declare the requested name", async () => {
+		await withProject(
+			"ppo-duplicate-name-",
+			{
+				"src/ui/Button.tsx": [
+					"export function Button() {",
+					'\treturn <button data-testid="UiButton" />;',
+					"}",
+					"",
+				].join("\n"),
+				"src/legacy/Button.tsx": [
+					"export function Button() {",
+					'\treturn <button data-testid="LegacyButton" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const ambiguous = await callTool(client, "get_testid_tree", {
+					component: "Button",
+				});
+
+				expect(ambiguous.isError).toBe(true);
+				expect(ambiguous.envelope.error?.code).toBe("ambiguous_component");
+				expect(
+					ambiguous.envelope.error?.candidates,
+					"both declaring files must be named, not silently one of them",
+				).toEqual(["src/legacy/Button.tsx", "src/ui/Button.tsx"]);
+				expect(ambiguous.envelope.error?.hint).toContain("file");
+
+				// The hint has to actually work: `file` + `component` must resolve.
+				const scoped = await callTool(client, "get_testid_tree", {
+					component: "Button",
+					file: "src/ui/Button.tsx",
+				});
+
+				expect(scoped.isError).toBe(false);
+				const serialized = JSON.stringify(scoped.envelope.data);
+				expect(serialized).toContain("UiButton");
+				expect(serialized).not.toContain("LegacyButton");
+			},
+		);
+	}, 30_000);
+
+	it("says the walk was depth-limited instead of claiming the component is not rendered", async () => {
+		const files = {
+			"src/Deep.tsx": [
+				"export function Shell() {",
+				'\treturn <div data-testid="ShellBox"><Middle /></div>;',
+				"}",
+				"",
+				"export function Middle() {",
+				'\treturn <section data-testid="MiddleBox"><Leaf /></section>;',
+				"}",
+				"",
+				"export function Leaf() {",
+				'\treturn <span data-testid="LeafBox" />;',
+				"}",
+				"",
+			].join("\n"),
+		};
+
+		await withProject("ppo-depth-limit-", files, async (client) => {
+			// Leaf renders two levels below the file's entry component; depth 1
+			// cannot see it, which is not the same fact as "it is not rendered".
+			const shallow = await callTool(client, "get_testid_tree", {
+				component: "Leaf",
+				depth: 1,
+			});
+
+			expect(shallow.isError).toBe(true);
+			expect(
+				shallow.envelope.error?.code,
+				"a depth-limited walk proves nothing about what it never reached",
+			).toBe("incomplete_tree");
+			expect(shallow.envelope.error?.hint).toContain("depth");
+
+			// The hint has to actually work.
+			const deep = await callTool(client, "get_testid_tree", {
+				component: "Leaf",
+				depth: 3,
+			});
+
+			expect(deep.isError).toBe(false);
+			const data = deep.envelope.data as {
+				roots: Array<{ componentRef?: string }>;
+			};
+			expect(data.roots[0]?.componentRef).toBe("src/Deep.tsx#Leaf");
+			const serialized = JSON.stringify(data.roots);
+			expect(serialized).toContain("LeafBox");
+			expect(serialized).not.toContain("ShellBox");
+		});
+	}, 30_000);
+
+	it("counts stats over the returned tree, not the whole scan", async () => {
+		await withProject(
+			"ppo-rooted-stats-",
+			{
+				"src/Nested.tsx": [
+					"export function Outer() {",
+					'\treturn <div data-testid="OuterBox"><Inner /></div>;',
+					"}",
+					"",
+					"export function Inner() {",
+					'\treturn <span data-testid="InnerBox" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				type Payload = {
+					roots: Array<{ testId?: unknown; children: unknown[] }>;
+					stats: { nodes: number; testIds: number };
+				};
+				const countNodes = (nodes: Payload["roots"]): number =>
+					nodes.reduce(
+						(total, node) =>
+							total + 1 + countNodes(node.children as Payload["roots"]),
+						0,
+					);
+
+				const whole = await callTool(client, "get_testid_tree", {
+					file: "src/Nested.tsx",
+				});
+				const wholeData = whole.envelope.data as Payload;
+				expect(wholeData.stats.nodes).toBe(countNodes(wholeData.roots));
+				expect(wholeData.stats.testIds).toBe(2);
+				expect(whole.envelope.meta?.scanned).toBe(1);
+
+				const rooted = await callTool(client, "get_testid_tree", {
+					component: "Inner",
+				});
+				const rootedData = rooted.envelope.data as Payload;
+				expect(rooted.envelope.meta?.rootedAt).toContain("Inner");
+				expect(rootedData.stats.nodes).toBe(countNodes(rootedData.roots));
+				expect(
+					rootedData.stats.testIds,
+					"OuterBox is outside the returned subtree and must not be counted",
+				).toBe(1);
+			},
+		);
+	}, 30_000);
+
 	it("refuses to substitute another component when the requested one is unreachable", async () => {
 		await withProject(
 			"ppo-sibling-component-",

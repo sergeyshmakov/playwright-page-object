@@ -47,7 +47,9 @@ export const getTestIdTreeInput = z.object({
 	file: z
 		.string()
 		.optional()
-		.describe("Component file to use as the tree root."),
+		.describe(
+			"Component file to use as the tree root. Combine with component to pick one of several files declaring that name.",
+		),
 	component: z
 		.string()
 		.optional()

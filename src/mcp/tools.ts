@@ -184,24 +184,46 @@ export function handleGetTestIdTree(
 	let entry = args.file;
 	let requested: ComponentInfo | undefined;
 	let siblings: ComponentInfo[] = [];
-	if (!entry && args.component) {
+	const scopeFile = args.file;
+	if (args.component) {
 		const probe = buildTestIdTree(workspace, {
 			attribute: args.attribute,
 			maxDepth: 1,
 		});
 		const components = Object.values(probe.components);
-		const match = components.find(
+		const named = components.filter(
 			(component) => component.name === args.component,
 		);
-		if (!match) {
+		// A component name is only unique per file. Narrow by `file` when the
+		// caller gave one; otherwise a name two files declare is ambiguous, and
+		// answering with whichever was scanned first is a guess.
+		const matches = scopeFile
+			? named.filter((component) => sameFile(component.file, scopeFile))
+			: named;
+		if (matches.length === 0) {
 			throw new ToolError(
 				"file_not_found",
-				`No component named "${args.component}" was found in the scanned sources.`,
+				scopeFile
+					? `No component named "${args.component}" is declared in "${scopeFile}".`
+					: `No component named "${args.component}" was found in the scanned sources.`,
 				{
-					hint: "Pass `file` with the component's path instead, or omit both to auto-detect the app entry.",
+					hint: scopeFile
+						? "Drop `file` to search every scanned file, or omit both to auto-detect the app entry."
+						: "Pass `file` with the component's path instead, or omit both to auto-detect the app entry.",
 				},
 			);
 		}
+		if (matches.length > 1) {
+			throw new ToolError(
+				"ambiguous_component",
+				`${matches.length} files declare a component named "${args.component}".`,
+				{
+					candidates: matches.map((component) => component.file).sort(),
+					hint: "Re-call with `file` set to one of the candidates.",
+				},
+			);
+		}
+		const match = matches[0];
 		entry = match.file;
 		requested = match;
 		siblings = components.filter(
@@ -222,6 +244,7 @@ export function handleGetTestIdTree(
 		fidelity: tree.fidelity,
 		fidelityReason: tree.fidelityReason,
 		truncated: tree.truncated,
+		scanned: tree.stats.files,
 		warnings: tree.warnings,
 	};
 
@@ -236,6 +259,20 @@ export function handleGetTestIdTree(
 		} else if (actual !== requested.name) {
 			const subtree = findComponentNode(roots, requested.id);
 			if (!subtree) {
+				// "Not rendered" is only true of a tree the walk saw in full. A walk
+				// cut short by depth, by the node budget or by an unexpanded child
+				// proves nothing about the component it never reached — say that
+				// instead of blaming the caller for asking.
+				const gap = traversalGap(roots, tree.truncated === true);
+				if (gap) {
+					throw new ToolError(
+						"incomplete_tree",
+						`"${requested.name}" was not reached under "${actual}", but ${gap.detail}, so whether it renders there is unknown.`,
+						{
+							hint: gapHint(gap, requested.name, depth, args.followComponents),
+						},
+					);
+				}
 				throw new ToolError(
 					"ambiguous_component",
 					`"${requested.file}" declares ${siblings.length + 1} components; it is rooted at "${actual}", and "${requested.name}" is not rendered inside it.`,
@@ -260,7 +297,27 @@ export function handleGetTestIdTree(
 		return ok({ fidelity: "flat", inventory: tree.inventory }, meta);
 	}
 
-	return ok({ fidelity: "full", roots, stats: tree.stats }, meta);
+	// Counted over `roots`, not over the scan: after a re-root those are two
+	// different shapes, and stats that describe something the caller cannot see
+	// are worse than no stats. Scan-wide numbers live in `meta.scanned`.
+	return ok({ fidelity: "full", roots, stats: subtreeStats(roots) }, meta);
+}
+
+/**
+ * Mirrors how the engine resolves an `entry` file: posix separators, a trailing
+ * path segment is enough ("Nested.tsx" matches "src/Nested.tsx"), and case is
+ * folded only where the filesystem folds it too.
+ */
+function sameFile(rel: string, wanted: string): boolean {
+	const fold = (value: string): string => {
+		const posix = value.replace(/\\/g, "/").replace(/^\.\//, "");
+		return process.platform === "win32" || process.platform === "darwin"
+			? posix.toLowerCase()
+			: posix;
+	};
+	const left = fold(rel);
+	const right = fold(wanted);
+	return left === right || left.endsWith(`/${right}`);
 }
 
 /** First node in document order whose expansion is `componentId`. */
@@ -278,6 +335,100 @@ function findComponentNode(
 		}
 	}
 	return null;
+}
+
+/** Counts describing exactly the nodes shipped in `roots`. */
+function subtreeStats(roots: UiNode[]): Record<string, number> {
+	let nodes = 0;
+	let testIds = 0;
+	let patterns = 0;
+	let dynamic = 0;
+	const visit = (node: UiNode): void => {
+		nodes += 1;
+		if (node.testId) {
+			testIds += 1;
+			if (node.testId.kind === "pattern") {
+				patterns += 1;
+			} else if (node.testId.kind === "dynamic") {
+				dynamic += 1;
+			}
+		}
+		for (const child of node.children) {
+			visit(child);
+		}
+	};
+	for (const root of roots) {
+		visit(root);
+	}
+	return { nodes, testIds, patterns, dynamic };
+}
+
+interface TreeGap {
+	kind: "depth" | "nodes" | "boundary";
+	detail: string;
+}
+
+/**
+ * Why the walk could not see the whole tree, or `null` when it saw all of it.
+ *
+ * Only cuts that *hide* nodes count: the depth limit and the node budget stop
+ * the walk outright, and a component left unexpanded (external module,
+ * unresolved reference, JSX children composition) hides whatever it renders.
+ * `spread-props` is not one of them — that marks an unknown test id on a node
+ * whose children were still walked. `expandedAt` is not one either: the subtree
+ * it points at is in this same tree.
+ */
+function traversalGap(roots: UiNode[], truncated: boolean): TreeGap | null {
+	let depthCut = false;
+	let boundary: string | undefined;
+	const visit = (nodes: UiNode[]): void => {
+		for (const node of nodes) {
+			const reason = node.unresolved?.reason;
+			if (reason === "depth-limit-reached") {
+				depthCut = true;
+			} else if (
+				reason !== undefined &&
+				reason !== "spread-props" &&
+				node.nodeType === "component"
+			) {
+				boundary ??= reason;
+			}
+			visit(node.children);
+		}
+	};
+	visit(roots);
+
+	if (depthCut) {
+		return { kind: "depth", detail: "the depth limit cut the walk short" };
+	}
+	if (truncated) {
+		return { kind: "nodes", detail: "the node budget ran out mid-walk" };
+	}
+	if (boundary) {
+		return {
+			kind: "boundary",
+			detail: `a component in that tree was left unexpanded (${boundary})`,
+		};
+	}
+	return null;
+}
+
+function gapHint(
+	gap: TreeGap,
+	name: string,
+	depth: number,
+	followComponents: boolean,
+): string {
+	const findIt = `Pass testId to find where "${name}" is rendered.`;
+	if (gap.kind !== "depth") {
+		return findIt;
+	}
+	if (!followComponents) {
+		return `Re-call with followComponents: true; it pinned the walk to 1 level. ${findIt}`;
+	}
+	return depth >= 10
+		? `Depth is already at the maximum. ${findIt}`
+		: `Re-call with a larger depth (this call walked ${depth}, max 10). ${findIt}`;
 }
 
 export function handleMapCoverage(

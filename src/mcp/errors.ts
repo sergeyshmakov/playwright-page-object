@@ -3,6 +3,7 @@ export type ToolErrorCode =
 	| "class_not_found"
 	| "ambiguous_class"
 	| "ambiguous_component"
+	| "incomplete_tree"
 	| "file_not_found"
 	| "parse_error"
 	| "too_large"
