@@ -35,7 +35,8 @@ function isComponentTag(tag: string): boolean {
 	return /^[A-Z]/.test(head);
 }
 
-function fallbackComponentName(sourceFile: SourceFile): string {
+/** Name standing in for a component the source does not name: the file's own. */
+export function fallbackComponentName(sourceFile: SourceFile): string {
 	return path.basename(sourceFile.getBaseName()).replace(/\.[jt]sx?$/, "");
 }
 
@@ -375,7 +376,14 @@ function hasAnySpread(element: JsxOpeningLike): boolean {
 		.some((attribute) => Node.isJsxSpreadAttribute(attribute));
 }
 
-/** Flat inventory of every test id in one file. */
+/**
+ * Flat inventory of every test id in one file.
+ *
+ * An id written on a component tag is inventoried like any other — dropping it
+ * would make a page object that selects it look dead — but it is flagged
+ * `unforwarded`, because a prop only reaches the DOM if the component passes it
+ * to a host element. Proving that is the tree walk's job, not this scan's.
+ */
 export function scanFileTestIds(
 	sourceFile: SourceFile,
 	attribute: string,
@@ -396,6 +404,9 @@ export function scanFileTestIds(
 			}
 			if (element.repeated) {
 				occurrence.repeated = true;
+			}
+			if (element.nodeType === "component") {
+				occurrence.unforwarded = true;
 			}
 			out.push(occurrence);
 		}

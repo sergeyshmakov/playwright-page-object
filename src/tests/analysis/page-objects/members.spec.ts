@@ -171,6 +171,49 @@ describe("inferResult — page objects and controls", () => {
 	});
 });
 
+describe("inferResult — namespaced constructors", () => {
+	// `new pages.Button()` was accepted and resolved; `new pages.controls.Button()`
+	// was accepted and silently lost its ref, so the member vanished from the
+	// expanded graph.
+	it("resolves a nested namespace chain to the real class", () => {
+		const member = readOne(
+			"  @Selector('x')\n  accessor field = new pages.controls.Button();",
+			"field",
+			{
+				"src/pages.ts": 'export * as controls from "./controls";',
+				"src/controls.ts": [
+					'import { PageObject } from "playwright-page-object";',
+					"export class Button extends PageObject {}",
+				].join("\n"),
+			},
+			'import * as pages from "./pages";',
+		);
+		expect(member.result).toMatchObject({
+			kind: "pageObject",
+			className: "Button",
+			ref: "src/controls.ts#Button",
+		});
+	});
+
+	it("keeps a one-segment namespace working", () => {
+		const member = readOne(
+			"  @Selector('x')\n  accessor field = new pages.Button();",
+			"field",
+			{
+				"src/pages.ts": [
+					'import { PageObject } from "playwright-page-object";',
+					"export class Button extends PageObject {}",
+				].join("\n"),
+			},
+			'import * as pages from "./pages";',
+		);
+		expect(member.result).toMatchObject({
+			kind: "pageObject",
+			ref: "src/pages.ts#Button",
+		});
+	});
+});
+
 describe("inferResult — locators", () => {
 	it("reads a Locator annotation as a raw locator", () => {
 		const member = readOne(

@@ -27,8 +27,40 @@ export interface CoverageOptions {
 
 const SPEC_FILE = /\.(spec|test)\.[cm]?[jt]sx?$/;
 
-/** Groups the flat inventory into one record per distinct id or pattern. */
+/**
+ * Groups the flat inventory into one record per distinct id or pattern.
+ *
+ * Three buckets, because there are three states and not two:
+ *
+ * - `testIds` — ids proven to reach the DOM. Only these are matchable, so only
+ *   these drive the coverage ratio and the "nobody selects this" list.
+ * - `unproven` — ids written as a prop on a component tag
+ *   (`TestIdOccurrence.unforwarded`). Whether they render depends on a
+ *   component the scan did not see through, so counting them as rendered would
+ *   invent coverage and listing them as uncovered would invent work. They are
+ *   kept aside so a selector that matches one can be reported as unknown rather
+ *   than dead.
+ * - `unknown` — values that are not statically knowable at all.
+ */
 export function groupUiTestIds(inventory: TestIdOccurrence[]): {
+	testIds: UiTestId[];
+	unproven: UiTestId[];
+	unknown: TestIdOccurrence[];
+} {
+	const proven = group(
+		inventory.filter((occurrence) => !occurrence.unforwarded),
+	);
+	const unproven = group(
+		inventory.filter((occurrence) => occurrence.unforwarded),
+	);
+	return {
+		testIds: proven.testIds,
+		unproven: unproven.testIds,
+		unknown: [...proven.unknown, ...unproven.unknown],
+	};
+}
+
+function group(inventory: TestIdOccurrence[]): {
 	testIds: UiTestId[];
 	unknown: TestIdOccurrence[];
 } {
@@ -288,7 +320,7 @@ export function buildCoverageReport(
 	const discovery = discoverInternal(ws, { include: options.poInclude });
 	warnings.push(...discovery.index.warnings);
 
-	const { testIds, unknown } = groupUiTestIds(uiTree.inventory);
+	const { testIds, unproven, unknown } = groupUiTestIds(uiTree.inventory);
 	const usages = [
 		...collectSelectorUsages(discovery),
 		...(options.includeRawLocators ? sweepRawLocators(ws) : []),
@@ -377,9 +409,28 @@ export function buildCoverageReport(
 			),
 		);
 
-	const deadSelectors: CoverageReport["deadSelectors"] = testIdUsages
-		.filter((usage) => !liveSelectors.has(usage))
-		.map((usage) => ({
+	const deadSelectors: CoverageReport["deadSelectors"] = [];
+	for (const usage of testIdUsages) {
+		if (liveSelectors.has(usage)) {
+			continue;
+		}
+		// Matches an id that is only written as a prop on a component tag: the
+		// selector may well be live, and calling it dead would send a reader to
+		// delete working code. Report the uncertainty instead.
+		const matchesUnproven = unproven.some((ui) =>
+			matchSelectorToUi({ testId: usage.testId, pattern: usage.pattern }, ui),
+		);
+		if (matchesUnproven) {
+			unknownSelectors.push({
+				defId: usage.defId,
+				memberPath: usage.memberPath,
+				loc: usage.loc,
+				reason: "unforwarded-prop",
+				raw: usage.text,
+			});
+			continue;
+		}
+		deadSelectors.push({
 			defId: usage.defId,
 			memberPath: usage.memberPath,
 			loc: usage.loc,
@@ -388,8 +439,18 @@ export function buildCoverageReport(
 				usage.testId ?? usage.pattern?.literalPrefix ?? "",
 				staticIds,
 			),
-		}))
-		.sort((a, b) => a.memberPath.localeCompare(b.memberPath));
+		});
+	}
+	deadSelectors.sort((a, b) => a.memberPath.localeCompare(b.memberPath));
+
+	if (unproven.length > 0) {
+		warnings.push(
+			info(
+				"unforwarded-prop",
+				`${unproven.length} test id(s) are written as a prop on a component tag and no forwarding to a host element could be proven; they are listed under unknownTestIds rather than counted as rendered.`,
+			),
+		);
+	}
 
 	if (!options.includeRawLocators) {
 		warnings.push(
@@ -401,18 +462,25 @@ export function buildCoverageReport(
 	}
 
 	const matchable = testIds.length;
+	// Unproven ids are reported, never dropped: each occurrence still carries its
+	// location and its `unforwarded` flag, so a reader can go and check whether
+	// the component forwards the prop.
+	const unknownTestIds = [
+		...unknown,
+		...unproven.flatMap((ui) => ui.occurrences),
+	];
 	return {
 		schemaVersion: 1,
 		attribute: attribute.attribute,
 		summary: {
-			uiTestIds: matchable + unknown.length,
+			uiTestIds: matchable + unknownTestIds.length,
 			matchableUiTestIds: matchable,
 			coveredUiTestIds: coveredUi.size,
 			testIdSelectors: testIdUsages.length,
 			deadSelectors: deadSelectors.length,
 			nonTestIdSelectors: nonTestIdSelectors.length,
 			unknownSelectors: unknownSelectors.length,
-			unknownTestIds: unknown.length,
+			unknownTestIds: unknownTestIds.length,
 			coverage: matchable === 0 ? 1 : coveredUi.size / matchable,
 		},
 		matched,
@@ -420,7 +488,7 @@ export function buildCoverageReport(
 		deadSelectors,
 		nonTestIdSelectors,
 		unknownSelectors,
-		unknownTestIds: unknown,
+		unknownTestIds,
 		warnings,
 	};
 }

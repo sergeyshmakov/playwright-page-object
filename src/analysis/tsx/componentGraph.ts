@@ -16,6 +16,7 @@ import {
 	resolveIdentifier,
 } from "../util/resolve";
 import type { Workspace } from "../workspace";
+import { fallbackComponentName } from "./scanTestIds";
 
 export type ComponentFunction =
 	| FunctionDeclaration
@@ -64,6 +65,34 @@ function componentFunctionOf(node: Node): ComponentFunction | null {
 	return null;
 }
 
+/**
+ * The prop name a destructuring element reads, as a caller writes it in JSX.
+ *
+ * The quotes in `({ "data-testid": id })` are source syntax, not part of the
+ * name: keeping them would record an alias key no call site can ever match and
+ * would put `"data-testid"` — quotes and all — in the reported `propNames`. A
+ * computed key names no single prop at all, so it yields `null` and the binding
+ * is left out rather than recorded under its bracketed source text.
+ */
+function propNameOf(
+	nameNode: Node | undefined,
+	fallback: string,
+): string | null {
+	if (!nameNode) {
+		return fallback;
+	}
+	if (Node.isComputedPropertyName(nameNode)) {
+		return null;
+	}
+	if (
+		Node.isStringLiteral(nameNode) ||
+		Node.isNoSubstitutionTemplateLiteral(nameNode)
+	) {
+		return nameNode.getLiteralValue();
+	}
+	return nameNode.getText();
+}
+
 interface PropsRead {
 	propNames: string[];
 	spreadSourceNames: string[];
@@ -98,7 +127,10 @@ function readProps(fn: ComponentFunction): PropsRead {
 				spreadSourceNames.push(local);
 				continue;
 			}
-			const propName = element.getPropertyNameNode()?.getText() ?? local;
+			const propName = propNameOf(element.getPropertyNameNode(), local);
+			if (propName === null) {
+				continue;
+			}
 			propNames.push(propName);
 			if (propName !== local) {
 				propAliases.set(local, propName);
@@ -128,8 +160,51 @@ function forwardsSpread(fn: ComponentFunction, sources: string[]): boolean {
 	return false;
 }
 
+/** `export default () => …`, `export default function () {}`, `export default class {}`. */
+function isDefaultExportExpression(node: Node): boolean {
+	const parent = node.getParent();
+	return (
+		parent !== undefined &&
+		Node.isExportAssignment(parent) &&
+		!parent.isExportEquals()
+	);
+}
+
+/**
+ * The name the component declares for itself, or `null` when it declares none.
+ *
+ * A directly default-exported arrow has no name of its own, and the local alias
+ * an importer happened to choose is not one: `import Alpha from "./Card"` and
+ * `import Beta from "./Card"` would otherwise mint two different definition ids
+ * for one component. The file basename stands in, which is what
+ * {@link collectComponents} and the element scanner already use for the very
+ * same declaration.
+ */
+function declaredNameOf(declaration: Node): string | null {
+	if (
+		Node.isFunctionDeclaration(declaration) ||
+		Node.isFunctionExpression(declaration) ||
+		Node.isVariableDeclaration(declaration)
+	) {
+		const own = declaration.getName();
+		if (own) {
+			return own;
+		}
+	}
+	if (
+		isDefaultExportExpression(declaration) ||
+		(Node.isFunctionDeclaration(declaration) && declaration.isDefaultExport())
+	) {
+		return fallbackComponentName(declaration.getSourceFile());
+	}
+	return null;
+}
+
 function exportKindOf(node: Node, name: string): "default" | "named" {
 	if (Node.isFunctionDeclaration(node) && node.isDefaultExport()) {
+		return "default";
+	}
+	if (isDefaultExportExpression(node)) {
 		return "default";
 	}
 	const sourceFile = node.getSourceFile();
@@ -146,7 +221,15 @@ function exportKindOf(node: Node, name: string): "default" | "named" {
 	return "named";
 }
 
-function buildDefinition(
+/**
+ * Builds the definition of a component from its declaration.
+ *
+ * `name` is only a fallback for a declaration that names nothing and stands for
+ * nothing: everything that has an identity of its own — a declared name, or an
+ * anonymous default export standing in for its file — keeps it, so the same
+ * component gets the same id no matter which call site was being resolved.
+ */
+export function buildDefinition(
 	ws: Workspace,
 	declaration: Node,
 	name: string,
@@ -160,11 +243,7 @@ function buildDefinition(
 	const { propNames, spreadSourceNames, propAliases } = readProps(fn);
 	// Prefer the declared name over the local alias at the import site, so
 	// `import CartItemComponent from "./CartItem"` still reports `CartItem`.
-	const declaredName =
-		(Node.isFunctionDeclaration(declaration) ||
-		Node.isVariableDeclaration(declaration)
-			? declaration.getName()
-			: undefined) ?? name;
+	const declaredName = declaredNameOf(declaration) ?? name;
 	const exportKind = exportKindOf(declaration, declaredName);
 	const position = sourceFile.getLineAndColumnAtPos(declaration.getStart());
 	return {
@@ -272,15 +351,29 @@ export function collectComponents(
 	for (const sourceFile of files) {
 		const candidates: Array<{ node: Node; name: string }> = [];
 		for (const declaration of sourceFile.getFunctions()) {
-			const name = declaration.getName();
 			candidates.push({
 				node: declaration,
-				name: name ?? sourceFile.getBaseName().replace(/\.[jt]sx?$/, ""),
+				name: declaration.getName() ?? fallbackComponentName(sourceFile),
 			});
 		}
 		for (const declaration of sourceFile.getVariableDeclarations()) {
 			if (componentFunctionOf(declaration)) {
 				candidates.push({ node: declaration, name: declaration.getName() });
+			}
+		}
+		// `export default () => …` is a declaration in neither of those lists, yet
+		// the tree resolves `<Card/>` straight to it — leaving it out left the id
+		// its nodes point at missing from the inventory.
+		for (const assignment of sourceFile.getExportAssignments()) {
+			if (assignment.isExportEquals()) {
+				continue;
+			}
+			const expression = assignment.getExpression();
+			if (componentFunctionOf(expression)) {
+				candidates.push({
+					node: expression,
+					name: declaredNameOf(expression) ?? fallbackComponentName(sourceFile),
+				});
 			}
 		}
 		for (const candidate of candidates) {

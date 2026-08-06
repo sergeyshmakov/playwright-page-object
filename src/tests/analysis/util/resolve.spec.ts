@@ -190,6 +190,55 @@ describe("resolveIdentifier", () => {
 		}
 	});
 
+	it("resolves a nested namespace chain through `export * as`", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import * as pages from "./pages";',
+				"src/pages.ts": 'export * as controls from "./controls";',
+				"src/controls.ts": "export class Button {}",
+			},
+			"src/a.ts",
+			"pages.controls.Button",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.name).toBe("Button");
+			expect(result.sourceFile.getBaseName()).toBe("controls.ts");
+		}
+	});
+
+	it("resolves a member of a nested `namespace` declaration", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import * as pages from "./pages";',
+				"src/pages.ts": "export namespace controls { export class Button {} }",
+			},
+			"src/a.ts",
+			"pages.controls.Button",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.name).toBe("Button");
+		}
+	});
+
+	// Reporting an unwalkable chain as unsupported keeps it visible; the previous
+	// silent `null` ref simply dropped the member out of the expanded graph.
+	it("reports a chain it cannot walk as unsupported syntax", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import * as pages from "./pages";',
+				"src/pages.ts": "export const controls = { Button: class {} };",
+			},
+			"src/a.ts",
+			"pages.controls.Button",
+		);
+		expect(result.resolved).toBe(false);
+		if (!result.resolved && !result.external) {
+			expect(result.reason).toBe("unsupported-syntax");
+		}
+	});
+
 	it("reports a member of a bare-specifier namespace as external", () => {
 		const result = resolveIn(
 			{ "src/a.ts": 'import * as po from "playwright-page-object";' },
@@ -328,6 +377,69 @@ describe("resolveIdentifier through tsconfig paths", () => {
 		}
 	});
 
+	// Rejecting the dependency only after loading it still parsed it into the
+	// project: the file has to stay unread, which is what lets the engine work on
+	// a repository that was never `npm install`ed.
+	it("never parses an alias target inside node_modules", () => {
+		const ws = makeWorkspace({
+			"src/a.ts": 'import { Cart } from "@ui/Cart";',
+		});
+		const dependency = memoryPath("node_modules/@acme/ui/Cart.ts");
+		ws.project
+			.getFileSystem()
+			.writeFileSync(dependency, "export class Cart {}");
+		ws.project.compilerOptions.set({
+			baseUrl: MEMORY_ROOT_POSIX,
+			paths: { "@ui/*": ["node_modules/@acme/ui/*"] },
+		});
+		const sourceFile = ws.project.getSourceFileOrThrow(memoryPath("src/a.ts"));
+
+		const result = resolveIdentifier(ws.project, sourceFile, "Cart");
+		expect(result.resolved).toBe(false);
+		expect(ws.project.getSourceFile(dependency)).toBeUndefined();
+	});
+
+	it("does not fall through to a less specific pattern when the best one misses", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { Cart } from "@/components/Cart";',
+				// Only the catch-all's target exists; TypeScript would still commit to
+				// `@/components/*` and report the import unresolved.
+				"other/components/Cart.ts": "export class Cart {}",
+			},
+			{ "@/*": ["other/*"], "@/components/*": ["src/components/*"] },
+			"Cart",
+		);
+		expect(result.resolved).toBe(false);
+	});
+
+	it("ignores a pattern with more than one `*`, as tsc does", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { Cart } from "@/components/Cart";',
+				"src/components/Cart.ts": "export class Cart {}",
+			},
+			{ "@/*/*": ["src/*"] },
+			"Cart",
+		);
+		expect(result.resolved).toBe(false);
+	});
+
+	it("substitutes into a target that carries the only `*`", () => {
+		const result = resolveAliased(
+			{
+				"src/a.ts": 'import { Cart } from "#c/Cart";',
+				"src/components/Cart.ts": "export class Cart {}",
+			},
+			{ "#c/*": ["src/components/*"] },
+			"Cart",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.sourceFile.getBaseName()).toBe("Cart.ts");
+		}
+	});
+
 	it("still reports an unmapped bare specifier as external", () => {
 		const result = resolveAliased(
 			{
@@ -356,6 +468,52 @@ describe("resolveIdentifier through tsconfig paths", () => {
 		expect(result.resolved).toBe(true);
 		if (result.resolved) {
 			expect(result.sourceFile.getBaseName()).toBe("widget.ts");
+		}
+	});
+});
+
+describe("resolveIdentifier through baseUrl", () => {
+	/** A `baseUrl` with no `paths` table: bare specifiers are local imports. */
+	function resolveUnderBaseUrl(files: Record<string, string>, name: string) {
+		const ws = makeWorkspace(files);
+		ws.project.compilerOptions.set({ baseUrl: `${MEMORY_ROOT_POSIX}/src` });
+		const sourceFile = ws.project.getSourceFileOrThrow(memoryPath("src/a.ts"));
+		return resolveIdentifier(ws.project, sourceFile, name);
+	}
+
+	it("resolves a bare specifier against baseUrl without any paths entry", () => {
+		const result = resolveUnderBaseUrl(
+			{
+				"src/a.ts": 'import { Cart } from "components/Cart";',
+				"src/components/Cart.ts": "export class Cart {}",
+			},
+			"Cart",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.sourceFile.getBaseName()).toBe("Cart.ts");
+		}
+	});
+
+	it("resolves a baseUrl directory import through its index file", () => {
+		const result = resolveUnderBaseUrl(
+			{
+				"src/a.ts": 'import { Cart } from "components";',
+				"src/components/index.ts": "export class Cart {}",
+			},
+			"Cart",
+		);
+		expect(result.resolved).toBe(true);
+	});
+
+	it("still reports a real dependency as external", () => {
+		const result = resolveUnderBaseUrl(
+			{ "src/a.ts": 'import { PageObject } from "playwright-page-object";' },
+			"PageObject",
+		);
+		expect(result.resolved).toBe(false);
+		if (!result.resolved && result.external) {
+			expect(result.module).toBe("playwright-page-object");
 		}
 	});
 });

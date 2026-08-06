@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import {
 	type CompilerOptions,
+	type ModuleDeclaration,
 	Node,
 	type Project,
 	type SourceFile,
@@ -179,64 +180,144 @@ function pathsBaseDir(options: CompilerOptions): string | undefined {
 }
 
 /**
- * Absolute path prefixes a non-relative specifier maps to through tsconfig
- * `paths`, longest matching pattern first — the order TypeScript itself uses.
+ * Splits a `paths` key into its prefix and suffix around the single `*`.
+ *
+ * TypeScript allows **at most one** `*` per pattern and ignores any key that
+ * breaks that rule (`tryParsePattern`), so a two-star key matches nothing here
+ * either — rather than silently substituting into the first star only.
+ */
+function parsePathsPattern(
+	pattern: string,
+): { exact: true } | { exact: false; prefix: string; suffix: string } | null {
+	const star = pattern.indexOf("*");
+	if (star < 0) {
+		return { exact: true };
+	}
+	if (pattern.indexOf("*", star + 1) >= 0) {
+		return null;
+	}
+	return {
+		exact: false,
+		prefix: pattern.slice(0, star),
+		suffix: pattern.slice(star + 1),
+	};
+}
+
+/**
+ * Puts the matched wildcard text into a `paths` substitution.
+ *
+ * Same one-star rule as the pattern side: a substitution with a second `*` is
+ * rejected by `tsc` (TS5062) and is dropped here instead of being half-filled.
+ */
+function applySubstitution(
+	target: string,
+	matchedStar: string | null,
+): string | null {
+	const star = target.indexOf("*");
+	if (star < 0 || matchedStar === null) {
+		return target;
+	}
+	if (target.indexOf("*", star + 1) >= 0) {
+		return null;
+	}
+	return target.slice(0, star) + matchedStar + target.slice(star + 1);
+}
+
+/**
+ * Absolute path prefixes the tsconfig `paths` table maps a specifier to.
+ *
+ * Only the *best* pattern contributes, as in TypeScript: an exact key wins
+ * outright, otherwise the longest matching prefix does, and the first key of
+ * that length wins a tie. Falling through to a shorter pattern when the best
+ * one's targets do not exist would resolve `@/components/Cart` against a
+ * catch-all `@/*` that TypeScript never consults.
+ *
+ * Returns `null` when no pattern matched at all — which is what lets the caller
+ * fall back to `baseUrl`, exactly as `tryLoadModuleUsingPathsIfEligible` does.
+ */
+function pathsTargets(
+	paths: Record<string, string[] | undefined>,
+	base: string,
+	specifier: string,
+): string[] | null {
+	let bestTargets: string[] | undefined;
+	let bestStar: string | null = null;
+	let bestPrefixLength = -1;
+
+	for (const [pattern, targets] of Object.entries(paths)) {
+		const parsed = parsePathsPattern(pattern);
+		if (!parsed) {
+			continue;
+		}
+		if (parsed.exact) {
+			if (pattern === specifier) {
+				// An exact key is unique and beats every wildcard.
+				return substitutedBases(targets ?? [], null, base);
+			}
+			continue;
+		}
+		const { prefix, suffix } = parsed;
+		if (
+			!specifier.startsWith(prefix) ||
+			!specifier.endsWith(suffix) ||
+			specifier.length < prefix.length + suffix.length
+		) {
+			continue;
+		}
+		if (prefix.length <= bestPrefixLength) {
+			continue;
+		}
+		bestPrefixLength = prefix.length;
+		bestStar = specifier.slice(prefix.length, specifier.length - suffix.length);
+		bestTargets = targets ?? [];
+	}
+
+	return bestTargets ? substitutedBases(bestTargets, bestStar, base) : null;
+}
+
+function substitutedBases(
+	targets: string[],
+	matchedStar: string | null,
+	base: string,
+): string[] {
+	const out: string[] = [];
+	for (const target of targets) {
+		const substituted = applySubstitution(toPosix(target), matchedStar);
+		if (substituted !== null) {
+			out.push(path.posix.join(base, substituted));
+		}
+	}
+	return out;
+}
+
+/**
+ * Absolute path prefixes a non-relative specifier maps to.
+ *
+ * Two mechanisms, in TypeScript's own order: the tsconfig `paths` table, and —
+ * when no pattern matched — plain `baseUrl` resolution, under which
+ * `components/Cart` is a perfectly ordinary local import that needs no `paths`
+ * entry at all.
  */
 function mappedModuleBases(project: Project, specifier: string): string[] {
 	const options = project.getCompilerOptions();
-	const paths = options.paths;
-	if (!paths) {
-		return [];
-	}
-	const base = pathsBaseDir(options);
-	if (!base) {
-		return [];
-	}
-
-	const matches: Array<{ rank: number; target: string }> = [];
-	for (const [pattern, targets] of Object.entries(paths)) {
-		const star = pattern.indexOf("*");
-		let substitution: string | null = null;
-		let rank = 0;
-		if (star < 0) {
-			if (pattern !== specifier) {
-				continue;
-			}
-			substitution = "";
-			rank = pattern.length + 1;
-		} else {
-			const prefix = pattern.slice(0, star);
-			const suffix = pattern.slice(star + 1);
-			if (
-				!specifier.startsWith(prefix) ||
-				!specifier.endsWith(suffix) ||
-				specifier.length < prefix.length + suffix.length
-			) {
-				continue;
-			}
-			substitution = specifier.slice(
-				prefix.length,
-				specifier.length - suffix.length,
-			);
-			rank = prefix.length;
-		}
-		for (const target of targets ?? []) {
-			matches.push({
-				rank,
-				target: path.posix.join(
-					base,
-					toPosix(target).replace("*", substitution ?? ""),
-				),
-			});
+	const pathsBase = pathsBaseDir(options);
+	if (options.paths && pathsBase) {
+		const matched = pathsTargets(options.paths, pathsBase, specifier);
+		// A matched pattern commits: TypeScript does not retry under `baseUrl`.
+		if (matched) {
+			return matched;
 		}
 	}
-	matches.sort((a, b) => b.rank - a.rank);
-	return matches.map((match) => match.target);
+	const baseUrl = options.baseUrl;
+	if (typeof baseUrl === "string" && baseUrl !== "") {
+		return [path.posix.join(toPosix(baseUrl), specifier)];
+	}
+	return [];
 }
 
 /**
  * Resolves any module specifier the analysed project can own: relative, or
- * non-relative through the tsconfig `paths` table.
+ * non-relative through the tsconfig `paths` table or `baseUrl`.
  *
  * Without the alias half, a repo that writes `@/components/Cart` has every
  * import classified as external, so nested controls and component trees stop
@@ -253,6 +334,12 @@ export function resolveModuleSpecifier(
 		return resolveRelativeModule(project, fromFile, specifier);
 	}
 	for (const base of mappedModuleBases(project, specifier)) {
+		// Rejected *before* `loadFromBase`, not after: adding the file to the
+		// project first would parse a dependency into the AST only to throw the
+		// result away, which is exactly the boundary the engine promises to hold.
+		if (isInNodeModules(base)) {
+			continue;
+		}
 		const found = loadFromBase(project, base);
 		if (found && !isInNodeModules(found.getFilePath())) {
 			return found;
@@ -552,20 +639,66 @@ function resolveThroughImport(
 	);
 }
 
+/** A scope that can hold exported declarations: a module file or a `namespace`. */
+type ExportScope = SourceFile | ModuleDeclaration;
+
 /**
- * `ns.Member` where `ns` came from `import * as ns from "…"`.
+ * Follows one namespace segment: `export * as seg from "./x"` in a module, or a
+ * `namespace seg {}` declaration in either kind of scope.
+ */
+function namespaceHop(
+	project: Project,
+	scope: ExportScope,
+	segment: string,
+): ExportScope | undefined {
+	if (Node.isSourceFile(scope)) {
+		for (const declaration of scope.getExportDeclarations()) {
+			if (declaration.getNamespaceExport()?.getName() !== segment) {
+				continue;
+			}
+			const specifier = declaration.getModuleSpecifierValue();
+			const target = specifier
+				? resolveModuleSpecifier(project, scope, specifier)
+				: undefined;
+			if (target) {
+				return target;
+			}
+		}
+	}
+	return scope.getModule(segment);
+}
+
+/** Looks a name up inside a `namespace` body, mirroring {@link localDeclaration}. */
+function moduleMember(
+	scope: ModuleDeclaration,
+	name: string,
+): Node | undefined {
+	return (
+		scope.getClass(name) ??
+		scope.getFunction(name) ??
+		scope.getVariableDeclaration(name) ??
+		scope.getEnum(name)
+	);
+}
+
+/**
+ * `ns.Member`, including nested chains such as `pages.controls.Button`.
  *
  * Without this, `new pages.HomePage(page)` and `class X extends po.PageObject`
  * lose the qualifier before resolution and are reported as unresolvable, even
- * though the namespace form is fully static.
+ * though the namespace form is fully static. Each leading segment is one
+ * namespace hop — a `export * as x from` re-export or a `namespace x {}` — and
+ * a chain that cannot be walked is reported as unsupported rather than quietly
+ * dropping the reference.
  */
 function resolveNamespaceMember(
 	project: Project,
 	sourceFile: SourceFile,
 	namespaceName: string,
-	memberName: string,
+	memberPath: string[],
 	hops: number,
 ): RefResolution {
+	const memberName = memberPath[memberPath.length - 1];
 	const unresolved: UnresolvedRef = {
 		resolved: false,
 		external: false,
@@ -573,22 +706,53 @@ function resolveNamespaceMember(
 		reason: "identifier-unresolved",
 	};
 	const binding = findImportBinding(sourceFile, namespaceName);
-	if (binding?.exportedName !== "*") {
+	let scope: ExportScope | undefined;
+	if (binding?.exportedName === "*") {
+		const target = resolveModuleSpecifier(
+			project,
+			sourceFile,
+			binding.specifier,
+		);
+		if (!target) {
+			if (!isRelativeSpecifier(binding.specifier)) {
+				return {
+					resolved: false,
+					external: true,
+					module: binding.specifier,
+					name: memberName,
+				};
+			}
+			return unresolved;
+		}
+		scope = target;
+	} else if (!binding) {
+		// `namespace pages { … }` declared right here in the file.
+		scope = sourceFile.getModule(namespaceName);
+	}
+	if (!scope) {
 		return unresolved;
 	}
-	const target = resolveModuleSpecifier(project, sourceFile, binding.specifier);
-	if (!target) {
-		if (!isRelativeSpecifier(binding.specifier)) {
+
+	for (const segment of memberPath.slice(0, -1)) {
+		const next = namespaceHop(project, scope, segment);
+		if (!next) {
 			return {
 				resolved: false,
-				external: true,
-				module: binding.specifier,
+				external: false,
 				name: memberName,
+				reason: "unsupported-syntax",
 			};
 		}
-		return unresolved;
+		scope = next;
 	}
-	return resolveExportedName(project, target, memberName, hops) ?? unresolved;
+
+	if (Node.isSourceFile(scope)) {
+		return resolveExportedName(project, scope, memberName, hops) ?? unresolved;
+	}
+	const declaration = moduleMember(scope, memberName);
+	return declaration
+		? asResolved(declaration, scope.getSourceFile(), memberName)
+		: unresolved;
 }
 
 /**
@@ -610,11 +774,12 @@ export function resolveIdentifier(
 
 	const dot = localName.indexOf(".");
 	if (dot > 0) {
+		const segments = localName.split(".");
 		return resolveNamespaceMember(
 			project,
 			sourceFile,
-			localName.slice(0, dot),
-			localName.slice(dot + 1),
+			segments[0],
+			segments.slice(1),
 			hops,
 		);
 	}

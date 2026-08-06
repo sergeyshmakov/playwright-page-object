@@ -50,6 +50,45 @@ describe("resolveComponentRef", () => {
 		expect(resolution.definition.name).toBe("Card");
 	});
 
+	// The importer's local alias is not an identity. Deriving one from it gave the
+	// same anonymous component a different id in every file that rendered it, so
+	// cross-references pointed at definitions that did not exist.
+	it("gives an anonymous default export one id, whatever the importer calls it", () => {
+		const files = {
+			"src/Card.tsx": "export default () => <div data-testid='c' />;",
+			"src/A.tsx":
+				'import Alpha from "./Card";\nexport function A() { return <Alpha />; }',
+			"src/B.tsx":
+				'import Beta from "./Card";\nexport function B() { return <Beta />; }',
+		};
+		const viaAlpha = resolve(files, "src/A.tsx", "Alpha").resolution;
+		const viaBeta = resolve(files, "src/B.tsx", "Beta").resolution;
+		if (viaAlpha.kind !== "local" || viaBeta.kind !== "local") {
+			throw new Error("expected local components");
+		}
+		expect(viaAlpha.definition.id).toBe("src/Card.tsx#default");
+		expect(viaBeta.definition.id).toBe(viaAlpha.definition.id);
+		expect(viaAlpha.definition.exportKind).toBe("default");
+		expect(viaAlpha.definition.name).toBe("Card");
+	});
+
+	it("names an anonymous default-exported function after its file too", () => {
+		const { resolution } = resolve(
+			{
+				"src/App.tsx":
+					'import Anything from "./Card";\nexport default function App() { return <Anything />; }',
+				"src/Card.tsx": "export default function () { return <div />; }",
+			},
+			"src/App.tsx",
+			"Anything",
+		);
+		if (resolution.kind !== "local") {
+			throw new Error("expected a local component");
+		}
+		expect(resolution.definition.id).toBe("src/Card.tsx#default");
+		expect(resolution.definition.name).toBe("Card");
+	});
+
 	it("resolves a named export declared as a const arrow", () => {
 		const { resolution } = resolve(
 			{
@@ -190,6 +229,45 @@ describe("collectComponents", () => {
 			"src/Card.tsx#default",
 		]);
 	});
+
+	// The tree resolves `<Card/>` straight to this declaration, so leaving it out
+	// of the inventory left every `componentRef` pointing at nothing.
+	it("indexes a directly default-exported arrow component", () => {
+		const ws = makeWorkspace({
+			"src/Card.tsx": "export default () => <div data-testid='c' />;",
+		});
+		const components = collectComponents(ws, ws.jsxFiles());
+		expect(Object.keys(components)).toEqual(["src/Card.tsx#default"]);
+		expect(components["src/Card.tsx#default"]).toMatchObject({
+			name: "Card",
+			exportKind: "default",
+		});
+	});
+
+	it("reads a quoted destructured prop under its real name", () => {
+		const ws = makeWorkspace({
+			"src/Card.tsx": [
+				'export function Card({ "data-testid": id }: { "data-testid"?: string }) {',
+				"  return <div data-testid={id} />;",
+				"}",
+			].join("\n"),
+		});
+		const components = collectComponents(ws, ws.jsxFiles());
+		expect(components["src/Card.tsx#Card"].propNames).toEqual(["data-testid"]);
+	});
+
+	it("leaves a computed destructured key out of the prop names", () => {
+		const ws = makeWorkspace({
+			"src/Card.tsx": [
+				"const key = 'data-testid';",
+				"export function Card({ [key]: id, title }: Record<string, string>) {",
+				"  return <div data-testid={id}>{title}</div>;",
+				"}",
+			].join("\n"),
+		});
+		const components = collectComponents(ws, ws.jsxFiles());
+		expect(components["src/Card.tsx#Card"].propNames).toEqual(["title"]);
+	});
 });
 
 describe("buildTestIdTree — graph traversal", () => {
@@ -294,5 +372,57 @@ describe("buildTestIdTree — graph traversal", () => {
 		);
 		expect(tree.fidelity).toBe("flat");
 		expect(tree.warnings.map((diag) => diag.code)).toContain("entry-not-found");
+	});
+});
+
+// A file whose only component is an unnamed default export used to be reported
+// as declaring no component at all, which dropped the whole request to a flat
+// inventory even though the resolver handles the shape perfectly well.
+describe("buildTestIdTree — anonymous default exports as roots", () => {
+	it("roots at `export default function () {}`", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/App.tsx":
+					'export default function () { return <div data-testid="root" />; }',
+			}),
+			{ entry: "src/App.tsx" },
+		);
+		expect(tree.fidelity).toBe("full");
+		expect(tree.roots[0]).toMatchObject({ tag: "div", component: "App" });
+	});
+
+	it("roots at `export default () => …`", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/App.tsx": 'export default () => <div data-testid="root" />;',
+			}),
+			{ entry: "src/App.tsx" },
+		);
+		expect(tree.fidelity).toBe("full");
+		expect(tree.fidelityReason).toBeUndefined();
+		expect(Object.keys(tree.components)).toContain("src/App.tsx#default");
+	});
+
+	it("auto-detects an anonymous App component", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/App.tsx": 'export default () => <div data-testid="root" />;',
+			}),
+		);
+		expect(tree.fidelity).toBe("full");
+	});
+
+	it("still ignores a default export that is not a component", () => {
+		const tree = buildTestIdTree(
+			makeWorkspace({
+				"src/App.tsx": [
+					"export function Panel() { return <div data-testid='p' />; }",
+					"export default function helper() { return 1; }",
+				].join("\n"),
+			}),
+			{ entry: "src/App.tsx" },
+		);
+		expect(tree.fidelity).toBe("full");
+		expect(tree.roots[0]).toMatchObject({ tag: "div", component: "Panel" });
 	});
 });

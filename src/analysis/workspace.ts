@@ -6,6 +6,7 @@ import {
 	defaultExcludeGlobs,
 	defaultIncludeGlobs,
 	locateTsConfig,
+	SCAN_GLOB,
 	synthesizedCompilerOptions,
 	tsConfigFileNames,
 } from "./config/tsconfig";
@@ -194,15 +195,21 @@ export class Workspace {
 		const located = locateTsConfig(root, options.tsconfig, testDir);
 		const warnings: Diagnostic[] = [];
 
+		const narrowed = (options.include?.length ?? 0) > 0;
 		let project: Project;
 		if (located.path) {
-			// Before the parse, not after it: `skipAddingFilesFromTsConfig: false`
-			// reads and parses the whole source set, which is the exact cost the cap
-			// exists to refuse.
+			// Before the parse, not after it: loading the tsconfig's sources reads
+			// and parses the whole source set, which is the exact cost the cap exists
+			// to refuse.
 			precheckMaxFiles(root, options, located.path);
 			project = new Project({
 				tsConfigFilePath: located.path,
-				skipAddingFilesFromTsConfig: false,
+				// A narrowed scope counts only the files inside it, so it must not
+				// then parse everything outside it: the include globs below add what
+				// the caller actually asked for, and the resolver pulls in any file
+				// they import. The tsconfig is still read — its `compilerOptions` are
+				// what make the ASTs right — only its file set is skipped.
+				skipAddingFilesFromTsConfig: narrowed,
 				skipFileDependencyResolution: true,
 			});
 		} else {
@@ -218,12 +225,12 @@ export class Workspace {
 			warnings.push(
 				info(
 					"no-tsconfig",
-					`No tsconfig.json found under ${toPosix(root)}; falling back to a **/*.{ts,tsx} scan with synthesized compiler options.`,
+					`No tsconfig.json found under ${toPosix(root)}; falling back to a ${SCAN_GLOB} scan with synthesized compiler options.`,
 				),
 			);
 		}
 
-		if (options.include && options.include.length > 0) {
+		if (narrowed && options.include) {
 			project.addSourceFilesAtPaths([
 				...options.include.map((glob) => absoluteGlob(root, glob)),
 				...defaultExcludeGlobs(root),
@@ -541,8 +548,12 @@ const GLOB_MAGIC = /[*?[\]{}]/;
  * `.config` or `.partials` is *not* one of them: those are directory names.
  */
 const SOURCE_FILE_EXTENSION = /\.[cm]?[jt]sx?$/i;
-/** What a bare directory pattern expands to. */
-const DIRECTORY_EXPANSION = "**/*.{ts,tsx,mts,cts}";
+/**
+ * What a bare directory pattern expands to: exactly the set the default scan
+ * sweeps, `.jsx` included. Anything narrower would make `--src-dir src` hide
+ * every component of a JavaScript React app.
+ */
+const DIRECTORY_EXPANSION = SCAN_GLOB;
 
 /** Posix pattern relative to `root`, when it points inside `root` at all. */
 function relativizeToRoot(root: string, pattern: string): string {

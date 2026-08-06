@@ -6,6 +6,8 @@ import {
 	defaultExcludeGlobs,
 	defaultIncludeGlobs,
 	locateTsConfig,
+	SCAN_EXTENSIONS,
+	SCAN_GLOB,
 	synthesizedCompilerOptions,
 	tsConfigFileNames,
 } from "../../../analysis/config/tsconfig";
@@ -109,7 +111,7 @@ describe("synthesised options", () => {
 });
 
 describe("Workspace file discovery", () => {
-	it("scans **/*.{ts,tsx} and warns when there is no tsconfig", () => {
+	it("scans the default source globs and warns when there is no tsconfig", () => {
 		const root = scratch({
 			"src/a.ts": "export const a = 1;",
 			"src/b.tsx": "export const B = () => null;",
@@ -123,6 +125,23 @@ describe("Workspace file discovery", () => {
 		);
 		const files = ws.sourceFiles().map((file) => ws.rel(file.getFilePath()));
 		expect(files.sort()).toEqual(["src/a.ts", "src/b.tsx"]);
+	});
+
+	// The diagnostic is the only place a caller learns what was swept; naming a
+	// narrower set than the scan really uses sends them hunting for files that
+	// were in fact analysed.
+	it("names the extensions it really scanned in the no-tsconfig warning", () => {
+		const root = scratch({ "src/App.jsx": "export const App = () => null;" });
+		Workspace.reset();
+		const ws = Workspace.acquire({ projectRoot: root });
+		const warning = ws.warnings.find(
+			(diagnostic) => diagnostic.code === "no-tsconfig",
+		);
+		expect(warning?.message).toContain(SCAN_GLOB);
+		for (const extension of SCAN_EXTENSIONS) {
+			expect(warning?.message).toContain(extension);
+		}
+		expect(ws.sourceFiles()).toHaveLength(1);
 	});
 
 	it("loads files from a tsconfig when one exists", () => {
@@ -170,6 +189,33 @@ describe("tsConfigFileNames", () => {
 	it("returns null for a config it cannot read", () => {
 		const root = scratch({});
 		expect(tsConfigFileNames(path.join(root, "nope.json"))).toBeNull();
+	});
+
+	// TypeScript keeps a stale `files` entry in the parsed list and reports it as
+	// an error; the project simply never loads it. Counting it would reject a
+	// repository sitting exactly on the cap.
+	it("drops a stale `files` entry the project would never load", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ files: ["src/a.ts", "src/gone.ts"] }),
+			"src/a.ts": "export const a = 1;",
+		});
+		expect(
+			tsConfigFileNames(path.join(root, "tsconfig.json"))?.map((name) =>
+				path.basename(name),
+			),
+		).toEqual(["a.ts"]);
+	});
+
+	it("keeps a repository at the cap analysable despite a stale `files` entry", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ files: ["src/a.ts", "src/gone.ts"] }),
+			"src/a.ts": "export const a = 1;",
+		});
+		Workspace.reset();
+		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 1 });
+		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
+			"src/a.ts",
+		]);
 	});
 });
 

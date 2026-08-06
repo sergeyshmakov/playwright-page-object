@@ -209,6 +209,40 @@ describe("Workspace.revalidate scoping", () => {
 		ws.revalidate();
 		expect(rels(ws)).toEqual(["scripts/stray.ts"]);
 	});
+
+	// The `maxFiles` cap counts the narrowed scope, so the narrowed scope is what
+	// may be parsed: loading the tsconfig's whole source set and filtering it
+	// afterwards would pay the exact cost the cap exists to refuse.
+	it("does not parse the tsconfig's sources outside a narrowed include", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+				include: ["e2e", "scripts"],
+			}),
+			"e2e/a.ts": "export const a = 1;",
+			"scripts/one.ts": "export const one = 1;",
+			"scripts/two.ts": "export const two = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, include: ["e2e"] });
+		const parsed = ws.project
+			.getSourceFiles()
+			.map((file) => ws.rel(file.getFilePath()));
+		expect(parsed).toEqual(["e2e/a.ts"]);
+		expect(rels(ws)).toEqual(["e2e/a.ts"]);
+	});
+
+	it("keeps the tsconfig's compiler options when the scope is narrowed", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true, jsx: "react-jsx" },
+				include: ["e2e"],
+			}),
+			"e2e/a.tsx": "export const A = () => <div data-testid='x' />;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, include: ["e2e"] });
+		expect(ws.project.getCompilerOptions().jsx).toBeDefined();
+		expect(rels(ws)).toEqual(["e2e/a.tsx"]);
+	});
 });
 
 describe("Workspace include normalization", () => {
@@ -222,6 +256,19 @@ describe("Workspace include normalization", () => {
 		const root = scratch(tree);
 		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
 		expect(rels(ws)).toEqual(["src/a.ts", "src/nested/b.tsx"]);
+	});
+
+	// `--src-dir src` on a JavaScript React app has to see its components: the
+	// expansion set is the default scan's set, `.jsx` included.
+	it("expands a bare directory to every extension the default scan sweeps", () => {
+		const root = scratch({
+			"src/App.jsx": "export const App = () => null;",
+			"src/util.mts": "export const m = 1;",
+			"src/legacy.cts": "export const c = 1;",
+			"src/notes.md": "# not source",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
+		expect(rels(ws)).toEqual(["src/App.jsx", "src/legacy.cts", "src/util.mts"]);
 	});
 
 	it("expands a directory written with a trailing slash", () => {

@@ -132,6 +132,84 @@ describe("buildCoverageReport — dynamic UI ids", () => {
 	});
 });
 
+/**
+ * A test id written on a component tag is a prop, and a prop only reaches the
+ * DOM if the component forwards it. Counting it as rendered invents coverage;
+ * calling the selector that matches it dead invents a bug. Both are worse than
+ * saying "unproven", which is what the report does.
+ */
+describe("buildCoverageReport — ids written on a component tag", () => {
+	const UNFORWARDED = {
+		"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+		"src/App.tsx": [
+			'import Card from "./Card";',
+			"export default function App() {",
+			'  return <main><Card data-testid="Ghost" /></main>;',
+			"}",
+		].join("\n"),
+		"src/Card.tsx": [
+			"export default function Card(props: { children?: unknown }) {",
+			"  return <div>{props.children as never}</div>;",
+			"}",
+		].join("\n"),
+		"e2e/GhostPage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			"@RootSelector()",
+			"export class GhostPage extends RootPageObject {",
+			'  @Selector("Ghost")',
+			"  accessor Ghost!: Locator;",
+			"}",
+		].join("\n"),
+	};
+
+	const result = buildCoverageReport(makeWorkspace(UNFORWARDED));
+
+	it("does not count an unforwarded prop as a rendered, matched id", () => {
+		expect(result.matched).toEqual([]);
+		expect(result.summary.matchableUiTestIds).toBe(0);
+		expect(result.uncoveredTestIds).toEqual([]);
+	});
+
+	it("reports the selector as unknown rather than dead", () => {
+		expect(result.deadSelectors).toEqual([]);
+		expect(result.unknownSelectors).toContainEqual(
+			expect.objectContaining({
+				memberPath: "GhostPage.Ghost",
+				reason: "unforwarded-prop",
+			}),
+		);
+	});
+
+	it("keeps the occurrence in the report instead of dropping it", () => {
+		expect(result.summary.unknownTestIds).toBe(1);
+		expect(result.unknownTestIds[0]).toMatchObject({
+			tag: "Card",
+			unforwarded: true,
+		});
+		expect(result.warnings.map((diagnostic) => diagnostic.code)).toContain(
+			"unforwarded-prop",
+		);
+	});
+
+	it("counts the id normally once forwarding is proven", () => {
+		const forwarded = buildCoverageReport(
+			makeWorkspace({
+				...UNFORWARDED,
+				"src/Card.tsx": [
+					"export default function Card(props: Record<string, unknown>) {",
+					"  return <div {...props} />;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		expect(forwarded.summary.matchableUiTestIds).toBe(1);
+		expect(forwarded.matched.map((entry) => entry.ui.id)).toEqual(["Ghost"]);
+		expect(forwarded.deadSelectors).toEqual([]);
+		expect(forwarded.unknownSelectors).toEqual([]);
+	});
+});
+
 describe("buildCoverageReport — raw locator sweep", () => {
 	const SPEC = {
 		"e2e/checkout.spec.ts": [

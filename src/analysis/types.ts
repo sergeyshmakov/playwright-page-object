@@ -53,7 +53,8 @@ export type DiagnosticCode =
 	| "spread-props"
 	| "prop-forwarding-unsupported"
 	// coverage
-	| "raw-locators-disabled";
+	| "raw-locators-disabled"
+	| "unforwarded-prop";
 
 export interface Diagnostic {
 	code: DiagnosticCode;
@@ -89,7 +90,9 @@ export type DynamicReason =
 	| "spread"
 	| "identifier-unresolved"
 	| "custom-selector"
-	| "unsupported-syntax";
+	| "unsupported-syntax"
+	/** Only matched a test id written as a prop on a component tag (see `TestIdOccurrence.unforwarded`). */
+	| "unforwarded-prop";
 
 export interface DynamicValue {
 	kind: "dynamic";
@@ -365,6 +368,18 @@ export interface TestIdOccurrence {
 	conditional?: boolean;
 	repeated?: boolean;
 	viaProp?: string;
+	/**
+	 * The attribute sits on a *component* tag, so it is a prop rather than a DOM
+	 * attribute: `<Card data-testid="save"/>` renders that id only if `Card`
+	 * forwards the prop to a host element, and a component that ignores it makes
+	 * the id disappear at runtime.
+	 *
+	 * The occurrence is kept — it is a real fact about the source — but coverage
+	 * treats it as unproven rather than rendered. Forwarding that the tree walk
+	 * *does* prove is recorded as its own occurrence on the host element, with
+	 * `viaProp` / no flag, and that one is what coverage matches against.
+	 */
+	unforwarded?: true;
 }
 
 export interface ComponentInfo {

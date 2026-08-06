@@ -160,4 +160,65 @@ describe("one-hop prop forwarding", () => {
 			tree.inventory.find((entry) => entry.value.value === "Folded")?.viaProp,
 		).toBe("testId");
 	});
+
+	it("binds a prop destructured under a quoted key", () => {
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Btn from "./Btn";',
+				'export default function App() { return <Btn data-testid="Quoted" />; }',
+			].join("\n"),
+			"src/Btn.tsx": [
+				'export default function Btn({ "data-testid": id }: Record<string, string>) {',
+				"  return <button data-testid={id} />;",
+				"}",
+			].join("\n"),
+		});
+		const button = nodes.find((node) => node.tag === "button");
+		expect(button?.testId).toMatchObject({ kind: "static", value: "Quoted" });
+		expect(button?.viaProp).toBe("id");
+	});
+});
+
+describe("test ids written on a component tag", () => {
+	// The attribute is a prop until something forwards it to a host element. The
+	// occurrence is still inventoried — a page object selecting it must not read
+	// as dead — but flagged, so coverage does not count it as rendered.
+	it("flags the call-site occurrence as unforwarded", () => {
+		const { tree } = treeFor({
+			"src/App.tsx": [
+				'import Card from "./Card";',
+				'export default function App() { return <Card data-testid="Ghost" />; }',
+			].join("\n"),
+			"src/Card.tsx": [
+				"export default function Card(props: { children?: unknown }) {",
+				"  return <div>{props.children as never}</div>;",
+				"}",
+			].join("\n"),
+		});
+		const ghost = tree.inventory.find((entry) => entry.value.value === "Ghost");
+		expect(ghost).toMatchObject({ tag: "Card", unforwarded: true });
+	});
+
+	it("leaves the proven host-element occurrence unflagged", () => {
+		const { tree } = treeFor({
+			"src/App.tsx": [
+				'import Btn from "./Btn";',
+				'export default function App() { return <Btn data-testid="Real" />; }',
+			].join("\n"),
+			"src/Btn.tsx": [
+				"export default function Btn(props: Record<string, unknown>) {",
+				"  return <button {...props} />;",
+				"}",
+			].join("\n"),
+		});
+		const occurrences = tree.inventory.filter(
+			(entry) => entry.value.value === "Real",
+		);
+		expect(occurrences.map((entry) => [entry.tag, entry.unforwarded])).toEqual(
+			expect.arrayContaining([
+				["Btn", true],
+				["button", undefined],
+			]),
+		);
+	});
 });

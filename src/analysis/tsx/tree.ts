@@ -10,8 +10,10 @@ import type {
 } from "../types";
 import { Budget } from "../util/budget";
 import { keyFold, matchesAnyGlob, toPosix } from "../util/paths";
+import { resolveExportedName } from "../util/resolve";
 import type { Workspace } from "../workspace";
 import {
+	buildDefinition,
 	type ComponentDefinition,
 	collectComponents,
 	componentReturnExpressions,
@@ -187,13 +189,25 @@ function firstComponentIn(
 	ws: Workspace,
 	sourceFile: SourceFile,
 ): ComponentDefinition | null {
-	for (const declaration of sourceFile.getFunctions()) {
-		const name = declaration.getName();
-		if (declaration.isDefaultExport() && name) {
-			const built = buildLocal(ws, sourceFile, name);
-			if (built) {
-				return built;
-			}
+	// The default export first, whether or not it has a name of its own:
+	// `export default function () {}` and `export default () => …` are the only
+	// component plenty of files declare, and skipping them dropped the whole tree
+	// to a flat inventory that claimed the file declared nothing.
+	const defaultExport = resolveExportedName(ws.project, sourceFile, "default");
+	if (defaultExport?.sourceFile === sourceFile) {
+		const built = buildDefinition(
+			ws,
+			defaultExport.declaration,
+			defaultExport.name,
+		);
+		// A named default export still has to look like a component, so a file
+		// whose default export is a lowercase helper keeps falling through to the
+		// component loops below. An anonymous one has no name to judge.
+		if (
+			built &&
+			(defaultExport.name === "default" || /^[A-Z]/.test(built.name))
+		) {
+			return built;
 		}
 	}
 	for (const declaration of sourceFile.getFunctions()) {
@@ -346,6 +360,11 @@ function mergeResolvedOccurrences(
 			}
 			if (node.viaProp) {
 				occurrence.viaProp = node.viaProp;
+			}
+			// One hop of forwarding proven, but the id landed on another component
+			// rather than on a host element: still a prop, still unproven.
+			if (node.nodeType === "component") {
+				occurrence.unforwarded = true;
 			}
 			const identity = [
 				key,

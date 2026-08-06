@@ -92,7 +92,12 @@ export function tsConfigFileNames(tsConfigFilePath: string): string[] | null {
 			ts.sys,
 			path.dirname(tsConfigFilePath),
 		);
-		return parsed.fileNames;
+		// A stale entry in the `files` array is reported by `tsc` but still comes
+		// back in `fileNames`, while the project only ever loads what exists. Left
+		// in, it inflates the pre-scan count and rejects a repository that is
+		// inside the cap. (Glob-derived names are on disk by construction, so this
+		// only ever drops the `files` leftovers.)
+		return parsed.fileNames.filter((fileName) => ts.sys.fileExists(fileName));
 	} catch {
 		return null;
 	}
@@ -117,24 +122,28 @@ export function synthesizedCompilerOptions(): CompilerOptions {
 }
 
 /**
- * Default globs used when the workspace has no tsconfig to enumerate files.
+ * Extensions the scanner sweeps when it globs for source files.
  *
  * `.jsx` is included because the JSX scanner, the entry-point heuristic
  * (`main.jsx` / `index.jsx`) and the module resolver all support it — omitting
- * it here would make a JavaScript React app silently unanalysable. Plain `.js`
- * is not swept: it would pull in build output and tooling config for every
- * repo, and any `.js` module actually imported from analysed code is added on
- * demand by the resolver.
+ * it would make a JavaScript React app silently unanalysable. Plain `.js` is
+ * not swept: it would pull in build output and tooling config for every repo,
+ * and any `.js` module actually imported from analysed code is added on demand
+ * by the resolver.
+ *
+ * Every place that has to name this set — the no-tsconfig fallback, the bare
+ * directory expansion behind `--src-dir`, and the diagnostic that tells the
+ * caller what was scanned — derives it from here so the three cannot drift.
  */
+export const SCAN_EXTENSIONS = ["ts", "tsx", "mts", "cts", "jsx"] as const;
+
+/** The recursive glob for {@link SCAN_EXTENSIONS}, relative to a directory. */
+export const SCAN_GLOB = `**/*.{${SCAN_EXTENSIONS.join(",")}}`;
+
+/** Default globs used when the workspace has no tsconfig to enumerate files. */
 export function defaultIncludeGlobs(projectRoot: string): string[] {
 	const root = toPosix(projectRoot).replace(/\/$/, "");
-	return [
-		`${root}/**/*.ts`,
-		`${root}/**/*.tsx`,
-		`${root}/**/*.mts`,
-		`${root}/**/*.cts`,
-		`${root}/**/*.jsx`,
-	];
+	return SCAN_EXTENSIONS.map((extension) => `${root}/**/*.${extension}`);
 }
 
 export function defaultExcludeGlobs(projectRoot: string): string[] {
