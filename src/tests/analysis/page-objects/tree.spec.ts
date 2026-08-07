@@ -223,6 +223,51 @@ describe("buildPageObjectTree — target resolution", () => {
 		}
 	});
 
+	// The other half of the same question, and the half this path was missing.
+	// `Home` is four edits from `HomePage` — past any sane distance ceiling — so
+	// only the substring pass finds it, and `map_coverage` was the only caller
+	// that ran one.
+	it("suggests a partial name that edit distance alone would miss", () => {
+		expect.assertions(2);
+		try {
+			buildPageObjectTree(makeWorkspace(SHARED), "Home");
+		} catch (thrown) {
+			const error = thrown as AnalysisTargetError;
+			expect(error.code).toBe("class_not_found");
+			expect(error.suggestions).toContain("HomePage");
+		}
+	});
+
+	// An invented name has no plausible near match, so the list is empty by
+	// design. The message is then the only thing the caller has, and "no page
+	// object named X" reads as a naming problem even when the scope found none
+	// at all.
+	it("says the index is empty rather than only that the name is unknown", () => {
+		expect.assertions(3);
+		try {
+			buildPageObjectTree(
+				makeWorkspace({ "src/App.tsx": "export const App = () => null;" }),
+				"NoSuchPageObjectXyz",
+			);
+		} catch (thrown) {
+			const error = thrown as AnalysisTargetError;
+			expect(error.code).toBe("class_not_found");
+			expect(error.suggestions).toEqual([]);
+			expect(error.message).toContain("no page objects at all");
+		}
+	});
+
+	it("counts the index it searched when the name is simply wrong", () => {
+		expect.assertions(1);
+		try {
+			buildPageObjectTree(makeWorkspace(SHARED), "NoSuchPageObjectXyz");
+		} catch (thrown) {
+			expect((thrown as AnalysisTargetError).message).toMatch(
+				/among the \d+ in the index/,
+			);
+		}
+	});
+
 	it("throws ambiguous_class with the candidate list", () => {
 		expect.assertions(2);
 		const files = {

@@ -12,6 +12,7 @@ import {
 	isCatchAllPattern,
 	nearestFiles,
 	nearestIds,
+	nearestNames,
 	normalizeRelPath,
 	type PageObjectSummary,
 	type SelectorInfo,
@@ -21,7 +22,7 @@ import {
 import { ToolError } from "./errors";
 import type { McpServerOptions } from "./options";
 import { renderPageObjectOutline, renderTestIdOutline } from "./outline";
-import { ok } from "./respond";
+import { MAX_ERROR_LIST, ok } from "./respond";
 import {
 	COVERAGE_BUCKETS,
 	type getPageObjectTreeInput,
@@ -394,6 +395,75 @@ function resolveEntryFile(
 	return { file: match, note: resolved.note };
 }
 
+/**
+ * What to say when `component` named nothing.
+ *
+ * Three mistakes wear the same error code, and each has a different list that
+ * answers it. The name exists but not in the file that was named: the files
+ * that *do* declare it are the fix, and they go in `candidates` — the same
+ * answer the page-object side gives for `path.ts#ClassName` against the wrong
+ * file. The name exists nowhere and a file was named: that file's own
+ * components are the fix, and the whole list is short enough to be the answer.
+ * The name exists nowhere and no file was named: ranking is all there is, since
+ * dumping every component in the repository buries the one that matters.
+ *
+ * The list used to be empty in all three, which is how a one-character typo
+ * became a dead end.
+ */
+function missingComponent(
+	wanted: string,
+	scopeFile: string | undefined,
+	sameName: ComponentInfo[],
+	all: ComponentInfo[],
+): ToolError {
+	if (scopeFile && sameName.length > 0) {
+		return new ToolError(
+			"file_not_found",
+			`No component named "${wanted}" is declared in "${scopeFile}", but ${sameName.length} other file(s) declare it.`,
+			{
+				candidates: sameName.map((component) => component.file).sort(),
+				hint: "Re-call with `file` set to one of the candidates, or drop `file` to search every scanned file.",
+			},
+		);
+	}
+
+	if (!scopeFile) {
+		return new ToolError(
+			"file_not_found",
+			`No component named "${wanted}" was found in the scanned sources.`,
+			{
+				suggestions: nearestNames(
+					wanted,
+					all.map((component) => component.name),
+					MAX_ERROR_LIST,
+				),
+				hint: "Pass one of the suggested names, pass `file` with the component's path, or omit both to auto-detect the app entry.",
+			},
+		);
+	}
+
+	const inFile = [
+		...new Set(
+			all
+				.filter((component) => sameFile(component.file, scopeFile))
+				.map((component) => component.name),
+		),
+	].sort();
+	return new ToolError(
+		"file_not_found",
+		inFile.length === 0
+			? `"${scopeFile}" declares no components.`
+			: `No component named "${wanted}" is declared in "${scopeFile}".`,
+		{
+			suggestions: inFile,
+			hint:
+				inFile.length === 0
+					? "Pass `file` with the path of a file that declares a component, or omit both to auto-detect the app entry."
+					: "Pass one of the suggested names, drop `file` to search every scanned file, or omit both to auto-detect the app entry.",
+		},
+	);
+}
+
 export function handleGetTestIdTree(
 	workspace: Workspace,
 	args: z.infer<typeof getTestIdTreeInput>,
@@ -485,17 +555,7 @@ export function handleGetTestIdTree(
 			? named.filter((component) => sameFile(component.file, scopeFile))
 			: named;
 		if (matches.length === 0) {
-			throw new ToolError(
-				"file_not_found",
-				scopeFile
-					? `No component named "${args.component}" is declared in "${scopeFile}".`
-					: `No component named "${args.component}" was found in the scanned sources.`,
-				{
-					hint: scopeFile
-						? "Drop `file` to search every scanned file, or omit both to auto-detect the app entry."
-						: "Pass `file` with the component's path instead, or omit both to auto-detect the app entry.",
-				},
-			);
+			throw missingComponent(args.component, scopeFile, named, components);
 		}
 		if (matches.length > 1) {
 			throw new ToolError(
@@ -791,16 +851,11 @@ export function handleMapCoverage(
 		);
 		if (matches.length === 0) {
 			const wanted = args.class ?? "";
-			const needle = wanted.toLowerCase();
 			const names = index.pageObjects.map((item) => item.className);
-			const substring = names
-				.filter((name) => name.toLowerCase().includes(needle))
-				.slice(0, 5);
-			// A typo shares no substring with the real name ("ChekoutPage" does not
-			// contain "checkout"), which is exactly when a caller most needs the
-			// suggestion. Edit distance answers where substring matching gives up.
-			const suggestions =
-				substring.length > 0 ? substring : nearestIds(wanted, names, 5);
+			// Substring then edit distance, in `nearestNames`: the two passes used
+			// to be spelled out here and nowhere else, which is how the engine's own
+			// class lookup ended up with only one of them.
+			const suggestions = nearestNames(wanted, names, MAX_ERROR_LIST);
 			throw new ToolError(
 				"class_not_found",
 				`No page object named "${wanted}" was found.`,

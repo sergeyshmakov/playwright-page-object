@@ -1,4 +1,4 @@
-import { nearestFiles, nearestIds } from "../coverage/suggest";
+import { nearestFiles, nearestNames } from "../coverage/suggest";
 import {
 	AnalysisTargetError,
 	dedupeDiagnostics,
@@ -174,15 +174,30 @@ function resolveTarget(
 			},
 		);
 	}
+	// An invented name has no plausible near match, and that is the one case
+	// where an empty `suggestions` list tells the caller nothing. Naming the size
+	// of the index does: zero means the scope found no page objects at all — a
+	// different problem with a different fix — and a large number means the name
+	// is wrong rather than the scan.
+	const indexed = discovery.byName.size;
 	throw new AnalysisTargetError(
 		"class_not_found",
-		`No page object named "${trimmed}" was discovered.`,
+		indexed === 0
+			? `No page object named "${trimmed}" was discovered, and neither was any other: the scanned sources declare no page objects at all.`
+			: `No page object named "${trimmed}" was discovered among the ${indexed} in the index.`,
 		{ suggestions: suggestionsFor(discovery, trimmed) },
 	);
 }
 
+/**
+ * Both passes, not just edit distance.
+ *
+ * `map_coverage` learned this in cluster C and this path did not, so the same
+ * typo answered with suggestions through one tool and with an empty list
+ * through the other. See {@link nearestNames} for why one pass is never enough.
+ */
 function suggestionsFor(discovery: DiscoveryResult, name: string): string[] {
-	return nearestIds(name, discovery.byName.keys(), 5);
+	return nearestNames(name, discovery.byName.keys(), 5);
 }
 
 /**

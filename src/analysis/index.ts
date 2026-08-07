@@ -35,7 +35,12 @@ export {
 	matchSelectorToUi,
 	probesFromPattern,
 } from "./coverage/match";
-export { editDistance, nearestFiles, nearestIds } from "./coverage/suggest";
+export {
+	editDistance,
+	nearestFiles,
+	nearestIds,
+	nearestNames,
+} from "./coverage/suggest";
 export {
 	AnalysisLimitError,
 	AnalysisTargetError,

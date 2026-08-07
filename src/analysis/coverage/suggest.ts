@@ -74,6 +74,40 @@ export function nearestIds(
 	return scored.slice(0, limit).map((entry) => entry.id);
 }
 
+/**
+ * Names worth offering after one that matched nothing, best first.
+ *
+ * Two passes, because the two ways a caller gets a name wrong need different
+ * tools and either one alone leaves the list empty exactly when it matters.
+ * A *partial* name — `Checkout` for `CheckoutPage` — is not a typo: it is four
+ * edits away, past any sane distance ceiling, and substring matching finds it
+ * at once. A *typo* — `ChekoutPage` — shares no useful substring with the real
+ * name ("chekoutpage" appears nowhere inside "checkoutpage"), and edit distance
+ * is what answers there. Substring hits win when there are any: containment is
+ * evidence, while a distance under the ceiling is an inference.
+ *
+ * Shortest first among substring hits — the shorter containing name is the
+ * closer reading of what was typed — then lexicographic, so the list is stable.
+ */
+export function nearestNames(
+	wanted: string,
+	names: Iterable<string>,
+	limit = 5,
+): string[] {
+	const list = [...new Set(names)];
+	if (wanted === "") {
+		return [];
+	}
+	const needle = wanted.toLowerCase();
+	const substring = list.filter((name) => name.toLowerCase().includes(needle));
+	if (substring.length > 0) {
+		return substring
+			.sort((a, b) => a.length - b.length || a.localeCompare(b))
+			.slice(0, limit);
+	}
+	return nearestIds(wanted, list, limit);
+}
+
 function basenameOf(folded: string): string {
 	return folded.slice(folded.lastIndexOf("/") + 1);
 }

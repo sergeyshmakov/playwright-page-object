@@ -206,17 +206,26 @@ describe("MCP server over in-memory transport", () => {
 		expect(envelope.error?.hint).toContain("list_page_objects");
 	}, 30_000);
 
-	it("reports class_not_found with a hint for a typo'd class", async () => {
+	// Both discriminators have to run on this path. A typo is answered by edit
+	// distance; a partial name is four edits away and is answered only by the
+	// substring pass, which this tool did not have — so `class: "Checkout"` came
+	// back with no suggestions while map_coverage answered the same question.
+	it("reports class_not_found with suggestions for a typo and for a partial", async () => {
 		const { client } = await connect(exampleRoot);
-		const { isError, envelope } = await callTool(
-			client,
-			"get_page_object_tree",
-			{ class: "CheckouPage" },
-		);
 
-		expect(isError).toBe(true);
-		expect(envelope.error?.code).toBe("class_not_found");
-		expect(envelope.error?.hint).toContain("list_page_objects");
+		const typo = await callTool(client, "get_page_object_tree", {
+			class: "CheckouPage",
+		});
+		expect(typo.isError).toBe(true);
+		expect(typo.envelope.error?.code).toBe("class_not_found");
+		expect(typo.envelope.error?.hint).toContain("list_page_objects");
+		expect(typo.envelope.error?.suggestions).toContain("CheckoutPage");
+
+		const partial = await callTool(client, "get_page_object_tree", {
+			class: "Checkout",
+		});
+		expect(partial.envelope.error?.code).toBe("class_not_found");
+		expect(partial.envelope.error?.suggestions).toContain("CheckoutPage");
 	}, 30_000);
 
 	it("get_testid_tree surfaces the dynamic CartItem_ pattern", async () => {
@@ -644,6 +653,99 @@ describe("MCP server over in-memory transport", () => {
 				expect(String(absolute.envelope.meta?.note)).toContain(
 					"src/components/GuestItem/GuestItemInfo.tsx",
 				);
+			},
+		);
+	}, 30_000);
+
+	// A one-character typo in `component` used to be a dead end: file_not_found
+	// with no suggestions, no candidates, and a hint that only said to try
+	// something else.
+	it("suggests the nearest component names for a typo'd component", async () => {
+		await withProject(
+			"ppo-component-typo-",
+			{
+				"src/components/GuestItem/GuestItemInfo.tsx": [
+					"export function GuestItemInfo() {",
+					'\treturn <div data-testid="GuestItemBox" />;',
+					"}",
+					"",
+					"export function GuestItemActions() {",
+					'\treturn <div data-testid="GuestItemActions" />;',
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <main data-testid="AppRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const typo = await callTool(client, "get_testid_tree", {
+					component: "GuestItemInf",
+				});
+				expect(typo.isError).toBe(true);
+				expect(typo.envelope.error?.code).toBe("file_not_found");
+				expect(typo.envelope.error?.suggestions).toContain("GuestItemInfo");
+
+				// The suggestion has to work.
+				const good = await callTool(client, "get_testid_tree", {
+					component: "GuestItemInfo",
+				});
+				expect(good.isError).toBe(false);
+				expect(JSON.stringify(good.envelope.data)).toContain("GuestItemBox");
+			},
+		);
+	}, 30_000);
+
+	// `component` + `file` has two ways to miss, and they need different lists:
+	// the wrong symbol in the right file, and the right symbol in the wrong file.
+	it("names a file's own components, and the files that declare a name", async () => {
+		await withProject(
+			"ppo-component-scoped-miss-",
+			{
+				"src/ui/Panel.tsx": [
+					"export function Panel() {",
+					'\treturn <div data-testid="PanelBox" />;',
+					"}",
+					"",
+					"export function PanelHeader() {",
+					'\treturn <h1 data-testid="PanelHeader" />;',
+					"}",
+					"",
+				].join("\n"),
+				"src/legacy/Panel.tsx": [
+					"export function Panel() {",
+					'\treturn <div data-testid="LegacyPanel" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				// Wrong symbol, right file: what that file declares is the answer.
+				const wrongName = await callTool(client, "get_testid_tree", {
+					component: "PanelFooter",
+					file: "src/ui/Panel.tsx",
+				});
+				expect(wrongName.isError).toBe(true);
+				expect(wrongName.envelope.error?.code).toBe("file_not_found");
+				expect(wrongName.envelope.error?.suggestions).toEqual([
+					"Panel",
+					"PanelHeader",
+				]);
+
+				// Right symbol, wrong file: the files that declare it are the answer,
+				// exactly as the page-object side answers `path.ts#ClassName`.
+				const wrongFile = await callTool(client, "get_testid_tree", {
+					component: "PanelHeader",
+					file: "src/legacy/Panel.tsx",
+				});
+				expect(wrongFile.envelope.error?.code).toBe("file_not_found");
+				expect(wrongFile.envelope.error?.candidates).toEqual([
+					"src/ui/Panel.tsx",
+				]);
+				expect(String(wrongFile.envelope.error?.hint)).toContain("candidates");
 			},
 		);
 	}, 30_000);
