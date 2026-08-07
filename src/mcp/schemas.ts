@@ -56,7 +56,7 @@ export const getTestIdTreeInput = z.object({
 		.string()
 		.optional()
 		.describe(
-			"Component file to use as the tree root. Combine with component to pick one of several files declaring that name.",
+			"Component file to use as the tree root, path relative to the project root (a leading ./ and Windows separators are accepted; an absolute path inside the root is relativized and meta.note says so). Combine with component to pick one of several files declaring that name. A path matching no scanned .tsx/.jsx source fails with file_not_found and suggestions rather than silently walking the whole app.",
 		),
 	component: z
 		.string()

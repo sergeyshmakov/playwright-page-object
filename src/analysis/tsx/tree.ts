@@ -234,6 +234,22 @@ function selectFiles(ws: Workspace, options: TestIdTreeOptions): SourceFile[] {
 	return ws.jsxFiles().filter((file) => inScope(ws.rel(file.getFilePath())));
 }
 
+/**
+ * Workspace-relative paths an `entry` can name, in the order the walk searches
+ * them.
+ *
+ * A caller that validates a user-supplied file before calling has to ask the
+ * same question {@link findEntryComponent} asks, or the two drift and a path
+ * one accepts is a path the other roots nothing at. Exported so nobody
+ * re-derives "which files count as an entry" from the outside.
+ */
+export function entryFileCandidates(
+	ws: Workspace,
+	options: TestIdTreeOptions = {},
+): string[] {
+	return selectFiles(ws, options).map((file) => ws.rel(file.getFilePath()));
+}
+
 function findEntryComponent(
 	ws: Workspace,
 	files: SourceFile[],

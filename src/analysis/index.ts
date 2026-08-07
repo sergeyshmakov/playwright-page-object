@@ -55,6 +55,7 @@ export {
 } from "./tsx/attributeCensus";
 export {
 	buildTestIdTree,
+	entryFileCandidates,
 	type TestIdTreeOptions,
 } from "./tsx/tree";
 export type * from "./types";

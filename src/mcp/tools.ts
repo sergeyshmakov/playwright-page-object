@@ -8,6 +8,7 @@ import {
 	type CoverageBucket,
 	type Diagnostic,
 	discoverPageObjects,
+	entryFileCandidates,
 	isCatchAllPattern,
 	nearestFiles,
 	nearestIds,
@@ -357,6 +358,42 @@ function lookupHint(
 	return undefined;
 }
 
+/**
+ * The `file` argument, resolved to the path the walk will root at.
+ *
+ * `TestIdTreeOptions.entry` is a path the engine looks for among the scanned
+ * JSX sources, and a path that matches none of them is not an error down there:
+ * the walk reports `entry-not-found` and falls back to a flat inventory of the
+ * whole scan. Through this tool that reads as "your scope was ignored, here is
+ * the entire repository" — one typo'd `file` in the field produced a `too_large`
+ * failure whose advice was to scope the call with `file`, which the caller had
+ * already done. So the same resolve-then-refuse the other two tools apply to
+ * their `file` argument happens here, against the very set the engine searches.
+ */
+function resolveEntryFile(
+	workspace: Workspace,
+	file: string,
+): { file: string; note?: string } {
+	const resolved = relativizeFile(workspace, file);
+	const candidates = entryFileCandidates(workspace);
+	const match = candidates.find((candidate) =>
+		sameFile(candidate, resolved.file),
+	);
+	if (!match) {
+		throw new ToolError(
+			"file_not_found",
+			`No scanned .tsx/.jsx source matches "${file}".`,
+			{
+				suggestions: nearestFiles(resolved.file, candidates),
+				hint: "Use one of the suggested paths, or pass `component` and let the server find the file. Only scanned .tsx/.jsx sources can root a tree: if the file is on disk but outside the scan, restart the server with --src-dir <dir> (or --project-root <dir>) covering it.",
+			},
+		);
+	}
+	// The scanned spelling, not the caller's: it is what `component` is filtered
+	// against below, and what the engine will match without a suffix search.
+	return { file: match, note: resolved.note };
+}
+
 export function handleGetTestIdTree(
 	workspace: Workspace,
 	args: z.infer<typeof getTestIdTreeInput>,
@@ -367,6 +404,9 @@ export function handleGetTestIdTree(
 	// out when they had simply asked for one level.
 	const depth = args.depth;
 	const followComponents = args.followComponents;
+	// Before anything reads it, and whatever the call goes on to ask for: a
+	// `file` naming nothing is the caller's mistake in every branch.
+	const scope = args.file ? resolveEntryFile(workspace, args.file) : undefined;
 
 	if (args.testId) {
 		// A lookup answers from the flat inventory, which is complete whatever the
@@ -423,11 +463,11 @@ export function handleGetTestIdTree(
 		);
 	}
 
-	let entry = args.file;
+	let entry = scope?.file;
 	let entryComponent: string | undefined;
 	let requested: ComponentInfo | undefined;
 	let siblings: ComponentInfo[] = [];
-	const scopeFile = args.file;
+	const scopeFile = scope?.file;
 	if (args.component) {
 		const probe = buildTestIdTree(workspace, {
 			attribute: args.attribute,
@@ -509,6 +549,7 @@ export function handleGetTestIdTree(
 		attribute: tree.attribute,
 		attributeSource: tree.attributeSource,
 		playwrightConfig: configFileOf(workspace),
+		note: scope?.note,
 		fidelity: tree.fidelity,
 		fidelityReason: tree.fidelityReason,
 		truncated: tree.truncated,

@@ -584,6 +584,112 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	// A typo'd `file` used to be discarded in silence: the entry matched nothing,
+	// the walk fell back to a flat inventory of the whole scan, and a real app
+	// answered `too_large` with advice to scope the call with `file` — which the
+	// caller had just done. An agent loops there.
+	it("rejects a typo'd get_testid_tree file with ranked suggestions", async () => {
+		await withProject(
+			"ppo-testid-file-typo-",
+			{
+				"src/components/GuestItem/GuestItemInfo.tsx": [
+					"export function GuestItemInfo() {",
+					'\treturn <div data-testid="GuestItemBox"><span data-testid="GuestName" /></div>;',
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					'import { GuestItemInfo } from "./components/GuestItem/GuestItemInfo";',
+					"export function App() {",
+					'\treturn <main data-testid="AppRoot"><GuestItemInfo /></main>;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client, root) => {
+				const typo = await callTool(client, "get_testid_tree", {
+					file: "src/components/GuestItem/GuestItemInf.tsx",
+				});
+
+				expect(typo.isError).toBe(true);
+				expect(typo.envelope.error?.code).toBe("file_not_found");
+				expect(typo.envelope.error?.suggestions).toContain(
+					"src/components/GuestItem/GuestItemInfo.tsx",
+				);
+				expect(
+					JSON.stringify(typo.envelope),
+					"a scope that matched nothing must not ship the whole-app inventory",
+				).not.toContain("AppRoot");
+
+				// The suggested path has to work, and has to still scope the walk.
+				const good = await callTool(client, "get_testid_tree", {
+					file: "src/components/GuestItem/GuestItemInfo.tsx",
+				});
+				expect(good.isError).toBe(false);
+				const serialized = JSON.stringify(good.envelope.data);
+				expect(serialized).toContain("GuestName");
+				expect(serialized).not.toContain("AppRoot");
+
+				// Agents paste the path their editor shows them, here too.
+				const absolute = await callTool(client, "get_testid_tree", {
+					file: path.join(
+						root,
+						"src",
+						"components",
+						"GuestItem",
+						"GuestItemInfo.tsx",
+					),
+				});
+				expect(absolute.isError).toBe(false);
+				expect(String(absolute.envelope.meta?.note)).toContain(
+					"src/components/GuestItem/GuestItemInfo.tsx",
+				);
+			},
+		);
+	}, 30_000);
+
+	// Two more paths that root nothing, both of which used to answer with a flat
+	// inventory of everything instead of saying so.
+	it("refuses a get_testid_tree file the scan never saw, naming the scope", async () => {
+		await withProject(
+			"ppo-testid-file-scope-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <main data-testid="AppRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+				"src/util/format.ts": "export const format = (x: string) => x;\n",
+				"legacy/Old.tsx": [
+					"export function Old() {",
+					'\treturn <div data-testid="OldBox" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				// On disk, but outside the scanned scope: the fix is the server's
+				// scope, not another path, so the hint has to say that.
+				const unscanned = await callTool(client, "get_testid_tree", {
+					file: "legacy/Old.tsx",
+				});
+				expect(unscanned.isError).toBe(true);
+				expect(unscanned.envelope.error?.code).toBe("file_not_found");
+				expect(String(unscanned.envelope.error?.hint)).toContain("--src-dir");
+
+				// Scanned, but a .ts file cannot root a tree.
+				const notJsx = await callTool(client, "get_testid_tree", {
+					file: "src/util/format.ts",
+				});
+				expect(notJsx.isError).toBe(true);
+				expect(notJsx.envelope.error?.code).toBe("file_not_found");
+				expect(String(notJsx.envelope.error?.message)).toContain(".tsx");
+			},
+			{ srcDirs: ["src"] },
+		);
+	}, 30_000);
+
 	// This used to fail with `ambiguous_component`: the engine could only root a
 	// file at its *first* component, so a sibling that nothing rendered was
 	// unreachable and the handler had to refuse rather than answer with Alpha.
