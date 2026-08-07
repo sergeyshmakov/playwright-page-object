@@ -76,6 +76,17 @@ describe("buildCoverageReport", () => {
 		expect(dead?.nearestTestIds).toContain("PromoCodeInput");
 	});
 
+	// The caveat is evidence, not decoration: a run that saw the whole UI must
+	// not hedge, or the flag stops meaning anything where it does appear.
+	it("does not caveat a dead selector when the scan saw everything", () => {
+		expect(result.scope.externalComponentTags).toBe(0);
+		const dead = result.deadSelectors.find(
+			(entry) => entry.memberPath === "HomePage.Typo",
+		);
+		expect(dead?.scopeIncomplete).toBeUndefined();
+		expect(result.summary.deadSelectors).toBe(result.deadSelectors.length);
+	});
+
 	it("keeps role selectors out of the dead bucket", () => {
 		expect(
 			result.nonTestIdSelectors.map((entry) => entry.memberPath),
@@ -700,6 +711,46 @@ describe("buildCoverageReport — component tags from outside the scan", () => {
 		expect(scope?.severity).toBe("warning");
 		expect(scope?.message).toContain("@design/ui");
 		expect(scope?.message).not.toContain("monorepo");
+	});
+
+	// The global warning is the remediation; the flag is what an agent reading
+	// one entry — or a list `limit` cut short — actually has in front of it.
+	it("carries the caveat on every dead entry, typo discriminator intact", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({
+				...EXTERNAL,
+				"e2e/AppPage.ts": [
+					'import type { Locator } from "@playwright/test";',
+					libImport("RootPageObject", "RootSelector", "Selector"),
+					"@RootSelector()",
+					"export class AppPage extends RootPageObject {",
+					'  @Selector("InsideGapped")',
+					"  accessor Hidden!: Locator;",
+					'  @Selector("Locl")',
+					"  accessor Typo!: Locator;",
+					"}",
+				].join("\n"),
+			}),
+		);
+
+		expect(result.deadSelectors).toHaveLength(2);
+		expect(result.summary.deadSelectors).toBe(2);
+		expect(
+			result.deadSelectors.every((entry) => entry.scopeIncomplete === true),
+			"the scan is what is incomplete, so the caveat is uniform",
+		).toBe(true);
+
+		// Same flag, two different readings, and the discriminator is the one
+		// piece of per-entry evidence that is real.
+		const byPath = (memberPath: string) =>
+			result.deadSelectors.find((entry) => entry.memberPath === memberPath);
+		expect(byPath("AppPage.Hidden")?.nearestTestIds).toEqual([]);
+		expect(byPath("AppPage.Typo")?.nearestTestIds).toContain("Local");
+
+		const scope = result.warnings.find(
+			(entry) => entry.code === "ui-scope-incomplete",
+		);
+		expect(scope?.message).toContain("scopeIncomplete");
 	});
 
 	it("does not count a relative import as a boundary", () => {

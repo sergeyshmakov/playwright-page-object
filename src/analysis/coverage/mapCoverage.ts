@@ -10,6 +10,7 @@ import type {
 	SelectorUsage,
 	SourceLoc,
 	TestIdOccurrence,
+	TestIdTree,
 	UiTestId,
 	UnknownSelectorEvidence,
 	UnknownTestId,
@@ -65,6 +66,17 @@ const RAW_CALL_MARKER = "TestId";
 
 /** Evidence entries are for reading, not for exhaustive enumeration. */
 const MAX_EVIDENCE_IDS = 5;
+
+/**
+ * Whether this run knows its view of the UI is partial.
+ *
+ * One definition, read twice: it gates the `ui-scope-incomplete` warning and it
+ * stamps every dead selector. A per-entry flag that could disagree with the
+ * warning it points the reader at would be worse than no flag at all.
+ */
+function uiScopeIncomplete(uiTree: TestIdTree): boolean {
+	return uiTree.stats.externalComponentTags > 0;
+}
 
 export interface InventoryPartition {
 	/** Ids proven to reach the DOM, grouped. Only these are matchable. */
@@ -524,6 +536,8 @@ export function buildCoverageReport(
 	const coveredUi = new Set<UiTestId>();
 	const speculativeCredit = new Map<UiTestId, string[]>();
 	let unprovenSelectors = 0;
+	// A property of the run, not of any one selector, so it is read once.
+	const scopeIncomplete = uiScopeIncomplete(uiTree);
 
 	for (const usage of testIdUsages) {
 		const selector = { testId: usage.testId, pattern: usage.pattern };
@@ -612,6 +626,12 @@ export function buildCoverageReport(
 				usage.testId ?? usage.pattern?.literalPrefix ?? "",
 				renderedIndex.byId.keys(),
 			),
+			// The caveat travels with the entry. At app scale most dead selectors
+			// were artifacts of a scope that never saw the sibling package their id
+			// renders in, and an agent reading one entry — or a list `limit` cut —
+			// had nothing on it to say so. Uniform across the run: see the field's
+			// own JSDoc for why guessing a per-entry culprit would be a lie.
+			...(scopeIncomplete ? { scopeIncomplete: true as const } : {}),
 		});
 	}
 	deadSelectors.sort((a, b) => a.memberPath.localeCompare(b.memberPath));
@@ -843,7 +863,7 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 		);
 	}
 
-	if (inputs.uiTree.stats.externalComponentTags > 0) {
+	if (uiScopeIncomplete(inputs.uiTree)) {
 		const modules = inputs.uiTree.externalModules;
 		out.push(
 			inputs.deadCount > 0
@@ -889,9 +909,16 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 
 function scopeMessage(inputs: WarningInputs, modules: string[]): string {
 	const named = modules.length > 0 ? modules.join(", ") : "unresolved modules";
+	// Only when there are entries to have been stamped: promising a flag on an
+	// empty list sends a reader looking for something that is not there.
+	const flagged =
+		inputs.deadCount > 0
+			? ` All ${inputs.deadCount} entr${inputs.deadCount === 1 ? "y" : "ies"} in deadSelectors carry scopeIncomplete for this reason — read them as unverified, and start with the ones whose nearestTestIds is empty.`
+			: "";
 	return (
 		`${inputs.uiTree.stats.externalComponentTags} component tag(s) come from ${modules.length} module(s) outside the scanned sources (${named}). ` +
 		"Test ids rendered inside them are invisible here, so an id may exist without appearing in this report and a selector for one reads as dead. " +
-		"If those modules are part of this repository, re-run with the scan rooted where they live, or with their directories added to the scanned sources."
+		"If those modules are part of this repository, re-run with the scan rooted where they live, or with their directories added to the scanned sources." +
+		flagged
 	);
 }

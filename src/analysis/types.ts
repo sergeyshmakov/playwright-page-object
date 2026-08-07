@@ -785,6 +785,24 @@ export interface CoverageReport {
 		text: string;
 		origin: SelectorOrigin;
 		nearestTestIds: string[];
+		/**
+		 * The scan could not see all the UI this repository renders, so **read
+		 * "dead" as "unverified"**: component tags resolve to modules outside the
+		 * scanned sources (`scope.externalComponentModules` names them, and the
+		 * `ui-scope-incomplete` warning says how many). The id may well be rendered
+		 * inside one of them. Set on every entry of a run that has that evidence,
+		 * and absent entirely from a run that does not.
+		 *
+		 * Uniform on purpose. Nothing statically ties one selector to one unscanned
+		 * module — a page object imports no components, it names strings — so a
+		 * per-entry discriminator would be a guess wearing the clothes of evidence.
+		 * The discriminator that *is* evidence sits next to it: `nearestTestIds`
+		 * non-empty reads as a rename or a typo, empty alongside this flag reads as
+		 * an artifact of the scope. The flag also survives truncation, which the
+		 * warning does not — a caller reading one entry, or a list capped by
+		 * `limit`, still sees the caveat.
+		 */
+		scopeIncomplete?: true;
 	}>;
 	nonTestIdSelectors: Array<{
 		kind: SelectorKind;
