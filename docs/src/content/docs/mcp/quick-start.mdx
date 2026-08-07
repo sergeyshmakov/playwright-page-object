@@ -1,33 +1,40 @@
 ---
-title: Quick Start
-description: Install the MCP server, register it in Claude Code, Cursor, VS Code or Codex CLI, and see the first three calls an agent makes.
+title: Set Up the Playwright Page Object MCP Server
+description: Install and connect the Playwright page-object MCP server to Claude Code, Cursor, VS Code, or Codex CLI, then verify its tools.
+head:
+  - tag: title
+    content: Playwright Page Object MCP Setup Guide
 ---
 
-## Install
+Install `playwright-page-object`, verify its CLI, and register one stdio command in your MCP client. The default command discovers the Playwright config, TypeScript config, page objects, and test-ID attribute for most repositories. Add flags only when your app lives outside that detected scope.
 
-The package must be installed for `npx` to resolve the local bin:
+## 1. Install the package
+
+Install the package in the repository so `npx` uses the version pinned by your lockfile and does not need to download anything when the MCP client starts:
 
 ```bash
 npm install -D playwright-page-object
 ```
 
-## Verify
+The package requires Node.js 20 or later. See [Installation](/getting-started/installation/) for the full library requirements.
 
-Run the server's help before you wire it into a client. It prints in well under a second, because the analysis engine loads only when the server actually starts:
+## 2. Verify the CLI
+
+Run the help command before wiring the server into a client. The analysis engine loads only when the server starts, so this check does not scan your project:
 
 ```bash
 npx playwright-page-object mcp --help
 ```
 
-You should see the flag list. If that command fails, no client will be able to start the server either, and the error is easier to read here than in a client log.
+You should see the available flags. If this command fails, fix that error first; terminal output is usually easier to read than an MCP client log.
 
-## Register the server
+## 3. Register the server in your MCP client
 
-The server speaks stdio. Any MCP client can run it; only the config file shape differs.
+The server uses the MCP stdio transport. Choose your client below and add the matching configuration.
 
 ### Claude Code
 
-Committed and project-scoped, so the whole team gets it. Create `.mcp.json` at the repository root:
+For a project-scoped configuration that the team can share, create `.mcp.json` at the repository root:
 
 ```json
 {
@@ -87,12 +94,14 @@ command = "npx"
 args = ["playwright-page-object", "mcp"]
 ```
 
-### Two spawn caveats
+## What if the client cannot start `npx`?
 
-- **Running without installing first.** Use `npx -y playwright-page-object mcp`. The `-y` matters: a stdio server has no TTY to answer npx's install prompt, and without it the handshake hangs.
-- **Windows.** Clients that spawn the command without a shell cannot execute the `npx` shim. Use `"command": "cmd"` with `"args": ["/c", "npx", "playwright-page-object", "mcp"]`.
+Two common spawn problems happen before the MCP handshake:
 
-If your repository is not the client's working directory, or the app you want analysed is one package of a monorepo, add `--project-root`:
+- If you intentionally skip local installation, use `npx -y playwright-page-object mcp`. A stdio process has no terminal for the npm install prompt, so omitting `-y` can leave the client waiting.
+- On Windows, a client that cannot execute the `npx.cmd` shim may report that the command was not found. Use `"command": "cmd"` with `"args": ["/c", "npx", "playwright-page-object", "mcp"]` for that client.
+
+If your repository is not the client's working directory, or the app you want analyzed is one package of a monorepo, add `--project-root`:
 
 ```json
 {
@@ -107,11 +116,15 @@ If your repository is not the client's working directory, or the app you want an
 
 See [Configuration](/mcp/configuration/) for the rest of the flags.
 
-## The first three calls
+## 4. Confirm the four tools are available
 
-These are real responses from the [example checkout app](https://github.com/sergeyshmakov/playwright-page-object/tree/main/example) in this repository, pretty-printed and abbreviated. On the wire every response is a single compact-JSON text block.
+Reload the MCP configuration or start a new client session, then open the client's tool list. You should see `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, and `map_coverage`. If none appear, run the same command in a terminal and follow the [startup troubleshooting](/mcp/troubleshooting/#why-wont-the-mcp-server-start).
 
-### 1. What page objects already exist
+## What should an agent call first?
+
+Start with the page-object index, inspect the relevant class, and then check the component's test IDs. The examples below are abbreviated responses from this repository's [checkout example](https://github.com/sergeyshmakov/playwright-page-object/tree/main/example). On the wire, each response is a single compact JSON text block.
+
+### 1. Which page objects already exist?
 
 An agent calls `list_page_objects` before it globs anything, and before it creates a page object that may already exist:
 
@@ -147,9 +160,9 @@ An agent calls `list_page_objects` before it globs anything, and before it creat
 }
 ```
 
-Six classes, no files read. `meta.attribute` and `meta.attributeSource` say which test-id attribute every later answer will be read with.
+The server found six classes in one call, so the agent does not have to open each file. `meta.attribute` and `meta.attributeSource` show which test-ID attribute the analysis used.
 
-### 2. What one page object exposes
+### 2. What does one page object expose?
 
 `get_page_object_tree` with `{"class": "CheckoutPage", "format": "outline"}` returns the selector tree as indented text, which costs fewer tokens than JSON:
 
@@ -169,9 +182,9 @@ CheckoutPage (rootPageObject)  @testId "CheckoutPage"  e2e/page-objects/Checkout
   methods: applyPromoCode(code: string), expectCartEmpty(), expectCartHasItemCount(n: number)
 ```
 
-The chain `checkoutPage.CartItems.first().RemoveButton` falls straight out of that, and so does the fact that `applyPromoCode(code)` already exists and does not need reimplementing.
+The response shows both `checkoutPage.CartItems.first().RemoveButton` and the existing `applyPromoCode(code)` method. The agent can reuse them instead of rebuilding either path.
 
-### 3. What the app actually renders
+### 3. Which test IDs does static analysis find?
 
 `get_testid_tree` with `{"format": "outline"}` walks from the app entry:
 
@@ -196,9 +209,10 @@ The chain `checkoutPage.CartItems.first().RemoveButton` falls straight out of th
             Remove  button  src/components/CartItem.tsx:13 (conditional, repeated)
 ```
 
-A leading `-` marks a node with no test id. `CartItem_*` is a template-literal id reported as a pattern with the source expression, which is exactly why `@ListSelector("CartItem_")` is the right decorator for the rows. `meta.fidelity` on that response is `"full"`, so absence from this tree really does mean the id is not rendered.
+A leading `-` marks a node with no test ID. `CartItem_*` is a template-literal ID reported as a pattern with its source expression, which explains why the rows use `@ListSelector("CartItem_")`. This response has `meta.fidelity: "full"`, so the tree has no unresolved component boundary under its root.
 
 ## Next
 
-- [Tools](/mcp/tools/) for every parameter and the error codes.
-- [Troubleshooting](/mcp/troubleshooting/) if the first call comes back empty or with a warning.
+- Read the [tool reference](/mcp/tools/) for every parameter and error code.
+- Use [Troubleshooting](/mcp/troubleshooting/) if the first call is empty or includes a warning.
+- Return to the [MCP overview](/mcp/) for the recommended workflow and the difference from browser automation.

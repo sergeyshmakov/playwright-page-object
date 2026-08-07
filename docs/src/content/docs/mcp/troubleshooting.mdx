@@ -1,11 +1,19 @@
 ---
-title: Troubleshooting
-description: Symptom-first fixes for empty results, wrong test-id attributes, ambiguous configs, oversized responses and partial trees.
+title: MCP Server Troubleshooting
+description: Fix empty scans, wrong test-ID attributes, partial trees, ambiguous configs, oversized responses, and MCP server startup errors.
 ---
 
-Read `meta.warnings` and `meta.hint` first. The server ranks warnings by how badly they invalidate the answer, and an environment problem is prepended to the hint ahead of any per-tool advice.
+Start with `meta.warnings` and `meta.hint`. They tell you whether the result is unreliable, incomplete, or only too large. Then check `meta.attribute`, `meta.attributeSource`, and `meta.playwrightConfig` before changing a selector. If those values look right, match the error or symptom to a section below.
 
-## "No page objects found"
+| Symptom | Go to |
+| --- | --- |
+| `list_page_objects` returns no classes | [No page objects](#why-did-list_page_objects-return-no-page-objects) |
+| Every test-ID selector looks dead | [Wrong attribute or scope](#why-does-map_coverage-say-every-selector-is-dead) |
+| The client cannot start the server | [Startup errors](#why-wont-the-mcp-server-start) |
+| A test-ID tree is partial | [Tree fidelity](#what-does-fidelity-partial-mean) |
+| A response exceeds the cap | [Large responses](#how-do-i-fix-a-too_large-response) |
+
+## Why did `list_page_objects` return no page objects?
 
 `list_page_objects` returned an empty array with `meta.total: 0`.
 
@@ -21,7 +29,7 @@ An index that is genuinely empty has two usual causes. Either the page objects a
 
 Check `meta.scanned` in the same response. A small number there means the scope is wrong, not the discovery.
 
-## Every selector looks dead, and the attribute is wrong
+## Why does `map_coverage` say every selector is dead?
 
 This is the failure the server works hardest to prevent, because it is silent. Read the attribute the analysis used before you believe any answer:
 
@@ -45,18 +53,18 @@ This is the failure the server works hardest to prevent, because it is silent. R
 
 Walk it in this order:
 
-1. **`data.candidate`** names the attribute your sources actually use, with its occurrence count. That is the answer most of the time.
-2. **`attributeSource`** says which layer picked the wrong name. `param` means your own `--attribute` flag or a per-call argument. `playwright-config` means a config was read; `meta.playwrightConfig` names it, and it may not be the config your tests run with. `default` means nothing set the key and `data-testid` was assumed.
-3. **Fix the source, not the symptom.** Prefer `--playwright-config <file>` pointing at the config that really sets `use.testIdAttribute`, so the server keeps tracking it. Use `--attribute <name>` when the value is computed and cannot be read statically.
+1. `data.candidate` names the attribute your sources probably use and includes its occurrence count.
+2. `attributeSource` says which layer picked the wrong name. `param` means your `--attribute` flag or a per-call argument. `playwright-config` means a config was read; `meta.playwrightConfig` names it. `default` means nothing set the key and `data-testid` was assumed.
+3. Prefer `--playwright-config <file>` pointing at the config that sets `use.testIdAttribute`, so the server keeps tracking it. Use `--attribute <name>` when the value is computed and cannot be read statically.
 
 Two related warnings mean the same class of problem:
 
-- `attribute-no-evidence` — the attribute appears nowhere and nothing else stood out. Either the scope does not contain the UI, or the name is wrong.
-- `testid-attribute-unresolved` — the config writes the key but not as a string literal. The server will not execute your config to find out. Pass `--attribute`.
+- `attribute-no-evidence`: the attribute appears nowhere and nothing else stood out. Either the scope does not contain the UI, or the name is wrong.
+- `testid-attribute-unresolved`: the config writes the key but not as a string literal. The server will not execute your config to find out. Pass `--attribute`.
 
 Until the attribute is right, treat `map_coverage` output as unusable. `summary.coverage` is `null` rather than a score when nothing was matchable, and a `no-matchable-testids` warning explains why.
 
-## "Several Playwright configs were found"
+## Why were several Playwright configs found?
 
 `playwright-config-ambiguous` lists what was found and names what was read. Its severity tells you how much to care: informational when an attribute did resolve, a warning when none did and `data-testid` was assumed.
 
@@ -68,12 +76,12 @@ npx playwright-page-object mcp --playwright-config e2e/playwright.ci.config.ts
 
 Two more warnings can appear here:
 
-- `testid-attribute-inherited` — the chosen config does not set the attribute, and it was read from a merge layer, an imported base, or a sibling config. The message names the file. Confirm it is the one your tests use.
-- `testid-attribute-conflict` — two configs disagree. The server used one and named both. Pin the right one with `--playwright-config`.
+- `testid-attribute-inherited`: the chosen config does not set the attribute, and it was read from a merge layer, an imported base, or a sibling config. The message names the file. Confirm it is the one your tests use.
+- `testid-attribute-conflict`: two configs disagree. The server used one and named both. Pin the right one with `--playwright-config`.
 
 Remember that `--playwright-config` turns discovery off completely, sibling probe included.
 
-## The server refuses to start
+## Why won't the MCP server start?
 
 The client shows a failed server with no detail. Run the same command in a terminal:
 
@@ -86,7 +94,7 @@ The four checks are `--project-root` being a directory, `--tsconfig` and `--play
 
 If the command prints help instead of starting, the `mcp` subcommand is missing from `args`. If it hangs with no output at all, the client is spawning `npx` without `-y` and npx is waiting on an install prompt that has no TTY to answer it.
 
-## `ambiguous_component` and `incomplete_tree`
+## How do I resolve `ambiguous_component` or `incomplete_tree`?
 
 Both come from `get_testid_tree` addressing a component by name.
 
@@ -96,11 +104,11 @@ Both come from `get_testid_tree` addressing a component by name.
 
 `file_not_found` from the same tool means no component with that name exists in the scanned sources, or none exists in the `file` you named. Drop `file` to search everywhere, or drop both to start from the auto-detected app entry.
 
-## `fidelity: "partial"` — what now
+## What does `fidelity: "partial"` mean?
 
-A partial tree is the normal answer for a real application. It means the walk ran and `roots` is real, but at least one subtree is missing or its placement is unproven. `meta.fidelityReason` counts the holes and names their codes.
+A partial tree means the walk found a root but could not place or expand every subtree. `meta.fidelityReason` counts the gaps and names their codes.
 
-The rule that matters: **absence from a partial tree is not proof the id is not rendered.** `meta.hint` says which argument closes the gap.
+Absence from a partial tree is not proof that a test ID cannot reach a host element. `meta.hint` says which argument may close the gap.
 
 | `fidelityReason` mentions | Next call |
 | --- | --- |
@@ -114,45 +122,46 @@ To settle one specific id regardless of the tree, use the lookup form: `{"testId
 
 `fidelity: "flat"` is different. No entry component could be rooted, `roots` is empty, and only `inventory` is meaningful. Address a component or a file explicitly, or work from the inventory.
 
-## "Response is N bytes (cap 40000)"
+## How do I fix a `too_large` response?
 
-`too_large` is not a failure of your query, it is a request to narrow it. Each tool's hint names the knobs that tool actually has:
+`too_large` means the serialized response exceeded the 40,000-character cap. Use the narrowing options that match the call mode:
 
 | Tool | Knobs, cheapest first |
 | --- | --- |
 | `list_page_objects` | A lower `limit`, a narrower `filter`, or page with `offset` following `meta.nextOffset` |
 | `get_page_object_tree` | `format: "outline"`, then a lower `depth`, then `includeMethods: false` |
-| `get_testid_tree` | `format: "outline"`, then a lower `depth`, then scope with `file` or `component` |
+| `get_testid_tree` tree | `format: "outline"`, then a lower `depth`, then scope with `file` or `component` |
+| `get_testid_tree` lookup | No per-call size control; narrow the server scope with `--src-dir` or `--project-root` |
 | `map_coverage` | A lower `limit`, fewer `buckets`, or `includeUnused: false` |
 
-Switching format is usually enough on its own. It costs no information you were going to parse.
+Switching to `outline` is often enough for a model-readable tree. The outline omits visibility, JSDoc, column numbers, and some structured fields, so keep JSON when another program will parse the response.
 
-## Dead selectors that are not dead
+## Why can `deadSelectors` contain live selectors?
 
-`deadSelectors` means the selector's test id is rendered nowhere the server could see. That is a strong claim, and there are four honest reasons it can be wrong.
+`deadSelectors` means no host-element test ID in the scanned source matched the page-object test-ID selector. Check the evidence before deleting it because the scan can still be incomplete.
 
-- **Scope.** The component lives outside the scanned sources. Look for `ui-scope-incomplete` in `meta.warnings` and for `scope.externalComponentModules`, which names the modules supplying component tags the scan could not resolve. A shared UI package in a monorepo produces exactly this.
-- **Dynamic ids.** The element builds its id at runtime, so it lands in `unknownTestIds` with reason `dynamic-value` rather than on the rendered side. A selector whose literal appears inside that expression is reported as unknown, not dead.
-- **Forwarding.** The id is written on a component tag and nothing proved it reaches a host element. Check for `testid-forwarding-unproven`, and for `forwarding-unproven-widespread` if it happens across your suite. If your components forward as a rule, restart with [`--assume-forwarded`](/mcp/configuration/#assuming-prop-forwarding).
-- **The attribute.** See above. A wrong attribute makes every test-id selector dead at once, which is the tell.
+- Scope: the component lives outside the scanned sources. Look for `ui-scope-incomplete` in `meta.warnings` and for `scope.externalComponentModules`, which names modules supplying component tags the scan could not resolve. A shared UI package in a monorepo can cause this.
+- Dynamic IDs: the element builds its ID at runtime, so it lands in `unknownTestIds` with reason `dynamic-value`. A selector whose literal appears inside that expression is reported as unknown, not dead.
+- Forwarding: the ID is written on a component tag and nothing proved it reaches a host element. Check for `testid-forwarding-unproven` and `forwarding-unproven-widespread`. If your components forward as a rule, restart with [`--assume-forwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding).
+- Attribute: a wrong attribute makes every test-ID selector look dead at once. Check the resolved attribute and its source first.
 
-Going the other way, an id in `uncoveredTestIds` means no *page object* selects it. It does not mean nothing tests it. Pass `includeRawLocators: true` to sweep direct `getByTestId` calls too before concluding an id is unused. The `raw-locators-disabled` warning says so on every response that did not.
+An ID in `uncoveredTestIds` has no matching page-object test-ID selector. It may still be reached by role, text, or another non-test-ID selector. Direct `getByTestId` calls are excluded by default, so pass `includeRawLocators: true` before concluding that an ID is unused. The `raw-locators-disabled` warning marks reports that skipped that sweep.
 
 Ids whose pattern matches everything are quarantined rather than counted, under `unanchored-testid-pattern`. Counted, a single `data-testid={someVariable}` would make every selector in the project look covered and empty the dead list entirely. Give those elements a literal prefix to make them matchable.
 
-## Nothing was scanned
+## Why did the server scan no files?
 
-`scope-empty` means no JSX or TSX file was in the analysed scope, so no rendered test id can be found and every selector will look unmatched. The count in `meta.scanned` confirms it.
+`scope-empty` means no JSX or TSX file was in the analyzed scope, so no host-element test ID can be found and every selector will look unmatched. `get_testid_tree` reports the count in `meta.scanned`; `map_coverage` reports it as `data.scope.uiFilesScanned`.
 
 Causes, in order of likelihood: `--project-root` points at the e2e package rather than at the repository, `--src-dir` narrows to a directory that holds only specs, or the UI is a framework the JSX scanner does not read. The scanner handles `.tsx` and `.jsx`; Vue SFCs, Svelte and Angular templates are not scanned.
 
-`scope-dir-missing` is the narrower case: a scanned directory is not on disk. A non-glob `--src-dir` in that state stops the server at startup, so this warning generally means a glob or an exclusion resolved to nothing.
+`scope-dir-missing` means a plain directory that existed when the server started has since disappeared. A missing non-glob `--src-dir` is rejected at startup, while a glob that matches nothing does not emit this warning.
 
-## Reading the server's own logs
+## How do I read MCP server logs?
 
 stdout carries the JSON-RPC stream and nothing else, ever. Everything the server has to say about itself goes to stderr, so `--log-level debug` is safe with any client and will not corrupt the protocol.
 
-Tool failures are returned in band, as `{"ok": false, "error": {…}}` with the MCP `isError` flag, and never as JSON-RPC transport errors. An agent can recover from the first and cannot recover from the second. If your client reports a transport-level failure, the problem is the spawn, not the tool call. Check the `-y` and Windows `cmd /c` caveats in the [Quick Start](/mcp/quick-start/#two-spawn-caveats).
+Tool failures are returned in band, as `{"ok": false, "error": {…}}` with the MCP `isError` flag, and not as JSON-RPC transport errors. If your client reports a transport-level failure, the problem happened before or outside the tool call. Check the `-y` and Windows `cmd /c` guidance in the [Quick Start](/mcp/quick-start/#what-if-the-client-cannot-start-npx).
 
 ## See also
 

@@ -1,6 +1,9 @@
 ---
-title: "An MCP Server for Playwright Page Objects"
-description: "playwright-page-object ships a local MCP server: four tools that give AI agents your page-object graph and real test ids. One command to set up."
+title: "Why AI Agents Guess Playwright Selectors, and How MCP Helps"
+description: "Why AI agents invent Playwright selectors, and how four local MCP tools expose page-object graphs and JSX/TSX test IDs before coding."
+head:
+  - tag: title
+    content: "Why AI Agents Guess Playwright Selectors | POM MCP"
 date: 2026-08-06
 authors: sergei
 tags:
@@ -11,35 +14,46 @@ tags:
   - Test Automation
 ---
 
-*Last updated: 2026-08-06 · by Sergei Shmakov*
+*Last updated: 2026-08-07 · by Sergei Shmakov*
 
-`playwright-page-object` now ships a local [MCP](https://modelcontextprotocol.io/) server. Run `npx playwright-page-object mcp` and any MCP client (Claude Code, Cursor, VS Code, Codex CLI) gets four read-only tools that statically analyze your test suite: the full graph of your Playwright page objects, and the tree of test ids your app actually renders. The agent stops reading page-object files one by one, and it stops inventing selectors that don't exist.
+AI agents guess Playwright selectors when they cannot see the Page Object Model (POM) relationships and test IDs already declared in a repository. The local `playwright-page-object` [MCP](https://modelcontextprotocol.io/) server exposes both through four read-only static-analysis tools. Run `npx playwright-page-object mcp` from a stdio MCP client to query page-object classes and JSX or TSX test IDs before editing a test.
 
-Everything is static analysis of source code. No browser, no code execution, no network. Setup is one JSON block, and the whole thing is part of the same MIT-licensed package you already install for the [decorators](/getting-started/quick-start/).
+The analyzer reads source with [ts-morph](https://ts-morph.com/). It does not launch a browser, execute project code, or make network requests. It returns compact results to your MCP client, which controls where those results are processed. The server ships in the same MIT-licensed package as the [page-object decorators](/getting-started/quick-start/).
 
 ## Why do AI agents write bad Playwright tests?
 
-Two reasons: they can't see your page-object graph without reading every file, and they can't see your rendered test ids at all. So an agent asked to "test the promo flow" reads five files transitively, burns a few thousand tokens, and then writes `getByTestId("promo-input")` for an app whose real id is `PromoCodeInput`.
+Two gaps lead to bad selectors: the agent has not followed your page-object graph, and it has not opened the components that declare your test IDs. Asked to "test the promo flow," it may read several files and still write `getByTestId("promo-input")` for an app whose source declares `PromoCodeInput`.
 
 The first failure is cost. A chain like `checkoutPage.CartItems.first().RemoveButton` spans three classes in three files, and the agent has to load all of them into context to learn it exists. Repeat that for every task, every session.
 
-The second failure is worse because it looks like success. The agent writes a plausible selector, the test compiles, and it fails at runtime with a timeout. Nothing in the agent's context ever contained the real `data-testid` values, so it guessed. Playwright's own [test-id guidance](https://playwright.dev/docs/locators#locate-by-test-id) assumes a human who can open the component and look. Agents skip that step unless you force it.
+The second failure is harder to spot because the code looks valid. The agent writes a plausible selector, the test compiles, and it fails at runtime with a timeout. Nothing in the agent's context contained the real `data-testid` value. Playwright's [test-ID guidance](https://playwright.dev/docs/locators#locate-by-test-id) works when the author checks the component first; the MCP tool makes that check explicit for an agent.
 
 ## What does the playwright-page-object MCP server do?
 
-It exposes four read-only tools over the Model Context Protocol: `list_page_objects` (every decorated class with its file and root selector), `get_page_object_tree` (one class's full selector tree plus method signatures), `get_testid_tree` (the test ids your components render, with dynamic and conditional flags), and `map_coverage` (which rendered ids no page object references, and which selectors point at nothing).
+The server answers four source-level questions: which page objects exist, what one class exposes, which test IDs appear in a resolved component tree, and where page-object test-ID selectors disagree with UI source. Each answer comes from a focused MCP tool instead of a broad file search.
 
-The decorator API makes this possible. `@Selector("PromoCodeInput")` is a static, declarative fact in your source code, so the server can extract the entire selector graph with [ts-morph](https://ts-morph.com/) without executing anything. The same applies to the app side: `data-testid` attributes in TSX are right there in the AST, including template-literal ids like `` `CartItem_${item.id}` ``, which the server reports as the pattern `CartItem_*` instead of guessing.
+| Question | Tool |
+| --- | --- |
+| Which page objects already exist? | `list_page_objects` |
+| Which selectors and methods does one class expose? | `get_page_object_tree` |
+| Which test IDs does static analysis find in a component tree? | `get_testid_tree` |
+| Which page-object test-ID selectors match UI source? | `map_coverage` |
 
-Results reflect the files on disk at the moment of each call. The server re-checks modification times per request, so an agent editing your components sees its own changes on the next call without a restart.
+The decorator API makes the page-object side possible. `@Selector("PromoCodeInput")` is a static declaration, so the server can extract the selector graph without executing the class. On the app side, it reads `data-testid` attributes from JSX or TSX, including template literals such as `` `CartItem_${item.id}` ``, which become the pattern `CartItem_*` with the original expression attached.
 
-## How do I set it up in Claude Code, Cursor, or VS Code?
+The server checks tracked files on each call, so edits and deletions are visible without a restart. It searches for new files at most once per second.
 
-Install the package, then register the server in your client. For Claude Code, commit a `.mcp.json` at the repo root and the whole team gets it. Cursor uses the same shape in `.cursor/mcp.json`; VS Code uses a `servers` key in `.vscode/mcp.json`.
+## How is this different from Playwright MCP?
+
+Microsoft's [Playwright MCP](https://playwright.dev/docs/getting-started-mcp) drives a live browser through accessibility snapshots. This server never opens a browser. It analyzes page-object classes and JSX or TSX source so an agent can reuse existing test APIs and selectors while writing code. The two servers solve different parts of the same workflow.
+
+## How do I connect the MCP server to a coding agent?
+
+Install the package, then register its stdio command in your client. Claude Code can store project configuration in `.mcp.json`; Cursor uses the same shape in `.cursor/mcp.json`; VS Code uses a `servers` key in `.vscode/mcp.json`. The [quick start](/mcp/quick-start/) also includes Codex CLI and Windows setup.
 
 ```sh
-npm i -D playwright-page-object
-claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
+$ npm i -D playwright-page-object
+$ claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
 ```
 
 Or the committed file version:
@@ -55,11 +69,11 @@ Or the committed file version:
 }
 ```
 
-Zero-config covers more than the common layout. The server searches the whole repository for anything matching `playwright*.config.{ts,mts,cts,js,mjs,cjs}`, ranks the candidates (an exact `playwright.config.ts` first, then shallower paths), and reads the winner. It finds your `tsconfig.json` at the project root or next to the Playwright `testDir`. Monorepos point it at one app with `--project-root apps/web`. The full flag list is in [Configuration](/mcp/configuration/).
+Automatic discovery searches the repository for a Playwright config, uses its `testDir` when choosing a `tsconfig.json`, and falls back to `data-testid`. In a monorepo, point one server at one app with `--project-root apps/web`. See [Configuration](/mcp/configuration/) when you need to pin a config, override the attribute, or narrow the scan.
 
-## What does an agent actually get back?
+## What does the page-object tree return?
 
-Compact JSON built for context windows, not humans. Ask for `get_page_object_tree` with `{"class": "CheckoutPage"}` and the response contains every member, its selector, its resolved type, and nested controls expanded inline:
+`get_page_object_tree` returns one class's members, selectors, resolved types, available method signatures, and nested controls up to the requested depth. Ask for `{"class": "CheckoutPage"}` and one compact response replaces the manual walk across the related class files:
 
 ```json
 {
@@ -69,25 +83,31 @@ Compact JSON built for context windows, not humans. Ask for `get_page_object_tre
 }
 ```
 
-That one entry tells the agent three things it would otherwise read two files to learn: the member is a `ListPageObject`, rows match the `CartItem_` prefix, and each item is a `CartItemControl` (whose `RemoveButton` is in the same response). The chain `checkoutPage.CartItems.first().RemoveButton` falls out of the JSON directly.
+That entry identifies a `ListPageObject`, the `CartItem_` row prefix, and the `CartItemControl` item type. The expanded control definition also includes `RemoveButton`, so the agent can derive `checkoutPage.CartItems.first().RemoveButton` from one response.
 
-`map_coverage` is the tool I did not plan originally and now think earns its slot. Against this repo's own [example app](https://github.com/sergeyshmakov/playwright-page-object/tree/main/example) it reports that `ApplyPromoButton` is rendered but no page object references it by test id (both page objects reach that button by role). An agent that knows this stops writing a fifth way to click Apply. The same tool catches the reverse: a selector whose test id no component renders anymore, which is usually a rename you forgot to propagate, surfaced with nearest-match suggestions. Its six buckets, and what each one is allowed to claim, are in the [tool reference](/mcp/tools/).
+## How does coverage find selector drift?
 
-## How does the server know my test-id attribute?
+`map_coverage` compares page-object test-ID selectors with IDs found on host JSX elements. It separates matches, UI IDs without a page-object test-ID selector, selector IDs absent from visible source, and evidence static analysis cannot settle. Role, text, and label selectors stay in their own bucket because source-only analysis cannot prove them dead.
 
-It reads `use.testIdAttribute` statically, so `data-tid` and other custom attributes work without configuration. Real configs are rarely one literal, so the reader flattens the export into layers and reads across all of them: `defineConfig({ ...base })`, `defineConfig(merge(base, overrides))`, and a leaf config importing a shared base one directory up. If the chosen config says nothing about the attribute, it probes the other discovered configs and says which one it read it from. A computed value (an env var, a spread it couldn't follow) can't be read without executing your config, which the server refuses to do; it falls back to `data-testid` and tells you so. Pass `--attribute data-tid` to override explicitly, or `--playwright-config` to pin the file.
+Against this repository's [example app](https://github.com/sergeyshmakov/playwright-page-object/tree/main/example), `ApplyPromoButton` appears under `uncoveredTestIds` because both page objects reach that button by role, not by test ID. That does not mean the button is unused. The reverse case, a page-object test-ID selector with no corresponding host-element ID, lands in `deadSelectors` with nearest-match suggestions. The [tool reference](/mcp/tools/) defines all six buckets and their limits.
 
-Every tool response carries `attributeSource: "param" | "playwright-config" | "default"`, so when ids look wrong, one field tells you which layer picked the attribute.
+## How does the server know my test ID attribute?
 
-There is a second safety net, because a wrong attribute is the one error that produces confident nonsense rather than an error. Before any answer ships, the server counts occurrences of the resolved attribute in the scanned TSX. If there are none and some other hyphenated attribute is everywhere, the response carries an `attribute-mismatch` warning naming that attribute and its occurrence count, and a hint telling you exactly what to restart with. Zero of zero test ids covered used to read as a perfect coverage score; now it reads as `coverage: null` plus a warning.
+The server reads `use.testIdAttribute` from your Playwright config without executing it. A static value such as `data-tid` works automatically. A computed value cannot be resolved safely, so the server falls back to `data-testid`, adds a warning, and lets you set `--attribute data-tid` explicitly.
+
+The config reader follows common merge helpers, object spreads, and one imported base config. It can also probe another discovered config when the selected file does not set the attribute. The [configuration reference](/mcp/configuration/#how-does-the-server-choose-the-test-id-attribute) documents the precedence and diagnostics.
+
+Every successful response includes `meta.attributeSource` as `"param"`, `"playwright-config"`, or `"default"`. The server also checks whether the chosen attribute appears in the scanned JSX or TSX. If another hyphenated attribute is a stronger candidate, it returns an `attribute-mismatch` warning. Coverage is `null` when no test IDs are matchable.
 
 ## Where does static analysis fall short?
 
-Anything not statically resolvable is reported as `dynamic` with its source text, never guessed. That covers computed selector arguments, `@SelectorBy(fn)` custom functions, spread props, and prop forwarding deeper than one hop. Role and text selectors can't be checked against rendered markup at all, so `map_coverage` reports them separately and never counts them as dead.
+In these docs, "rendered" means static analysis can trace a test ID to a host JSX element under the selected root. The server does not observe a runtime DOM, and a conditional element may not appear during a particular test run.
 
-The same honesty applies to a test id written on a component tag, `<Card data-testid="Save" />`. That id only reaches the DOM if `Card` passes the prop to a host element, so every occurrence carries a `reach` of `element`, `forwarded` or `component-prop`. Only the first two count as rendered; the third goes to `unknownTestIds` as forwarding-unproven, and a selector matching only it is reported as unknown rather than as matched or dead. If your component library forwards props as a matter of course, `--assume-forwarded` flips that, and every id and match the assumption changed is labelled as assumed.
+Anything the scanner cannot resolve keeps its source text and a dynamic or unresolved marker. Computed selector arguments, custom `@SelectorBy(fn)` functions, spread props, and external component boundaries can all limit the result. Role and text selectors are reported separately because source-only analysis cannot prove them dead.
 
-In practice the honest-uncertainty design matters more than the coverage number. An agent told "this test id is `dynamic: CartItem_${item.id}`" writes a regex selector; an agent silently given a wrong answer writes a broken test. If your suite leans heavily on computed selectors, the trees will contain more `dynamic` nodes and fewer exact values, and the file-reading fallback stays available.
+A test ID on a component tag, such as `<Card data-testid="Save" />`, reaches the DOM only if `Card` forwards the prop to a host element. The response records whether each occurrence is on an `element`, is `forwarded`, or remains a `component-prop`. [`--assume-forwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding) changes how `map_coverage` classifies the last case and labels every affected match.
+
+An agent told that a test ID is dynamic can inspect the source expression and choose an appropriate locator. If your suite relies heavily on computed values or component factories, expect more unresolved nodes and use the reported source locations as the fallback.
 
 The server also isn't a substitute for knowing the library. Pair it with the [Agent Skill](/ai-tooling/agent-skills/), which teaches agents the decorator semantics; the MCP server supplies the project-specific facts.
 
@@ -95,15 +115,15 @@ The server also isn't a substitute for knowing the library. Pair it with the [Ag
 
 ### Does the MCP server work with data-tid or other custom attributes?
 
-Yes. It searches the repository for your Playwright config, reads `use.testIdAttribute` statically across merge layers and imported base configs, and falls back to `data-testid`. If the resolved attribute appears nowhere in your components, the response says so and names the one that does. For computed configs, pass `--attribute data-tid` when registering the server. Per-call overrides are also supported on the `get_testid_tree` and `map_coverage` tools.
+Yes. It searches the repository for your Playwright config, reads `use.testIdAttribute` across supported merge layers and imported base configs, and falls back to `data-testid`. If that attribute appears nowhere in the scanned components, the response can suggest a stronger candidate. For computed configs, pass `--attribute data-tid` when registering the server. `get_testid_tree` and `map_coverage` also accept per-call overrides.
 
 ### Does it execute my code or launch a browser?
 
-No. All four tools are static analysis over your TypeScript/TSX source via ts-morph. The server never runs your app, never launches Playwright, and makes no network calls. It's safe to point at private repositories; nothing leaves your machine.
+No. The analyzer reads TypeScript, JSX, and TSX source without running your app, launching Playwright, or making network requests. It returns results to the MCP client, so review that client's data-handling policy before using it with private code. If the package is not installed locally, `npx` may contact npm during setup.
 
 ### Do I need the playwright-page-object decorators for it to be useful?
 
-The page-object tools (`list_page_objects`, `get_page_object_tree`) need the decorators, since they're what makes the selector graph statically extractable. `get_testid_tree` works on any React/TSX codebase regardless, and `map_coverage` needs both sides.
+The page-object tools, `list_page_objects` and `get_page_object_tree`, need classes the library can identify through decorators, base classes, fixtures, or factory arguments. `get_testid_tree` can build a flat inventory from JSX or TSX without those decorators, although tree fidelity depends on component patterns it can resolve. `map_coverage` needs both page-object selectors and UI source.
 
 ### Which MCP clients does it support?
 
@@ -111,12 +131,12 @@ Any stdio MCP client: Claude Code, Cursor, VS Code, Codex CLI, and others. The s
 
 ### Does it work in a monorepo?
 
-Yes, per app. Run one server per package with `--project-root apps/web`, and `--attribute` if apps use different test-id attributes. A single server pointed at the monorepo root works too, up to the configurable `--max-files` cap. When components come from a shared package outside the scanned scope, `map_coverage` says so with a `ui-scope-incomplete` warning rather than reporting those ids as missing.
+Yes, per app. Run one server per package with `--project-root apps/web`, and add `--attribute` if apps use different test-ID attributes. A single server pointed at the monorepo root also works up to the configurable `--max-files` cap. When component tags resolve outside the scanned scope, `map_coverage` adds a `ui-scope-incomplete` warning before you act on an absent ID.
 
 ### How fresh are the results?
 
-Current as of each tool call. The server stat-checks tracked files per request and re-parses only what changed, so an agent's own edits are visible immediately. New files, deleted files and a newly added Playwright config are picked up too. What needs a restart is a change to the flags the server was started with, since those define what it analyses.
+Edits to tracked files and deletions are reflected on the next tool call. New files and new Playwright configs are discovered on the first call after the one-second re-glob window. No restart is required for source changes. Restart the process only when you change server flags such as `--project-root`, `--src-dir`, or `--attribute`.
 
 ---
 
-Setup takes one command, and the agent-visible difference shows up in the first session: chains come from `get_page_object_tree` instead of five file reads, and selectors come from `get_testid_tree` instead of imagination. If you try it, the [GitHub repo](https://github.com/sergeyshmakov/playwright-page-object) takes stars and issues alike.
+Follow the [MCP quick start](/mcp/quick-start/) to connect a client. If the server helps your workflow, star the [GitHub repository](https://github.com/sergeyshmakov/playwright-page-object); if a source pattern is missing, open an issue with a small example.

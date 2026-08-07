@@ -1,11 +1,29 @@
 ---
-title: Configuration
-description: Every CLI flag, how the server discovers your tsconfig, Playwright config and test-id attribute, and how it decides what to scan.
+title: Configure the Playwright Page Object MCP Server
+description: Configure project scope, Playwright and TypeScript discovery, test-ID attributes, monorepos, file limits, and freshness.
+head:
+  - tag: title
+    content: Playwright Page Object MCP Configuration
 ---
 
-Zero config works for common layouts. The flags exist for the rest.
+The MCP server usually needs no flags. It searches from the current working directory, reads the most likely Playwright config, uses that config to find the relevant `tsconfig.json`, and defaults to `data-testid` when `use.testIdAttribute` is absent.
 
-## Flags
+Add configuration when you need to select one app in a monorepo, pin an ambiguous config, override a computed test-ID attribute, or narrow a repository that exceeds the file limit.
+
+If the server is not connected yet, follow the [quick start](/mcp/quick-start/) first.
+
+## Which option should I start with?
+
+| Situation | Start with |
+| --- | --- |
+| Conventional repository | No flags |
+| One app in a monorepo | `--project-root` |
+| Wrong Playwright config selected | `--playwright-config` |
+| Computed test-ID attribute | `--attribute` |
+| Oversized scan | `--src-dir` |
+| Components routinely forward test-ID props | `--assume-forwarded` |
+
+## Which CLI options are available?
 
 ```bash
 npx playwright-page-object mcp [options]
@@ -13,20 +31,20 @@ npx playwright-page-object mcp [options]
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--project-root <dir>` | cwd | Repository root to analyse. Every path in every response is relative to it |
+| `--project-root <dir>` | cwd | Repository root to analyze. Every path in every response is relative to it |
 | `--tsconfig <file>` | discovered | The `tsconfig.json` whose compiler options and file set to use |
 | `--playwright-config <file>` | discovered, ranked | The `playwright.config.*` to read. Suppresses discovery entirely |
 | `--src-dir <dir>` | tsconfig `include` | Restrict scanning to this directory. Repeatable |
 | `--attribute <name>` | see below | Test-id attribute name |
 | `--max-files <n>` | `2000` | Cap on files parsed |
-| `--assume-forwarded` | off | Count a test id written on a component tag as rendered |
+| `--assume-forwarded` | off | Count a test ID written on a component tag as rendered in `map_coverage` |
 | `--log-level <level>` | `error` | stderr verbosity: `silent`, `error`, `info`, `debug` |
 
-The server logs only to stderr. stdout carries the JSON-RPC stream and nothing else, so raising `--log-level` is safe with any client.
+The server logs only to stderr. stdout carries the JSON-RPC stream, so changing `--log-level` does not mix log messages into the protocol.
 
-## Startup validation
+## When does the server refuse to start?
 
-A stdio server that starts against a mistyped path stays up for the whole session, answering from a scope nobody asked for. The server refuses instead. It writes the problem to stderr and exits with code 1 when:
+A mistyped path would make every later answer use the wrong scope. The server checks explicit paths before opening the stdio connection, writes the problem to stderr, and exits with code 1 when:
 
 - `--project-root` is not a directory,
 - `--tsconfig` is not a file,
@@ -38,9 +56,9 @@ $ npx playwright-page-object mcp --project-root example --src-dir nope
 --src-dir does not exist: nope
 ```
 
-Run the command in a terminal when a client reports that the server failed to start. That message is the whole diagnosis.
+Run the same command in a terminal when an MCP client reports a startup failure. The stderr message usually identifies the invalid path directly.
 
-## Discovery: tsconfig
+## How does the server choose a tsconfig?
 
 In order:
 
@@ -51,7 +69,7 @@ In order:
 
 `testDir` comes from the Playwright config. A relative value resolves against the directory of the config layer that wrote it, an absent one means the config's own directory (Playwright's default), and a computed one is left unknown with a `testdir-unresolved` note rather than guessed.
 
-## Discovery: Playwright config
+## How does the server choose a Playwright config?
 
 The search is repository-wide, not a fixed list of filenames in a fixed list of directories. The server globs `**/playwright*.config.{ts,mts,cts,js,mjs,cjs}` under the project root, pruning `node_modules`, `dist`, `build`, `out`, `.git`, `coverage`, `playwright-report`, `test-results`, `.next` and `.astro`.
 
@@ -62,11 +80,11 @@ Candidates are ranked, best first, and capped at 20:
 3. Extension order `ts`, `mts`, `cts`, `js`, `mjs`, `cjs`.
 4. Lexicographic, so the result never depends on directory read order.
 
-`meta.playwrightConfig` on every response names the file that was read. When more than one exists, a `playwright-config-ambiguous` diagnostic lists the others. It is informational when the attribute resolved and a warning when it did not.
+`meta.playwrightConfig` on every successful response names the file that was read. When more than one exists, a `playwright-config-ambiguous` diagnostic lists the others. It is informational when the attribute resolved and a warning when it did not.
 
-### Reading the chosen config
+### How is the chosen config read?
 
-The config is read statically. It is never executed, so `testIdAttribute: process.env.X` resolves to unknown plus a `testid-attribute-unresolved` warning rather than to whatever the analysing process has in its environment.
+The config is read statically. It is never executed, so `testIdAttribute: process.env.X` resolves to unknown plus a `testid-attribute-unresolved` warning rather than to whatever the analyzing process has in its environment.
 
 Real configs are rarely one object literal, so the reader flattens the export into ordered layers, lowest precedence first:
 
@@ -81,7 +99,7 @@ Highest precedence wins. A layer that *writes* the key stops the walk even when 
 
 An attribute that came from anywhere but the chosen file's own literal is reported with a `testid-attribute-inherited` note naming the file and the layer.
 
-### The sibling probe
+### What if the test-ID attribute lives in a separate config?
 
 Some repositories split `playwright.config.ts` (projects, reporters) and `playwright.base.config.ts` (`use`) without importing one from the other. When the chosen config says nothing about `use.testIdAttribute`, the server reads up to three of the remaining ranked candidates and takes the first attribute it finds, with a `testid-attribute-inherited` warning naming where it came from. Two siblings that disagree add a `testid-attribute-conflict` warning.
 
@@ -89,7 +107,7 @@ Some repositories split `playwright.config.ts` (projects, reporters) and `playwr
 
 Per-project overrides (`projects[].use.testIdAttribute`) are recorded and reported with `testid-attribute-project-override`, but the analysis uses the top-level value.
 
-## Discovery: the test-id attribute
+## How does the server choose the test-ID attribute?
 
 | Precedence | Source | `meta.attributeSource` |
 | --- | --- | --- |
@@ -99,13 +117,13 @@ Per-project overrides (`projects[].use.testIdAttribute`) are recorded and report
 | 4 | The same key in a sibling config found by discovery | `playwright-config` |
 | 5 | Playwright's built-in `data-testid` | `default` |
 
-`meta.attributeSource` ships on every response, so one field tells you which layer won.
+`meta.attributeSource` ships on every successful response, so one field tells you which layer won. See the [common meta fields](/mcp/tools/#common-meta-fields) for the rest of the response context.
 
-### The attribute census
+### How does the server detect a wrong attribute?
 
-Resolving the attribute wrongly is silent. The scan finds nothing, the tree comes back empty, every selector looks dead, and coverage reports a perfect score because zero of zero ids are covered. So the resolved name is checked against the source text before any answer ships.
+A wrong attribute can make the test-ID tree empty and make every selector look dead. Before returning a result, the server checks whether the resolved attribute appears in the scanned JSX or TSX source and looks for a more likely hyphenated attribute when it does not.
 
-The census counts occurrences of `<attribute>=` across the scanned JSX/TSX files and emits one of:
+The census first checks whether `<attribute>=` appears in the scanned JSX or TSX. If it does not, the server counts alternative hyphenated attributes and emits one of:
 
 | Diagnostic | Condition |
 | --- | --- |
@@ -119,9 +137,9 @@ The census counts occurrences of `<attribute>=` across the scanned JSX/TSX files
 
 Warnings are ordered by how badly they invalidate the result, and capped at eight per response: what makes the answer wrong first, then what makes it incomplete, then why.
 
-## Scope
+## How do I control the scanned files?
 
-### `--src-dir`
+### Narrowing the scan with `--src-dir`
 
 Repeatable, and normalized once at the workspace boundary so every consumer sees the same globs:
 
@@ -135,21 +153,21 @@ Repeatable, and normalized once at the workspace boundary so every consumer sees
 
 Whether a bare path is a file or a directory is decided by a `stat`, not by its trailing dot segment, so a directory named `foo.config` still expands correctly.
 
-Plain `.js` is not swept, because it would pull in build output and tooling config for every repository. A `.js` module actually imported from analysed code is added on demand by the resolver.
+Plain `.js` is not swept, because it would pull in build output and tooling config for every repository. A `.js` module imported from analyzed code is added on demand by the resolver.
 
 A `--src-dir` naming a directory that is not on disk stops the server at startup. A glob matching nothing does not, since that is indistinguishable from a legitimately empty directory; the census reports it as `scope-empty` instead.
 
 Narrowing the scope also narrows the file count the cap governs. It does not narrow Playwright config discovery, which always searches the whole root.
 
-### `--max-files`
+### Limiting the scan with `--max-files`
 
-The cap governs analysable files: inside the root, not a declaration file, not in an ignored directory, and matching your include and exclude patterns.
+The cap governs analyzable files: inside the root, not a declaration file, not in an ignored directory, and matching your include and exclude patterns.
 
 It is checked before parsing when a tsconfig enumerates the file set, so an oversized repository is refused before its sources are read. It is enforced again on the per-call rescan and on files the resolver pulls in mid-analysis; an addition that would break the cap is rolled back. Exceeding it returns `max_files_exceeded` with a hint to raise the cap or narrow the scan.
 
-## Monorepos
+## How do I configure a monorepo?
 
-Run one server per app:
+Run one server per app when packages have different Playwright configs, test-ID attributes, or source roots:
 
 ```json
 {
@@ -166,23 +184,21 @@ Run one server per app:
 }
 ```
 
-Add `--attribute` when apps use different test-id attributes, and `--playwright-config` when an app's config is not the highest-ranked one under its root.
+Add `--attribute` when apps use different test-ID attributes, and `--playwright-config` when an app's config is not the highest-ranked one under its root.
 
-A single server pointed at the monorepo root also works, up to `--max-files`. Watch for `ui-scope-incomplete` in `map_coverage` warnings: it fires when component tags resolve to modules outside the scanned sources, which is what a shared UI package looks like from inside one app. Test ids rendered inside those components are invisible, so an id can exist without appearing in the report and a selector for it reads as dead. The warning names the modules and the tag count.
+A single server pointed at the monorepo root also works up to `--max-files`. In [`map_coverage`](/mcp/tools/#map_coverage), `ui-scope-incomplete` means at least one component tag resolves outside the scanned sources. A shared UI package can cause this warning. Test IDs declared inside that package are not visible to the scan, so read the named modules before treating an absent ID as dead.
 
-## Freshness
+## When do results refresh?
 
-The server re-checks modification times on every tool call. Changed files are re-read, deleted ones are dropped, and new ones are picked up by a re-glob throttled to once a second. Nothing is watched, so branch switches and bulk checkouts behave.
+The server checks tracked files on every tool call. It rereads changed files, removes deleted files, and searches for new files at most once per second. It does not run a file watcher, so a long-lived server can also recover from branch switches and bulk checkouts.
 
-**No restart needed:** editing a page object, editing a component, adding or deleting either, or editing the Playwright config. A newly created `playwright*.config.*` also clears the discovery cache, so adding a config to a repository that had none takes effect on the next call.
+**No restart needed:** editing a page object, editing a component, adding or deleting either, or editing the Playwright config. The server searches for new files and configs at most once per second, so an immediate call can precede discovery; the next call after that interval sees them.
 
-**Restart needed:** any change to a CLI flag. The flags are the server's identity, so a different `--attribute`, `--src-dir`, `--project-root`, `--playwright-config`, `--tsconfig`, `--max-files` or `--assume-forwarded` means a different server. Moving page objects outside the scanned directories falls in the same bucket, since the fix is a new `--src-dir`.
+**Restart needed:** any change to a CLI flag. The flags define the server's workspace, so a different `--attribute`, `--src-dir`, `--project-root`, `--playwright-config`, `--tsconfig`, `--max-files`, or `--assume-forwarded` requires a new process. Moving page objects outside the scanned directories also requires a new `--src-dir` value.
 
-The server's built-in instructions also name a `use.testIdAttribute` change as a restart trigger. It is picked up live in practice, and restarting is never wrong.
+## When should I assume prop forwarding?
 
-## Assuming prop forwarding
-
-A test id written on a component tag reaches the DOM only if that component passes the prop to a host element:
+A test ID written on a component tag reaches the DOM only if that component passes the prop to a host element:
 
 ```tsx
 <Card data-testid="SaveCard" />
@@ -196,6 +212,11 @@ Component libraries that forward props as a rule make that conservative. `--assu
 - A `forwarding-assumed` warning counting the promoted ids.
 - `forwarding: "assumed"` on every affected entry in `matched`, and `assumed: true` on the affected id groups.
 
-Nothing is silently upgraded, so you can always tell a proven match from an assumed one. It is a server-level flag rather than a tool argument on purpose: it changes what the word "rendered" means in every answer, which is a property of the repository, not of one call.
+Nothing is silently upgraded, so you can always tell a proven match from an assumed one. It is a server-level flag rather than a tool argument so every `map_coverage` call from that server uses the same classification. Other tools still report the source evidence without applying the assumption.
 
-When the assumption would help, the server says so without being asked. `forwarding-unproven-widespread` fires when a large share of your test-id selectors match only component props, which is the signature of a codebase that forwards as a matter of course.
+When the assumption would help, the server says so without being asked. `forwarding-unproven-widespread` fires when a large share of your test-ID selectors match only component props, which is the signature of a codebase that forwards as a matter of course.
+
+## Related guides
+
+- Use the [tool reference](/mcp/tools/) for per-call parameters and response fields.
+- Follow [Troubleshooting](/mcp/troubleshooting/) for ambiguous configs, attribute mismatches, empty scans, and file-limit errors.

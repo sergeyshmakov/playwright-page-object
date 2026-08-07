@@ -1,11 +1,25 @@
 ---
-title: Tools
-description: Reference for the four MCP tools - parameters, response envelope, meta fields, error codes, and a worked example for each.
+title: MCP Tool Reference for Playwright Page Objects
+description: Choose and call the four Playwright page-object MCP tools, with parameters, response fields, examples, and error recovery.
+head:
+  - tag: title
+    content: Playwright Page Object MCP Tool Reference
 ---
 
-All four tools are read-only, idempotent, and closed-world. They read the files on disk at the moment of the call.
+The server exposes four read-only, idempotent tools. Start with `list_page_objects`, request only the tree you need, and prefer `format: "outline"` when a model will read the result directly. Use JSON when code needs to parse the response.
 
-## Response envelope
+## Which MCP tool should I use?
+
+Each tool answers a different question. Calling the narrowest one keeps the response easier to read and reduces the amount of source context an agent needs.
+
+| Question | Tool |
+| --- | --- |
+| Which page objects already exist? | `list_page_objects` |
+| Which selectors and methods does one page object expose? | `get_page_object_tree` |
+| Which test IDs does static analysis find in a component tree? | `get_testid_tree` |
+| Which page-object selectors and test IDs agree or disagree? | `map_coverage` |
+
+## How are tool responses structured?
 
 Every tool returns one text block holding compact JSON. Success:
 
@@ -27,15 +41,15 @@ Failure, with the MCP `isError` flag set:
 }
 ```
 
-`candidates` and `suggestions` are capped at 10 entries; when there were more, `moreCandidates` or `moreSuggestions` carries the remainder as a count. Meta keys whose value is `undefined`, `null`, `false`, or an empty array are dropped before serialization, so a field's absence means "nothing to report".
+`candidates` and `suggestions` contain at most 10 entries. When more exist, `moreCandidates` or `moreSuggestions` reports how many were omitted. Meta keys whose value is `undefined`, `null`, `false`, or an empty array are removed before serialization, so an absent field usually means the server has nothing to report for it.
 
-Responses are capped at 40,000 bytes. An oversized payload is replaced by a `too_large` error whose `hint` names the knobs *that tool* has.
+Responses are capped at a serialized length of 40,000. An oversized payload is replaced by a `too_large` error with a shorter-call hint. A `testId` lookup has no per-call size control, so use [Troubleshooting](/mcp/troubleshooting/#how-do-i-fix-a-too_large-response) for the valid reduction path in each mode.
 
-### Meta fields
+### Common meta fields
 
 | Field | Tools | Meaning |
 | --- | --- | --- |
-| `root` | `list_page_objects`, `get_page_object_tree` | Absolute path of the analysed project root |
+| `root` | `list_page_objects`, `get_page_object_tree` | Absolute path of the analyzed project root |
 | `attribute` | all | Test-id attribute this call read the sources with |
 | `attributeSource` | all | `"param"`, `"playwright-config"`, or `"default"` |
 | `playwrightConfig` | all | Project-relative path of the config that was read; absent when none was found |
@@ -46,41 +60,39 @@ Responses are capped at 40,000 bytes. An oversized payload is replaced by a `too
 | `note` | `get_page_object_tree`, `map_coverage` | An absolute `file` was accepted and relativized; says how it was read |
 | `truncated` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | A budget or a `limit` cut the payload |
 | `fidelity`, `fidelityReason` | `get_testid_tree` | Completeness of the node tree, and where the holes are |
-| `alsoIncluded` | `map_coverage` | Page objects analysed alongside the one you named, because they share its file |
+| `alsoIncluded` | `map_coverage` | Page objects analyzed alongside the one you named, because they share its file |
 | `ignored` | `map_coverage` | Arguments overruled by `buckets` |
 | `shown` | `map_coverage` | Per-bucket count of the entries actually returned, when `limit` cut a list |
 | `assumeForwarded` | `map_coverage` | The server runs with `--assume-forwarded` |
 
 `attributeSource` is worth reading on every call. `"default"` means no config set `use.testIdAttribute` and Playwright's `data-testid` was assumed, which is correct for most repositories and wrong for the ones that migrated away from it.
 
-### Error codes
+### Recoverable error codes
 
 | Code | Raised by | What to do |
 | --- | --- | --- |
-| `invalid_input` | `get_page_object_tree`, `map_coverage` | Neither `class` nor `file` was given, or `file` is an absolute path outside the project root, or it is the root itself. Re-call with a project-relative path |
+| `invalid_input` | `get_page_object_tree`; invalid `file` values in `map_coverage` | For `get_page_object_tree`, provide `class` or `file`. For either tool, use a project-relative file or an absolute file inside the project root |
 | `class_not_found` | `get_page_object_tree`, `map_coverage` | Read `suggestions` (nearest names by edit distance), or call `list_page_objects` |
 | `ambiguous_class` | `get_page_object_tree`, `map_coverage` | Several classes share the name. `candidates` holds `path.ts#ClassName` keys; re-call with `file` set to one of them |
 | `ambiguous_component` | `get_testid_tree` | Several files declare that component name. Re-call with `component` and `file` together |
 | `incomplete_tree` | `get_testid_tree` | The named component could not be rooted. `candidates` lists the other components in that file; or pass `testId` to look the id up across the whole scan |
 | `file_not_found` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | The path or component name selects nothing. Use `suggestions` / `candidates`, or drop the argument to widen the search |
 | `too_large` | all | Apply the `hint`; it names the knobs that tool has |
-| `max_files_exceeded` | all | Restart the server with a higher `--max-files`, or narrow the scan with `--src-dir` / `--tsconfig` |
+| `max_files_exceeded` | all | Restart the server with a higher `--max-files`, or narrow the scan as described in [Configuration](/mcp/configuration/#how-do-i-control-the-scanned-files) |
 | `internal_error` | all | An unexpected failure, returned in-band rather than as a transport error. The message is the thrown error's; the server also logs it to stderr |
-
-`parse_error` is part of the wire contract but is not currently emitted.
 
 ---
 
 ## `list_page_objects`
 
-Every class in the repository that uses the library's decorators. Call it first, before grepping or globbing, and before creating a page object that may already exist.
+`list_page_objects` returns each class that the scanner can identify through the library's decorators, base classes, fixtures, or factory arguments. Call it before searching files or creating a page object that may already exist.
 
 ### Parameters
 
 | Name | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `filter` | string | — | Case-insensitive substring, matched against class name **and** file path |
-| `limit` | integer 1–500 | `100` | |
+| `filter` | string | optional | Case-insensitive substring, matched against class name **and** file path |
+| `limit` | integer 1 to 500 | `100` | |
 | `offset` | integer ≥ 0 | `0` | Applied after `filter`. Follow `meta.nextOffset` to page |
 
 ### Response
@@ -134,15 +146,15 @@ An empty page gets a `hint` that distinguishes the three reasons it can be empty
 
 ## `get_page_object_tree`
 
-One class's full selector tree, with nested control classes expanded inline and the class's own method signatures listed. Call it before writing or editing a test that touches a page object, and before adding an accessor that may already exist.
+`get_page_object_tree` returns one class's selector tree up to the requested depth and node budget. It expands nested controls and lists available method signatures, including inherited methods from project-local base classes. Call it before editing a test or adding an accessor that may already exist.
 
 ### Parameters
 
 | Name | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `class` | string | — | Class name. Provide `class`, `file`, or both |
-| `file` | string | — | Path relative to the project root. An absolute path inside the root is accepted and relativized, and `meta.note` says so; one outside the root is rejected |
-| `depth` | integer 1–10 | `3` | Levels of nested control classes to expand |
+| `class` | string | optional | Class name. Provide `class`, `file`, or both |
+| `file` | string | optional | Path relative to the project root. An absolute path inside the root is accepted and relativized, and `meta.note` says so; one outside the root is rejected |
+| `depth` | integer 1 to 10 | `3` | Levels of nested control classes to expand |
 | `includeMethods` | boolean | `true` | |
 | `format` | `"json"` \| `"outline"` | `"json"` | |
 
@@ -211,25 +223,29 @@ With `format: "outline"`, `data` is an indented string. It costs far fewer token
 
 ## `get_testid_tree`
 
-The test ids your components render, in nesting order. Call it before writing any selector, when a locator resolves to zero elements, and when choosing between `@Selector` and `@ListSelector` for a repeated row.
+`get_testid_tree` shows the test IDs that static analysis finds in your component source, in nesting order when the component walk is complete enough to place them. Call it before writing a selector, when a locator matches nothing, or when choosing between `@Selector` and `@ListSelector` for a repeated row.
+
+The tool has two modes. A tree call uses `file`, `component`, `depth`, `followComponents`, and `format`. A lookup call with `testId` searches the scan-wide flat inventory and returns JSON occurrences. `component`, `depth`, `followComponents`, and `format` do not narrow a lookup. If you also pass `file`, it must name a scanned JSX or TSX file, but the lookup remains scan-wide.
 
 ### Parameters
 
 | Name | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `file` | string | — | Component file to root the tree at |
-| `component` | string | — | Component name. Combine with `file` when two files declare the same name |
-| `testId` | string | — | Look up where a known id is rendered, instead of walking a tree |
-| `depth` | integer 1–10 | `4` | |
+| `file` | string | optional | Component file to root a tree at. Invalid or unscanned paths fail with `file_not_found` and may include suggestions |
+| `component` | string | optional | Component name. Combine with `file` when two files declare the same name |
+| `testId` | string | optional | Look up where a known ID is declared across the flat inventory instead of walking a tree |
+| `depth` | integer 1 to 10 | `4` | |
 | `followComponents` | boolean | `true` | Inline the subtrees of child components imported from other files |
-| `attribute` | string | — | Per-call override of the resolved test-id attribute |
-| `format` | `"json"` \| `"outline"` | `"json"` | |
+| `attribute` | string | optional | Per-call override of the resolved test-ID attribute |
+| `format` | `"json"` \| `"outline"` | `"json"` | Tree mode only. Lookup mode always returns JSON occurrences |
 
 With neither `file` nor `component`, the walk starts from the auto-detected app entry.
 
 ### Fidelity
 
 `meta.fidelity` describes the completeness of the **node tree**, not of individual ids:
+
+Here, "rendered" means the scanner traced a test ID to a host JSX element. The tool does not observe a browser or guarantee that a conditional element appears in a particular run.
 
 | Value | Meaning |
 | --- | --- |
@@ -252,7 +268,7 @@ The flat inventory is complete in all three states, so a `testId` lookup answers
 | `testIdAbsent` | The element writes the attribute, but at this site the value provably resolves to nothing. Do not write a selector for it |
 | `unresolved` | A hole. `reason` is one of `external-module`, `identifier-unresolved`, `namespaced-component`, `not-a-function-component`, `recursive`, `not-followed`, `depth-limit-reached`, `node-budget-reached`, `unresolved-jsx`, `opaque-expression`, `spread-props` |
 
-In the outline format the same flags appear in parentheses, and `-` stands for a node with no test id.
+In the outline format the same flags appear in parentheses, and `-` stands for a node with no test ID.
 
 A `testId` lookup returns `{ occurrences }`, each with the source location, the enclosing component, and `reach`:
 
@@ -303,19 +319,19 @@ The same call with `followComponents: false` from the app entry shows the other 
 
 ## `map_coverage`
 
-Cross-references the selectors your page objects declare against the test ids your app renders. Call it after refactoring a component, after renaming test ids, before adding accessors, and when a test times out on a locator.
+`map_coverage` cross-references page-object selectors with test IDs found in UI source. Call it after refactoring a component, after renaming test IDs, before adding accessors, or when a test times out on a locator.
 
 ### Parameters
 
 | Name | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `class` | string | — | Narrow the page-object side to the file declaring this class |
-| `file` | string | — | Limit the page-object side to one file, spelled as `list_page_objects` reports it. A leading `./` and Windows separators are accepted |
-| `attribute` | string | — | Per-call override of the test-id attribute |
+| `class` | string | optional | Narrow the page-object side to the file declaring this class |
+| `file` | string | optional | Limit the page-object side to one file, spelled as `list_page_objects` reports it. A leading `./` and Windows separators are accepted |
+| `attribute` | string | optional | Per-call override of the test-ID attribute |
 | `includeUnused` | boolean | `true` | Include `uncoveredTestIds`. Ignored when `buckets` is given |
 | `includeRawLocators` | boolean | `false` | Also scan for direct `getByTestId` / `getItemByTestId` / `filterByItemTestId` / `filterByHasTestId` calls |
-| `buckets` | array | — | Return only these lists. Wins over `includeUnused`, which is then echoed in `meta.ignored` |
-| `limit` | integer 1–1000 | `200` | Per bucket |
+| `buckets` | array | optional | Return only these lists. Wins over `includeUnused`, which is then echoed in `meta.ignored` |
+| `limit` | integer 1 to 1000 | `200` | Per bucket |
 
 Omit `class` and `file` to scan the whole project. Scoping happens by path, so `class` also pulls in page objects sharing that file, and `meta.alsoIncluded` names them. A `file` that declares no page object fails with `file_not_found` rather than returning a report in which everything looks uncovered.
 
@@ -326,11 +342,11 @@ Omit `class` and `file` to scan the whole project. Scoping happens by path, so `
 | Bucket | Contents |
 | --- | --- |
 | `matched` | Selector/id pairs with a `confidence` of `exact`, `pattern`, `regex`, `probe`, or `prefix` |
-| `uncoveredTestIds` | Rendered ids no page object references, each with a ready-to-paste decorator `suggestion` |
-| `deadSelectors` | Selectors whose test id is rendered nowhere, with `nearestTestIds` typo suggestions |
+| `uncoveredTestIds` | Host-element test IDs that no page-object test-ID selector covers, each with a ready-to-paste decorator `suggestion` |
+| `deadSelectors` | Page-object test-ID selectors with no match among visible host-element IDs, with `nearestTestIds` suggestions |
 | `nonTestIdSelectors` | Role, text, label, placeholder, alt and title selectors. Reported for awareness and never counted as dead |
 | `unknownSelectors` | Selectors that could be neither matched nor called dead, with the evidence that was found |
-| `unknownTestIds` | Rendered ids that could not be treated as rendered: `dynamic-value`, `forwarding-unproven`, or `unanchored-pattern` |
+| `unknownTestIds` | Test-ID occurrences the scanner cannot place on a rendered host element: `dynamic-value`, `forwarding-unproven`, or `unanchored-pattern` |
 
 `summary.coverage` is `coveredUiTestIds / matchableUiTestIds`, or **`null`** when nothing was matchable. It is never `1` for a scan that found nothing, which is the failure mode that used to make a misconfigured server look healthy. `scope` reports what the two sides were drawn from, including component tags coming from modules outside the scanned sources.
 
@@ -359,7 +375,7 @@ Omit `class` and `file` to scan the whole project. Scoping happens by path, so `
 		},
 		"scope": {
 			"uiFilesScanned": 5,
-			"pageObjectFilesScanned": 18,
+			"pageObjectFilesScanned": 17,
 			"externalComponentModules": ["react"],
 			"externalComponentTags": 1
 		},
@@ -397,18 +413,18 @@ Omit `class` and `file` to scan the whole project. Scoping happens by path, so `
 }
 ```
 
-`ApplyPromoButton` is rendered but no page object selects it by test id, because both page objects reach that button by role. That is the kind of fact that stops an agent from writing a fifth way to click Apply.
+`ApplyPromoButton` has no page-object test-ID selector because both page objects reach the button by role. It appears under `uncoveredTestIds`, but it is not unused. This distinction helps an agent reuse the existing role selector instead of adding another locator.
 
 ---
 
-## `json` or `outline`
+## Should I request `json` or `outline`?
 
 `get_page_object_tree` and `get_testid_tree` accept both.
 
 | | `json` | `outline` |
 | --- | --- | --- |
 | Shape | Structured objects, stable field names | Indented plain text |
-| Tokens | Higher, roughly 2–4× on deep trees | Lower |
+| Tokens | Usually higher on deep trees | Usually lower |
 | Machine-parseable | Yes | No |
 | Carries locations | Yes, `loc` with line and column | Yes, `file:line` |
 | Carries every field | Yes | No: visibility, JSDoc and column numbers are dropped |
