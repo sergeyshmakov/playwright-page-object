@@ -724,6 +724,108 @@ describe("buildCoverageReport — component tags from outside the scan", () => {
 	});
 });
 
+/**
+ * The field failure, end to end.
+ *
+ * One list item writes both ids through a ternary interpolated at the head of a
+ * template. Read as a single opaque hole the line compiles to
+ * `^.+BedListItem_.+$`, which no probe reconciles with either selector, so a
+ * page object that works was reported as two dead selectors.
+ */
+describe("buildCoverageReport — a ternary inside a template", () => {
+	const bedId = (branch: string): string =>
+		["`", hole(branch), "BedListItem_", hole("bedIndex"), "`"].join("");
+
+	const bedList = (branch: string): Record<string, string> => ({
+		"src/App.tsx": [
+			"export default function App(props: { beds: string[]; label: string; isAdditional: boolean }) {",
+			"  const { beds, label, isAdditional } = props;",
+			"  void label;",
+			"  return (",
+			'    <ul data-testid="BedList">',
+			"      {beds.map((bed, bedIndex) => (",
+			`        <li key={bed} data-testid={${bedId(branch)}}>`,
+			'          <span data-testid="BedName">{bed}</span>',
+			"        </li>",
+			"      ))}",
+			"    </ul>",
+			"  );",
+			"}",
+			"void isAdditional;",
+		].join("\n"),
+		"e2e/BedRow.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("PageObject", "Selector"),
+			"export class BedRow extends PageObject {",
+			'  @Selector("BedName")',
+			"  accessor Name!: Locator;",
+			"}",
+		].join("\n"),
+	});
+
+	const pageObject = (...masks: string[]): Record<string, string> => ({
+		"e2e/BedsPage.ts": [
+			libImport(
+				"ListPageObject",
+				"ListSelector",
+				"RootPageObject",
+				"RootSelector",
+			),
+			'import { BedRow } from "./BedRow";',
+			'@RootSelector("BedList")',
+			"export class BedsPage extends RootPageObject {",
+			...masks.flatMap((mask, index) => [
+				`  @ListSelector("${mask}")`,
+				`  accessor Beds${index} = new ListPageObject(BedRow);`,
+			]),
+			"}",
+		].join("\n"),
+	});
+
+	it("credits both branches of a static ternary, and calls neither dead", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({
+				...bedList('isAdditional ? "Additional" : "Main"'),
+				...pageObject("MainBedListItem", "AdditionalBedListItem"),
+			}),
+		);
+
+		const dead = result.deadSelectors.map((entry) => entry.memberPath);
+		expect(dead).not.toContain("BedsPage.Beds0");
+		expect(dead).not.toContain("BedsPage.Beds1");
+
+		const byPath = (memberPath: string) =>
+			result.matched.find((entry) => entry.selector.memberPath === memberPath);
+		expect(byPath("BedsPage.Beds0")?.ui.patternSource).toBe(
+			"^MainBedListItem_.+$",
+		);
+		expect(byPath("BedsPage.Beds1")?.ui.patternSource).toBe(
+			"^AdditionalBedListItem_.+$",
+		);
+		expect(byPath("BedsPage.Beds0")?.confidence).toBe("probe");
+	});
+
+	// The other route: one branch is not a literal, so the hole stays a `.+` and
+	// the template still yields an anchored pattern rather than a catch-all.
+	it("still anchors the pattern when a branch is not static", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({
+				...bedList('isAdditional ? label : "Main"'),
+				...pageObject("BedListItem_"),
+			}),
+		);
+
+		expect(result.matched.map((entry) => entry.ui.patternSource)).toContain(
+			"^.+BedListItem_.+$",
+		);
+		expect(result.deadSelectors.map((entry) => entry.memberPath)).not.toContain(
+			"BedsPage.Beds0",
+		);
+		// Quarantining it would have dropped the id and made the selector dead.
+		expect(result.summary.catchAllTestIds).toBe(0);
+	});
+});
+
 describe("buildCoverageReport — member paths", () => {
 	it("names nested controls by the path that reaches them", () => {
 		const result = buildCoverageReport(

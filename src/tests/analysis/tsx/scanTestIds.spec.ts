@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isCatchAllPattern } from "../../../analysis/coverage/match";
 import {
 	scanFileElements,
 	scanFileTestIds,
@@ -82,6 +83,95 @@ describe("scanFileTestIds — value forms", () => {
 		expect(occurrences).toHaveLength(2);
 		expect(occurrences.map((entry) => entry.value.value)).toEqual(["A", "B"]);
 		expect(occurrences.every((entry) => entry.conditional)).toBe(true);
+	});
+
+	// The field shape: a ternary interpolated at the head of a template. Read as
+	// one opaque hole it compiles to `^.+BedListItem_.+$`, which no probe can
+	// reconcile with a selector for `MainBedListItem` — so both @ListSelectors
+	// the line serves were reported dead.
+	it("expands a ternary hole into one pattern per branch", () => {
+		const { occurrences } = scan(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source for the parser, not an interpolation
+			'    <div data-testid={`${cond ? "Additional" : "Main"}BedListItem_${id}`} />',
+		);
+
+		expect(occurrences).toHaveLength(2);
+		expect(occurrences.map((entry) => entry.value.regex?.source)).toEqual([
+			"^AdditionalBedListItem_.+$",
+			"^MainBedListItem_.+$",
+		]);
+		// The branch literal and the literal that follows it are one anchor, and
+		// `prefix` is only ever the first part — unmerged it would read "Main".
+		expect(occurrences.map((entry) => entry.value.prefix)).toEqual([
+			"AdditionalBedListItem_",
+			"MainBedListItem_",
+		]);
+		expect(occurrences.every((entry) => entry.conditional)).toBe(true);
+		expect(occurrences[1].value.parts).toEqual([
+			{ kind: "literal", text: "MainBedListItem_" },
+			{ kind: "expr", text: "id" },
+		]);
+	});
+
+	it("expands a ternary that is the whole template into two static ids", () => {
+		const { occurrences } = scan(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source for the parser, not an interpolation
+			'    <div data-testid={`${cond ? "A" : "B"}`} />',
+		);
+
+		// Not `^.+$`, which is a catch-all and gets quarantined: both ids are
+		// written right there in the source.
+		expect(occurrences.map((entry) => entry.value)).toMatchObject([
+			{ kind: "static", value: "A" },
+			{ kind: "static", value: "B" },
+		]);
+		expect(occurrences.every((entry) => entry.conditional)).toBe(true);
+	});
+
+	it("keeps a hole whose branches are not both static a generic hole", () => {
+		const { occurrences } = scan(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source for the parser, not an interpolation
+			'    <div data-testid={`${cond ? id : "Main"}BedListItem_${id}`} />',
+		);
+
+		expect(occurrences).toHaveLength(1);
+		expect(occurrences[0].value).toMatchObject({
+			kind: "pattern",
+			regex: { source: "^.+BedListItem_.+$" },
+		});
+		// Anchored on a real literal, so it is not quarantined: a selector for
+		// `BedListItem_` still matches it by probe.
+		expect(isCatchAllPattern("^.+BedListItem_.+$")).toBe(false);
+		expect(occurrences[0].conditional).toBeUndefined();
+	});
+
+	it("stops expanding past the variant cap", () => {
+		const { occurrences } = scan(
+			[
+				"    <div data-testid={",
+				// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source for the parser, not an interpolation
+				'      `${cond ? "A" : "B"}_${cond ? "C" : "D"}_${cond ? "E" : "F"}`',
+				"    } />",
+			].join("\n"),
+		);
+
+		// Eight ids from one element says less than the anchored pattern does.
+		expect(occurrences).toHaveLength(1);
+		expect(occurrences[0].value).toMatchObject({
+			kind: "pattern",
+			regex: { source: "^.+_.+_.+$" },
+		});
+	});
+
+	it("expands a ternary operand of a concatenation too", () => {
+		const { occurrences } = scan(
+			'    <div data-testid={(cond ? "Main" : "Extra") + "Row_" + id} />',
+		);
+
+		expect(occurrences.map((entry) => entry.value.regex?.source)).toEqual([
+			"^MainRow_.+$",
+			"^ExtraRow_.+$",
+		]);
 	});
 
 	it("reports a bare identifier as dynamic", () => {

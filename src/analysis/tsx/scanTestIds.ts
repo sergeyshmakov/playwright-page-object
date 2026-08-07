@@ -155,6 +155,148 @@ function dynamicValue(
 
 type Part = { kind: "literal"; text: string } | { kind: "expr"; text: string };
 
+/**
+ * A part before expansion.
+ *
+ * `values` holds every string the hole is statically known to produce — one
+ * entry for `${"Row"}`, one per branch for `${cond ? "A" : "B"}` — and is absent
+ * for a hole nobody can read, which stays a `.+`.
+ */
+type PartSpec =
+	| { kind: "literal"; text: string }
+	| { kind: "expr"; text: string; values?: string[] };
+
+/**
+ * Ceiling on the ids one template may expand into.
+ *
+ * Two ternary holes is four ids, which is still a list a reader can hold; past
+ * that the expansion says less about the DOM than the anchored pattern does, and
+ * every extra id is another group in the coverage report. Over the cap the whole
+ * template falls back to generic holes rather than expanding partially — a half
+ * expanded template would claim some branches are the only ones.
+ */
+const MAX_TEMPLATE_VARIANTS = 4;
+
+/**
+ * Every string a template hole can statically produce, or `null` when it cannot
+ * be read.
+ *
+ * The case this exists for is a ternary *inside* a template:
+ * `` `${isAdditional ? "Additional" : "Main"}BedListItem_${index}` ``. Read as
+ * one opaque hole it compiles to `^.+BedListItem_.+$`, which no probe can
+ * reconcile with a selector for `MainBedListItem`, so both selectors the line
+ * serves were reported dead. Both branch strings are right there in the source.
+ */
+function holeValues(node: Node): string[] | null {
+	if (Node.isParenthesizedExpression(node)) {
+		return holeValues(node.getExpression());
+	}
+	if (
+		Node.isStringLiteral(node) ||
+		Node.isNoSubstitutionTemplateLiteral(node)
+	) {
+		return [node.getLiteralValue()];
+	}
+	if (Node.isConditionalExpression(node)) {
+		const whenTrue = holeValues(node.getWhenTrue());
+		if (!whenTrue) {
+			return null;
+		}
+		const whenFalse = holeValues(node.getWhenFalse());
+		if (!whenFalse) {
+			return null;
+		}
+		return [...whenTrue, ...whenFalse];
+	}
+	// A branch that is not a literal makes the whole hole unreadable: guessing
+	// one side would report an id the other side never renders.
+	return null;
+}
+
+/** Drops the expansion metadata, leaving the shape that ships on the wire. */
+function toWirePart(part: PartSpec): Part {
+	return part.kind === "literal"
+		? { kind: "literal", text: part.text }
+		: { kind: "expr", text: part.text };
+}
+
+/**
+ * Adjacent literals become one.
+ *
+ * `${cond ? "Main" : "Additional"}BedListItem_` expands to two parts that are
+ * one anchor, and `prefix` — which is what `prefixOverlap` and the containment
+ * probe read — is only ever the *first* part. Left unmerged the prefix would be
+ * `Main`, and a selector for `MainBedListItem` would miss it.
+ */
+function mergeLiterals(parts: Part[]): Part[] {
+	const merged: Part[] = [];
+	for (const part of parts) {
+		if (part.kind === "literal" && part.text === "") {
+			continue;
+		}
+		const last = merged[merged.length - 1];
+		if (part.kind === "literal" && last?.kind === "literal") {
+			merged[merged.length - 1] = {
+				kind: "literal",
+				text: last.text + part.text,
+			};
+			continue;
+		}
+		merged.push(part);
+	}
+	return merged;
+}
+
+/** One `Part[]` per combination of statically-known hole values. */
+function expandParts(parts: PartSpec[]): Part[][] {
+	const combinations = parts.reduce(
+		(total, part) =>
+			part.kind === "expr" && part.values ? total * part.values.length : total,
+		1,
+	);
+	if (combinations > MAX_TEMPLATE_VARIANTS) {
+		return [mergeLiterals(parts.map(toWirePart))];
+	}
+	let variants: Part[][] = [[]];
+	for (const part of parts) {
+		const alternatives: Part[] =
+			part.kind === "expr" && part.values
+				? part.values.map((text) => ({ kind: "literal" as const, text }))
+				: [toWirePart(part)];
+		variants = variants.flatMap((variant) =>
+			alternatives.map((alternative) => [...variant, alternative]),
+		);
+	}
+	return variants.map(mergeLiterals);
+}
+
+/**
+ * Turns one interpolated expression into every value it can produce.
+ *
+ * More than one means the source writes a choice — `conditional: true`, exactly
+ * as a ternary spelled at the top of the attribute already produces two
+ * occurrences. All-literal after expansion is a static id, not a pattern: there
+ * is nothing left to match loosely.
+ */
+function valuesFromParts(
+	parts: PartSpec[],
+	raw: string,
+): { values: TestIdValue[]; fromTernary: boolean } {
+	const variants = expandParts(parts);
+	const values = variants.map((variant) => {
+		if (variant.length === 0) {
+			// Everything collapsed to the empty string. `^$` would be quarantined as
+			// a catch-all anyway, and "the id is the empty string" is not a claim
+			// worth making.
+			return dynamicValue(raw);
+		}
+		return variant.every((part) => part.kind === "literal")
+			? staticValue(raw, variant.map((part) => part.text).join(""))
+			: patternFromParts(variant, raw);
+	});
+	return { values, fromTernary: variants.length > 1 };
+}
+
 function patternFromParts(parts: Part[], raw: string): TestIdValue {
 	const source = `^${parts
 		.map((part) => (part.kind === "literal" ? escapeRegExp(part.text) : ".+"))
@@ -170,17 +312,23 @@ function patternFromParts(parts: Part[], raw: string): TestIdValue {
 	};
 }
 
-function partsFromTemplate(node: Node): Part[] | null {
+function partsFromTemplate(node: Node): PartSpec[] | null {
 	if (!Node.isTemplateExpression(node)) {
 		return null;
 	}
-	const parts: Part[] = [];
+	const parts: PartSpec[] = [];
 	const head = node.getHead().getLiteralText();
 	if (head !== "") {
 		parts.push({ kind: "literal", text: head });
 	}
 	for (const span of node.getTemplateSpans()) {
-		parts.push({ kind: "expr", text: span.getExpression().getText() });
+		const expression = span.getExpression();
+		const values = holeValues(expression);
+		parts.push({
+			kind: "expr",
+			text: expression.getText(),
+			...(values ? { values } : {}),
+		});
 		const literal = span.getLiteral().getLiteralText();
 		if (literal !== "") {
 			parts.push({ kind: "literal", text: literal });
@@ -189,14 +337,14 @@ function partsFromTemplate(node: Node): Part[] | null {
 	return parts;
 }
 
-function partsFromConcatenation(node: Node): Part[] | null {
+function partsFromConcatenation(node: Node): PartSpec[] | null {
 	if (!Node.isBinaryExpression(node)) {
 		return null;
 	}
 	if (node.getOperatorToken().getKind() !== SyntaxKind.PlusToken) {
 		return null;
 	}
-	const parts: Part[] = [];
+	const parts: PartSpec[] = [];
 	const visit = (expression: Node): boolean => {
 		if (
 			Node.isBinaryExpression(expression) &&
@@ -211,7 +359,12 @@ function partsFromConcatenation(node: Node): Part[] | null {
 			parts.push({ kind: "literal", text: expression.getLiteralValue() });
 			return true;
 		}
-		parts.push({ kind: "expr", text: expression.getText() });
+		const values = holeValues(expression);
+		parts.push({
+			kind: "expr",
+			text: expression.getText(),
+			...(values ? { values } : {}),
+		});
 		return true;
 	};
 	if (!visit(node)) {
@@ -221,10 +374,11 @@ function partsFromConcatenation(node: Node): Part[] | null {
 }
 
 /**
- * Reads one JSX attribute into zero, one or two values.
+ * Reads one JSX attribute into zero, one or several values.
  *
  * A ternary with two static branches produces two occurrences rather than one
  * `dynamic`: both ids really do exist in the DOM, just not at the same time.
+ * The same holds one level down, for a ternary interpolated into a template.
  */
 export function readAttributeValue(attribute: JsxAttribute): {
 	values: TestIdValue[];
@@ -273,23 +427,12 @@ export function readExpressionValue(expression: Node): {
 
 	const templateParts = partsFromTemplate(expression);
 	if (templateParts) {
-		if (templateParts.every((part) => part.kind === "literal")) {
-			return {
-				values: [
-					staticValue(raw, templateParts.map((part) => part.text).join("")),
-				],
-				fromTernary: false,
-			};
-		}
-		return {
-			values: [patternFromParts(templateParts, raw)],
-			fromTernary: false,
-		};
+		return valuesFromParts(templateParts, raw);
 	}
 
 	const concatParts = partsFromConcatenation(expression);
 	if (concatParts) {
-		return { values: [patternFromParts(concatParts, raw)], fromTernary: false };
+		return valuesFromParts(concatParts, raw);
 	}
 
 	if (Node.isConditionalExpression(expression)) {
