@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { MAX_CONFIG_CANDIDATES } from "../../../analysis/config/configDiscovery";
 import { readPlaywrightConfig } from "../../../analysis/config/playwrightConfig";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import { Workspace, type WorkspaceOptions } from "../../../analysis/workspace";
@@ -571,9 +572,16 @@ describe("merged config layers", () => {
 		expect(info.configFile).toBe("playwright.config.ts");
 	});
 
-	// Playwright resolves a relative `testDir` against the directory of the file
-	// that wrote it, which with a merged base is not the file that was chosen.
-	it("resolves a base config's testDir against the base config's directory", () => {
+	/**
+	 * Playwright resolves relative config paths against `configDir` — the
+	 * directory of the config file it *loaded* (`path.dirname(resolvedConfigFile)`
+	 * in its own loader). A base config reached by import or spread contributes a
+	 * bare string with no provenance attached, so where the literal was written
+	 * has no bearing on what it means. Resolving against the defining layer's file
+	 * pointed workspace construction at a directory Playwright never reads, and
+	 * let it adopt whatever tsconfig happened to sit next to it.
+	 */
+	it("resolves an inherited testDir against the config Playwright loads", () => {
 		const ws = workspaceWithConfig({
 			"playwright/base.ts": 'export default { testDir: "./specs" };',
 			"playwright.config.ts": [
@@ -581,38 +589,157 @@ describe("merged config layers", () => {
 				"export default { ...base };",
 			].join("\n"),
 		});
-		expect(readPlaywrightConfig(ws).testDir).toBe("playwright/specs");
+		expect(readPlaywrightConfig(ws).testDir).toBe("specs");
+	});
+
+	it("resolves it against a nested entry config's own directory", () => {
+		const ws = workspaceWithConfig({
+			"shared/base.ts": 'export default { testDir: "./specs" };',
+			"e2e/playwright.config.ts": [
+				'import base from "../shared/base";',
+				"export default { ...base };",
+			].join("\n"),
+		});
+		expect(readPlaywrightConfig(ws).testDir).toBe("e2e/specs");
 	});
 });
 
 /**
- * The sibling probe.
+ * Spread precedence.
  *
- * Splitting `use` into `playwright.base.config.ts` and pointing CI at
- * `playwright.config.ts` — with no import between them — is a real repository
- * shape. Reading only the chosen file reports `data-testid` on a codebase that
- * uses something else; reading the sibling silently would be a guess. So it is
- * read, used, and announced.
+ * `{ ...base, a: 1 }` and `{ a: 1, ...base }` are different objects, and the
+ * second one is what a config writes when the base is meant to win. Treating
+ * every spread as the lowest layer reported the losing value — with no note to
+ * say the answer had been guessed at.
  */
-describe("sibling config probe", () => {
-	it("borrows an attribute from a sibling config and warns that it did", () => {
+describe("spread position", () => {
+	it("lets a trailing spread override the literal's own properties", () => {
+		const ws = workspaceWithConfig({
+			"playwright/base.ts": [
+				"export default {",
+				'  testDir: "./base-specs",',
+				'  use: { testIdAttribute: "data-base" },',
+				"};",
+			].join("\n"),
+			"playwright.config.ts": [
+				'import base from "./playwright/base";',
+				"export default {",
+				'  testDir: "./leaf-specs",',
+				'  use: { testIdAttribute: "data-leaf" },',
+				"  ...base,",
+				"};",
+			].join("\n"),
+		});
+		const info = readPlaywrightConfig(ws);
+		expect(info.testIdAttribute).toBe("data-base");
+		expect(info.testIdAttributeFrom).toBe("base-config");
+		expect(info.testDir).toBe("base-specs");
+	});
+
+	// The literal is split at the spread rather than hoisted around it: what is
+	// written after the spread still wins, what is written before it still loses.
+	it("splits the literal at the spread instead of hoisting it", () => {
+		const ws = workspaceWithConfig({
+			"playwright/base.ts": [
+				"export default {",
+				'  testDir: "./base-specs",',
+				'  use: { testIdAttribute: "data-base" },',
+				"};",
+			].join("\n"),
+			"playwright.config.ts": [
+				'import base from "./playwright/base";',
+				"export default {",
+				'  use: { testIdAttribute: "data-early" },',
+				"  ...base,",
+				'  testDir: "./late",',
+				"};",
+			].join("\n"),
+		});
+		const info = readPlaywrightConfig(ws);
+		expect(info.testIdAttribute).toBe("data-base");
+		expect(info.testDir).toBe("late");
+	});
+
+	it("keeps a leading spread below the literal's own properties", () => {
+		const ws = workspaceWithConfig({
+			"playwright/base.ts":
+				'export default { use: { testIdAttribute: "data-base" } };',
+			"playwright.config.ts": [
+				'import base from "./playwright/base";',
+				'export default { ...base, use: { testIdAttribute: "data-leaf" } };',
+			].join("\n"),
+		});
+		expect(readPlaywrightConfig(ws).testIdAttribute).toBe("data-leaf");
+	});
+});
+
+/**
+ * Sibling configs: reported, never applied.
+ *
+ * Discovery ranks every `playwright*.config.*` in the repository, and two of
+ * them may have nothing to do with each other — an E2E config and a
+ * `playwright-ct.config.ts` for component tests run different suites under
+ * different attributes. Statically that is the same shape as a repository which
+ * splits `use` into a base file CI points at, so borrowing the neighbour's value
+ * was a coin flip: on the second shape it scanned every source with an attribute
+ * the suite never uses, while the metadata went on naming the chosen config.
+ *
+ * The configs the chosen one really is built from — imported, spread, merged —
+ * are layers, and those still apply. A sibling only gets a warning naming it.
+ */
+describe("sibling configs", () => {
+	it("reports a sibling's attribute without applying it", () => {
 		const ws = workspaceWithConfig({
 			"playwright.config.ts": 'export default { testDir: "./e2e" };',
 			"playwright.base.config.ts":
 				'export default { use: { testIdAttribute: "data-tid" } };',
 		});
 		const info = readPlaywrightConfig(ws);
-		expect(info.testIdAttribute).toBe("data-tid");
-		expect(info.testIdAttributeFrom).toBe("sibling-config");
+		expect(info.testIdAttribute).toBeUndefined();
+		expect(info.testIdAttributeFrom).toBeUndefined();
 		const note = info.notes.find(
-			(diagnostic) => diagnostic.code === "testid-attribute-inherited",
+			(diagnostic) => diagnostic.code === "testid-attribute-sibling",
 		);
 		expect(note?.severity).toBe("warning");
-		expect(note?.data?.via).toBe("sibling-config");
-		expect(note?.data?.from).toBe("playwright.base.config.ts");
+		expect(note?.data).toMatchObject({
+			attribute: "data-tid",
+			from: "playwright.base.config.ts",
+			applied: false,
+		});
+		expect(note?.message).toContain("playwright.base.config.ts");
 	});
 
-	it("reports two siblings that disagree", () => {
+	// The shape the old probe got wrong. A component-test config has no runtime
+	// relationship to the E2E suite, and `data-ct-id` would have been applied to
+	// every tree and coverage answer.
+	it("never scans with an unrelated component-test config's attribute", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts": 'export default { testDir: "./e2e" };',
+			"playwright-ct.config.ts":
+				'export default { use: { testIdAttribute: "data-ct-id" } };',
+		});
+		expect(ws.testIdAttribute()).toEqual({
+			attribute: "data-testid",
+			source: "default",
+		});
+	});
+
+	// What replaces the borrowed value: the census says the assumed attribute
+	// appears nowhere, and the sibling note says which file to point at.
+	it("leaves the census to flag the attribute and names the file to check", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts": 'export default { testDir: "./e2e" };',
+			"playwright.base.config.ts":
+				'export default { use: { testIdAttribute: "data-tid" } };',
+			"src/App.tsx":
+				'export const App = () => <div data-tid="A"><b data-tid="B" /></div>;',
+		});
+		const codes = ws.environmentWarnings().map((diagnostic) => diagnostic.code);
+		expect(codes).toContain("attribute-mismatch");
+		expect(codes).toContain("testid-attribute-sibling");
+	});
+
+	it("names both siblings when they disagree, and applies neither", () => {
 		const ws = workspaceWithConfig({
 			"playwright.config.ts": 'export default { testDir: "./e2e" };',
 			"playwright.a.config.ts":
@@ -621,16 +748,16 @@ describe("sibling config probe", () => {
 				'export default { use: { testIdAttribute: "data-b" } };',
 		});
 		const info = readPlaywrightConfig(ws);
+		expect(info.testIdAttribute).toBeUndefined();
 		const note = info.notes.find(
 			(diagnostic) => diagnostic.code === "testid-attribute-conflict",
 		);
-		expect(note).toBeDefined();
-		expect(note?.data?.attribute).toBe(info.testIdAttribute);
-		expect(note?.data?.other).not.toBe(info.testIdAttribute);
+		expect(note?.data?.attribute).toBe("data-a");
+		expect(note?.data?.other).toBe("data-b");
 	});
 
 	// A caller who names a config has answered the question the probe asks.
-	it("does not probe siblings when the config was named explicitly", () => {
+	it("does not read siblings when the config was named explicitly", () => {
 		const ws = workspaceWithConfig({
 			"playwright.config.ts": 'export default { testDir: "./e2e" };',
 			"playwright.base.config.ts":
@@ -640,14 +767,13 @@ describe("sibling config probe", () => {
 		expect(info.testIdAttribute).toBeUndefined();
 		expect(info.configSource).toBe("explicit");
 		expect(info.notes.map((diagnostic) => diagnostic.code)).not.toContain(
-			"testid-attribute-inherited",
+			"testid-attribute-sibling",
 		);
 	});
 
-	// `testIdAttribute: process.env.X` is positive evidence that the value is not
-	// the sibling's; papering over it with a neighbour's literal would report an
-	// attribute the suite provably does not run with.
-	it("does not paper over an unresolvable attribute with a sibling's", () => {
+	// `testIdAttribute: process.env.X` is positive evidence about this config, so
+	// there is nothing for a neighbour to add.
+	it("says nothing about siblings when the chosen config is unresolvable", () => {
 		const ws = workspaceWithConfig({
 			"playwright.config.ts":
 				"export default { use: { testIdAttribute: process.env.ATTR } };",
@@ -660,19 +786,59 @@ describe("sibling config probe", () => {
 			"testid-attribute-unresolved",
 		);
 		expect(info.notes.map((diagnostic) => diagnostic.code)).not.toContain(
-			"testid-attribute-inherited",
+			"testid-attribute-sibling",
 		);
 	});
 
-	it("contributes only the attribute, never the sibling's testDir", () => {
+	it("takes nothing else from a sibling either", () => {
 		const ws = workspaceWithConfig({
 			"playwright.config.ts": "export default { retries: 1 };",
 			"playwright.base.config.ts":
 				'export default { testDir: "./sibling-specs", use: { testIdAttribute: "data-tid" } };',
 		});
 		const info = readPlaywrightConfig(ws);
-		expect(info.testIdAttribute).toBe("data-tid");
+		expect(info.testIdAttribute).toBeUndefined();
 		expect(info.testDir).toBeUndefined();
+	});
+});
+
+/**
+ * `candidates` is a ranked, capped subset of what discovery found — not an
+ * inventory of the repository's configs. Typing it as the complete list invited
+ * a consumer to treat "not listed" as "does not exist".
+ */
+describe("the candidates list", () => {
+	it("is empty for an explicitly named config, which suppresses discovery", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts": "export default {};",
+			"config/pw.ts": 'export default { use: { testIdAttribute: "data-x" } };',
+		});
+		const info = readPlaywrightConfig(ws, "config/pw.ts");
+		expect(info.candidates).toEqual([]);
+		expect(info.candidatesTruncated).toBeUndefined();
+	});
+
+	it("says when ranking dropped candidates to respect the cap", () => {
+		const files: Record<string, string> = {
+			"playwright.config.ts": "export default {};",
+		};
+		for (let index = 0; index < MAX_CONFIG_CANDIDATES; index += 1) {
+			files[`pkg${index}/playwright.config.ts`] = "export default {};";
+		}
+		const info = readPlaywrightConfig(workspaceWithConfig(files));
+		expect(info.candidates).toHaveLength(MAX_CONFIG_CANDIDATES);
+		expect(info.candidatesTruncated).toBe(true);
+	});
+
+	it("carries no truncation flag when every candidate fits", () => {
+		const info = readPlaywrightConfig(
+			workspaceWithConfig({
+				"playwright.config.ts": "export default {};",
+				"e2e/playwright.config.ts": "export default {};",
+			}),
+		);
+		expect(info.candidates).toHaveLength(2);
+		expect(info.candidatesTruncated).toBeUndefined();
 	});
 });
 

@@ -13,6 +13,7 @@ import type {
 	PlaywrightConfigInfo,
 	TestIdAttributeOrigin,
 } from "../types";
+import { admitAddedFile } from "../util/fileBudget";
 import { toPosix } from "../util/paths";
 import { findImportBinding, resolveModuleSpecifier } from "../util/resolve";
 import type { Workspace } from "../workspace";
@@ -33,10 +34,10 @@ const MAX_CONFIG_IMPORT_HOPS = 1;
 /** Guards a pathological identifier/merge chain from recursing without end. */
 const MAX_LAYER_STEPS = 64;
 /**
- * Sibling configs consulted when the chosen one says nothing about the
- * attribute. Three is enough for the `playwright.config.ts` +
- * `playwright.base.config.ts` + `playwright.ci.config.ts` trio that motivates
- * the probe, and small enough that a repository full of shard configs does not
+ * Sibling configs read for a *diagnostic* when the chosen one says nothing
+ * about the attribute. Three covers the `playwright.config.ts` +
+ * `playwright.base.config.ts` + `playwright.ci.config.ts` trio the warning is
+ * for, and is small enough that a repository full of shard configs does not
  * turn one tool call into a dozen parses.
  */
 const MAX_CONFIG_PROBES = 3;
@@ -52,7 +53,16 @@ const MAX_CONFIG_PROBES = 3;
  */
 interface ConfigLayer {
 	object: ObjectLiteralExpression;
-	/** The file the literal is written in; `testDir` resolves against its directory. */
+	/**
+	 * The own property assignments this layer contributes, in source order.
+	 *
+	 * One literal can produce several layers, because a spread takes effect
+	 * exactly where it is written: `{ use: …, ...base }` is the properties before
+	 * the spread, then `base` on top of them. Splitting the literal at each spread
+	 * is what keeps the walk's precedence the same as JavaScript's.
+	 */
+	properties: PropertyAssignment[];
+	/** The file the literal is written in. */
 	sourceFile: SourceFile;
 	origin: "primary" | "merge-arg" | "spread" | "imported-base";
 	depth: 0 | 1;
@@ -202,11 +212,11 @@ function mergeUnresolved(ctx: LayerContext, node: Node): void {
 /**
  * Flattens a config expression into ordered layers, lowest precedence first.
  *
- * Simplification worth stating: a spread is always treated as *lower*
- * precedence than the literal's own properties, so `{ a: 1, ...base }` is read
- * as if it were `{ ...base, a: 1 }`. The trailing-spread form is vanishingly
- * rare in real configs, and mis-reading it costs at most one attribute read
- * that a `testid-attribute-inherited` note already flags as inherited.
+ * Spreads keep their written position: `{ ...base, a: 1 }` and
+ * `{ a: 1, ...base }` flatten to different stacks, exactly as they evaluate
+ * differently. Hoisting every spread in front of the literal's own properties
+ * was cheaper but silently reported the losing value for a trailing override,
+ * with nothing in the notes to say the answer was a guess.
  */
 function layersFromExpression(
 	request: LayerRequest,
@@ -234,15 +244,7 @@ function layersFromExpression(
 	}
 
 	if (Node.isObjectLiteralExpression(node)) {
-		return [
-			...spreadLayers(node, request, ctx),
-			{
-				object: node,
-				sourceFile: request.sourceFile,
-				origin: request.origin,
-				depth: request.depth,
-			},
-		];
+		return objectLayers(node, request, ctx);
 	}
 
 	if (Node.isCallExpression(node)) {
@@ -290,13 +292,36 @@ function layersFromExpression(
 	return [];
 }
 
-function spreadLayers(
+/**
+ * One object literal, split into layers at each spread it contains.
+ *
+ * The properties written before a spread are a lower layer than the spread; the
+ * ones after it are a higher one. A literal with no spread is one layer, which
+ * is every ordinary config.
+ *
+ * An empty layer is emitted when nothing else was produced — `{}`, or a literal
+ * whose only spread could not be followed — because "no layers at all" is how
+ * {@link layersOf} recognises an expression it failed to read, and this one was
+ * read fine.
+ */
+function objectLayers(
 	object: ObjectLiteralExpression,
 	request: LayerRequest,
 	ctx: LayerContext,
 ): ConfigLayer[] {
 	const layers: ConfigLayer[] = [];
+	let own: PropertyAssignment[] = [];
+	const flush = (): void => {
+		if (own.length > 0) {
+			layers.push(layerOf(object, own, request));
+			own = [];
+		}
+	};
 	for (const property of object.getProperties()) {
+		if (Node.isPropertyAssignment(property)) {
+			own.push(property);
+			continue;
+		}
 		if (!Node.isSpreadAssignment(property)) {
 			continue;
 		}
@@ -311,12 +336,33 @@ function spreadLayers(
 			ctx,
 		);
 		if (resolved.length === 0) {
+			// Nothing to order this layer against, so the properties around the hole
+			// stay in one layer; `unfollowableSpread` is what reports the gap.
 			ctx.unfollowableSpread = true;
 			continue;
 		}
+		flush();
 		layers.push(...resolved);
 	}
+	flush();
+	if (layers.length === 0) {
+		layers.push(layerOf(object, [], request));
+	}
 	return layers;
+}
+
+function layerOf(
+	object: ObjectLiteralExpression,
+	properties: PropertyAssignment[],
+	request: LayerRequest,
+): ConfigLayer {
+	return {
+		object,
+		properties,
+		sourceFile: request.sourceFile,
+		origin: request.origin,
+		depth: request.depth,
+	};
 }
 
 function importedLayers(
@@ -440,8 +486,29 @@ function readLayered(
 	return { state: "absent" };
 }
 
+/**
+ * The property this *layer* contributes under `name`, if any.
+ *
+ * Scoped to the layer's own slice rather than to the whole literal: a property
+ * written after a spread belongs to a higher layer than one written before it,
+ * and asking the literal would hand both to whichever layer asked first. The
+ * last assignment in the slice wins, as it does in JavaScript.
+ */
+function layerProperty(
+	layer: ConfigLayer,
+	name: string,
+): PropertyAssignment | undefined {
+	for (let index = layer.properties.length - 1; index >= 0; index -= 1) {
+		const property = layer.properties[index];
+		if (property.getName() === name) {
+			return property;
+		}
+	}
+	return undefined;
+}
+
 function useObject(layer: ConfigLayer): ObjectLiteralExpression | undefined {
-	const initializer = getProperty(layer.object, "use")?.getInitializer();
+	const initializer = layerProperty(layer, "use")?.getInitializer();
 	return initializer && Node.isObjectLiteralExpression(initializer)
 		? initializer
 		: undefined;
@@ -480,13 +547,23 @@ function addConfigFile(
 	if (existing) {
 		return existing;
 	}
+	let added: SourceFile | undefined;
 	try {
 		// The config normally lives outside the tsconfig `include`, so it has to be
 		// added explicitly rather than looked up in the program.
-		return workspace.project.addSourceFileAtPathIfExists(posix);
+		added = workspace.project.addSourceFileAtPathIfExists(posix);
 	} catch {
 		return undefined;
 	}
+	if (added) {
+		// Outside the `try`, and through the same gate as every other on-demand
+		// load: a config is a parsed file like any other. Reading one can pull in
+		// an imported base and up to three siblings, and letting those in without
+		// asking left a project already at `--max-files` holding more than the cap
+		// allows, with nothing said about it.
+		admitAddedFile(workspace.project, added);
+	}
+	return added;
 }
 
 /**
@@ -523,6 +600,8 @@ export function readPlaywrightConfig(
 			);
 			return emptyInfo(notes, [], "none");
 		}
+		// No candidates: naming a config suppresses discovery, so there is no
+		// ranked list to report and `candidates` stays empty by contract.
 		return readChosenConfig(workspace, sourceFile, [], "explicit", notes);
 	}
 
@@ -551,7 +630,7 @@ export function readPlaywrightConfig(
 				`The discovered Playwright config ${workspace.rel(chosen)} could not be read; assuming Playwright defaults.`,
 			),
 		);
-		return emptyInfo(notes, relatives, "none");
+		return emptyInfo(notes, relatives, "none", found.truncated);
 	}
 
 	return readChosenConfig(
@@ -560,6 +639,7 @@ export function readPlaywrightConfig(
 		found.candidates,
 		"discovered",
 		notes,
+		found.truncated,
 	);
 }
 
@@ -567,10 +647,12 @@ function emptyInfo(
 	notes: Diagnostic[],
 	candidates: string[],
 	configSource: PlaywrightConfigInfo["configSource"],
+	candidatesTruncated?: true,
 ): PlaywrightConfigInfo {
 	return {
 		configFile: null,
 		candidates,
+		...(candidatesTruncated ? { candidatesTruncated } : {}),
 		configSource,
 		testIdAttribute: undefined,
 		testDir: undefined,
@@ -585,6 +667,7 @@ function readChosenConfig(
 	candidates: string[],
 	configSource: "discovered" | "explicit",
 	notes: Diagnostic[],
+	candidatesTruncated?: true,
 ): PlaywrightConfigInfo {
 	const configFile = workspace.rel(sourceFile.getFilePath());
 	const relatives = candidates.map((candidate) => workspace.rel(candidate));
@@ -616,6 +699,7 @@ function readChosenConfig(
 		return {
 			configFile,
 			candidates: relatives,
+			...(candidatesTruncated ? { candidatesTruncated } : {}),
 			configSource,
 			testIdAttribute: undefined,
 			testDir: undefined,
@@ -626,22 +710,23 @@ function readChosenConfig(
 
 	/* ---- testDir ------------------------------------------------------- */
 
-	// Playwright resolves a relative `testDir` against the directory holding the
-	// config that wrote it — which, with a merged base config, is not always the
-	// chosen file. Reading it against the *defining* layer's file is what makes
-	// `testDir: "./specs"` in `playwright/playwright.base.config.ts` mean
-	// `playwright/specs`.
+	// Playwright resolves every relative path in the effective config against the
+	// directory of the config file it *loaded*, never the module a value was
+	// written in: `configDir` is `path.dirname(resolvedConfigFile)`, and a base
+	// config reached by import or spread contributes a plain string with no
+	// provenance attached. So `testDir: "./specs"` in
+	// `playwright/base.ts`, spread into a root `playwright.config.ts`, means
+	// `<root>/specs` — resolving it against the base's own directory pointed the
+	// workspace at a directory Playwright never reads, and picked up whatever
+	// tsconfig sits next to it.
 	const testDirRead = readLayered(layers, (layer) =>
-		getProperty(layer.object, "testDir"),
+		layerProperty(layer, "testDir"),
 	);
 	let testDir: string | undefined;
 	let testDirUnresolved: true | undefined;
 	if (testDirRead.state === "found") {
 		testDir = workspace.rel(
-			path.resolve(
-				path.dirname(testDirRead.layer.sourceFile.getFilePath()),
-				testDirRead.value,
-			),
+			path.resolve(path.dirname(sourceFile.getFilePath()), testDirRead.value),
 		);
 	} else if (testDirRead.state === "unresolved") {
 		testDirUnresolved = true;
@@ -702,26 +787,22 @@ function readChosenConfig(
 		);
 	}
 
-	/* ---- sibling probe --------------------------------------------------- */
+	/* ---- sibling configs: reported, never applied ------------------------ */
 
 	if (
 		testIdAttribute === undefined &&
 		!attributeUnresolved &&
 		configSource !== "explicit"
 	) {
-		const probed = probeSiblings(workspace, sourceFile, candidates, notes);
-		if (probed) {
-			testIdAttribute = probed.attribute;
-			testIdAttributeFrom = "sibling-config";
-		}
+		probeSiblings(workspace, sourceFile, candidates, notes);
 	}
 
 	/* ---- project overrides ----------------------------------------------- */
 
 	const projectOverrides: PlaywrightConfigInfo["projectOverrides"] = [];
 	for (let index = layers.length - 1; index >= 0; index -= 1) {
-		const initializer = getProperty(
-			layers[index].object,
+		const initializer = layerProperty(
+			layers[index],
 			"projects",
 		)?.getInitializer();
 		if (!initializer || !Node.isArrayLiteralExpression(initializer)) {
@@ -769,6 +850,7 @@ function readChosenConfig(
 	return {
 		configFile,
 		candidates: relatives,
+		...(candidatesTruncated ? { candidatesTruncated } : {}),
 		configSource,
 		testIdAttribute,
 		...(testIdAttributeFrom ? { testIdAttributeFrom } : {}),
@@ -780,28 +862,36 @@ function readChosenConfig(
 }
 
 /**
- * Reads the attribute out of the remaining ranked configs.
+ * Says what the *other* discovered configs set, and applies none of it.
  *
- * A repository that splits its config into `playwright.config.ts` (projects,
- * reporters) and `playwright.base.config.ts` (`use`) without importing one from
- * the other still runs with the base's attribute in whichever config CI points
- * at. Guessing silently would be wrong; ignoring it means answering with
- * `data-testid` while the sources say otherwise. So: read it, use it, and say
- * loudly where it came from. The probe contributes the attribute and nothing
- * else — a sibling's `testDir` or `projects` say nothing about this run.
+ * Two repository shapes are statically indistinguishable here. One splits its
+ * config into `playwright.config.ts` (projects, reporters) and
+ * `playwright.base.config.ts` (`use`) with no import between them, and really
+ * does run with the base's attribute. The other keeps a `playwright-ct.config.ts`
+ * for component tests beside an E2E config that has no relationship to it at
+ * all, and running the E2E scan with `data-ct-id` would be wrong about every
+ * file. Borrowing the value was a coin flip made silently, while the metadata
+ * kept naming the chosen config.
+ *
+ * So the sibling is read and reported, never applied. Configs the chosen one
+ * *is* related to — imported, spread, merged — are layers, and those do apply;
+ * a caller who wants the sibling's value names it with an explicit config, or
+ * overrides the attribute outright. The attribute census independently flags the
+ * case where the assumed attribute appears nowhere in the sources.
  */
 function probeSiblings(
 	workspace: Workspace,
 	chosen: SourceFile,
 	candidates: string[],
 	notes: Diagnostic[],
-): { attribute: string; from: string } | null {
+): void {
 	const chosenPath = toPosix(chosen.getFilePath());
+	const chosenRel = workspace.rel(chosenPath);
 	const others = candidates
 		.filter((candidate) => toPosix(candidate) !== chosenPath)
 		.slice(0, MAX_CONFIG_PROBES);
 
-	let winner: { attribute: string; from: string } | null = null;
+	let first: { attribute: string; from: string } | null = null;
 	for (const candidate of others) {
 		const sourceFile = addConfigFile(workspace, candidate);
 		if (!sourceFile) {
@@ -819,35 +909,34 @@ function probeSiblings(
 			continue;
 		}
 		const from = workspace.rel(candidate);
-		if (!winner) {
-			winner = { attribute: read.value, from };
+		if (!first) {
+			first = { attribute: read.value, from };
 			notes.push(
 				warn(
-					"testid-attribute-inherited",
-					`${workspace.rel(chosenPath)} does not set \`use.testIdAttribute\`; "${read.value}" was read from ${from} instead. Confirm that is the config your tests run with.`,
+					"testid-attribute-sibling",
+					`${from} sets \`use.testIdAttribute\` to "${read.value}", but ${chosenRel} — the config that was read — neither sets it nor imports that file, so the value was not applied. Point the analysis at ${from}, or set the attribute explicitly, if that is what your tests run with.`,
 					workspace.loc(read.node),
-					{ attribute: read.value, via: "sibling-config", from },
+					{ attribute: read.value, from, applied: false },
 				),
 			);
 			continue;
 		}
-		if (read.value !== winner.attribute) {
+		if (read.value !== first.attribute) {
 			notes.push(
 				warn(
 					"testid-attribute-conflict",
-					`Playwright configs disagree about \`use.testIdAttribute\`: ${winner.from} says "${winner.attribute}", ${from} says "${read.value}". "${winner.attribute}" was used.`,
+					`Playwright configs disagree about \`use.testIdAttribute\`: ${first.from} says "${first.attribute}", ${from} says "${read.value}". Neither was applied; ${chosenRel} was read.`,
 					workspace.loc(read.node),
 					{
-						attribute: winner.attribute,
+						attribute: first.attribute,
 						other: read.value,
-						from: winner.from,
+						from: first.from,
 						conflictsWith: from,
 					},
 				),
 			);
 		}
 	}
-	return winner;
 }
 
 /**

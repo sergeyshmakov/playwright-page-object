@@ -35,6 +35,8 @@ export type DiagnosticCode =
 	| "testid-attribute-maybe-spread"
 	| "testid-attribute-project-override"
 	| "testid-attribute-inherited"
+	/** Another discovered config sets an attribute; it was reported, not applied. */
+	| "testid-attribute-sibling"
 	| "testid-attribute-conflict"
 	// environment sanity
 	| "attribute-mismatch"
@@ -614,6 +616,11 @@ export interface TestIdTree {
  * A Playwright config is routinely a merge — `defineConfig({ ...base, … })`, or
  * a leaf config importing a shared base one directory up. Reporting only the
  * chosen *file* would name a file that does not contain the attribute at all.
+ *
+ * Every origin is a layer of the chosen config's own expression. A config the
+ * chosen one does not reference is not one of them: it has no runtime
+ * relationship to this run, so its attribute is reported as a
+ * `testid-attribute-sibling` note and never becomes the effective value.
  */
 export type TestIdAttributeOrigin =
 	/** Written in the chosen config's own object literal. */
@@ -623,18 +630,22 @@ export type TestIdAttributeOrigin =
 	/** Written in a config the chosen one imports (one hop). */
 	| "base-config"
 	/** Written in an object spread into the chosen config's literal. */
-	| "spread"
-	/** Not in the chosen config at all; read from another discovered config. */
-	| "sibling-config";
+	| "spread";
 
 export interface PlaywrightConfigInfo {
 	configFile: string | null;
 	/**
-	 * Every discovered config, ranked, workspace-relative. The chosen one is
-	 * first when discovery picked it; an explicit path is not in this list unless
-	 * discovery found it too.
+	 * Ranked, workspace-relative configs that *discovery* found — a capped subset,
+	 * not an inventory.
+	 *
+	 * The chosen one is first. The list is capped at the discovery limit, and
+	 * {@link candidatesTruncated} says when the cap dropped some. It is empty for
+	 * an explicitly named config, because naming one suppresses discovery
+	 * entirely: there is no ranked list to report, not even a list of one.
 	 */
 	candidates: string[];
+	/** `true` when discovery ranked more configs than {@link candidates} keeps. */
+	candidatesTruncated?: true;
 	/** Whether {@link configFile} was chosen by discovery or supplied by the caller. */
 	configSource: "discovered" | "explicit" | "none";
 	testIdAttribute: string | undefined;
