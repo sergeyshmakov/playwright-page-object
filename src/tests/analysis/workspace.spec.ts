@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AnalysisLimitError } from "../../analysis/diagnostics";
 import { resolveRelativeModule } from "../../analysis/util/resolve";
@@ -266,6 +267,60 @@ describe("Workspace config discovery caching", () => {
 			source: "playwright-config",
 		});
 	});
+
+	/**
+	 * The config usually lives outside the analysed scope — always, for a
+	 * tsconfig-backed or `--src-dir`-narrowed workspace. Such a file can never
+	 * appear in the rescan's `added` list, so hanging invalidation off that list
+	 * kept the stale candidate list for the lifetime of the process: adding a
+	 * config to a running server did nothing until it was restarted.
+	 */
+	it("re-discovers a config created outside the analysed scope", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+				include: ["src"],
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		expect(ws.playwright().configFile).toBeNull();
+
+		write(
+			root,
+			"e2e/playwright.config.ts",
+			'export default { use: { testIdAttribute: "data-late" } };',
+		);
+		expect(ws.revalidate().added, "outside the tsconfig's file set").toEqual(
+			[],
+		);
+
+		expect(ws.playwright().configFile).toBe("e2e/playwright.config.ts");
+		expect(ws.testIdAttribute()).toEqual({
+			attribute: "data-late",
+			source: "playwright-config",
+		});
+	});
+
+	it("notices a config that was deleted outside the analysed scope", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+				include: ["src"],
+			}),
+			"src/a.ts": "export const a = 1;",
+			"e2e/playwright.config.ts":
+				'export default { use: { testIdAttribute: "data-gone" } };',
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		expect(ws.testIdAttribute().attribute).toBe("data-gone");
+
+		fs.rmSync(path.join(root, "e2e/playwright.config.ts"));
+		ws.revalidate();
+
+		expect(ws.playwright().configFile).toBeNull();
+		expect(ws.testIdAttribute().attribute).toBe("data-testid");
+	});
 });
 
 describe("Workspace.revalidate", () => {
@@ -380,9 +435,11 @@ describe("Workspace.revalidate", () => {
 
 /**
  * One cap, one rule, wherever the file came from: the project never holds more
- * analysable files than `maxFiles`. Whatever addition breaks that is undone and
- * reported, and the condition is re-detected on every later call — a cap that
- * could be walked past by simply calling again is not a cap.
+ * parsed source files than `maxFiles` — every file it retained, less
+ * declaration files and ignored paths, and *not* filtered by the analysed
+ * scope. Whatever addition breaks that is undone and reported, and the
+ * condition is re-detected on every later call — a cap that could be walked
+ * past by simply calling again is not a cap.
  */
 describe("Workspace maxFiles enforcement", () => {
 	const capped = {
@@ -460,6 +517,149 @@ describe("Workspace maxFiles enforcement", () => {
 
 		fs.rmSync(path.join(root, "src/c.ts"));
 		expect(rels(Workspace.acquire(options))).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
+	/**
+	 * `--src-dir` says which files are *analysed*, not how many the project may
+	 * hold. Counting only the narrowed scope meant an in-scope file could import
+	 * arbitrarily many siblings outside it — each one parsed, retained and paid
+	 * for — while the cap it was walking past reported nothing.
+	 */
+	it("counts a resolver-added file from outside a narrowed scope", () => {
+		const root = scratch({
+			"src/a.ts":
+				'import { helper } from "../shared/helper";\nexport const a = helper;',
+			"src/b.ts": "export const b = 1;",
+			"shared/helper.ts": "export const helper = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src"],
+			maxFiles: 2,
+		});
+		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+		expect(() =>
+			resolveRelativeModule(
+				ws.project,
+				ws.project.getSourceFileOrThrow("a.ts"),
+				"../shared/helper",
+			),
+		).toThrow(AnalysisLimitError);
+		expect(parsed(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
+	// Reading the config parses a file, and it used to reach the project without
+	// passing the gate at all: a project sitting exactly on the cap then held one
+	// more than the cap allows — plus its imported base, plus every sibling read.
+	it("counts the Playwright config it reads", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+			"e2e/playwright.config.ts":
+				'export default { use: { testIdAttribute: "data-x" } };',
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src"],
+			maxFiles: 2,
+		});
+		expect(() => ws.playwright()).toThrow(AnalysisLimitError);
+		expect(parsed(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
+	/**
+	 * `Workspace.fromProject` lets a second workspace wrap a project that already
+	 * has an owner. The gate registry replaced the first owner's entry, so a later
+	 * wrapper with a laxer cap became the only one enforced and the first
+	 * workspace's callers kept a guarantee that had stopped holding.
+	 */
+	it("keeps every owner's cap when two workspaces share a project", () => {
+		const root = scratch({
+			"src/a.ts":
+				'import { helper } from "./helper.js";\nexport const a = helper;',
+			"src/helper.js": "export const helper = 1;",
+		});
+		const project = new Project({
+			skipAddingFilesFromTsConfig: true,
+			skipFileDependencyResolution: true,
+		});
+		project.addSourceFileAtPath(path.join(root, "src/a.ts"));
+		Workspace.fromProject(project, { projectRoot: root, maxFiles: 1 });
+		Workspace.fromProject(project, { projectRoot: root, maxFiles: 50 });
+
+		expect(() =>
+			resolveRelativeModule(
+				project,
+				project.getSourceFileOrThrow("a.ts"),
+				"./helper.js",
+			),
+		).toThrow(AnalysisLimitError);
+	});
+});
+
+/**
+ * A file the resolver pulls in mid-call is not in the memoized file list, and
+ * nothing else was going to invalidate it: the next sweep finds the mtime it
+ * already recorded, reports no change and never bumps the epoch. The file then
+ * stayed invisible to `sourceFiles()` for the rest of the session.
+ */
+describe("Workspace on-demand additions", () => {
+	it("shows a resolver-added file in the next sourceFiles()", () => {
+		const root = scratch({
+			"src/a.ts":
+				'import { helper } from "./helper.js";\nexport const a = helper;',
+			"src/helper.js": "export const helper = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		// `.js` is outside the scan globs, so it is in the project only once the
+		// resolver follows the import — and `rels` here memoizes the list first.
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+		resolveRelativeModule(
+			ws.project,
+			ws.project.getSourceFileOrThrow("a.ts"),
+			"./helper.js",
+		);
+
+		expect(rels(ws)).toEqual(["src/a.ts", "src/helper.js"]);
+		ws.revalidate();
+		expect(rels(ws)).toContain("src/helper.js");
+	});
+
+	// Only the file list is dropped. An epoch bump on every admission would throw
+	// away the config read and every other per-epoch memo hundreds of times over
+	// during a single walk.
+	it("does not bump the epoch for an on-demand addition", () => {
+		const root = scratch({
+			"src/a.ts":
+				'import { helper } from "./helper.js";\nexport const a = helper;',
+			"src/helper.js": "export const helper = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const before = ws.currentEpoch;
+		resolveRelativeModule(
+			ws.project,
+			ws.project.getSourceFileOrThrow("a.ts"),
+			"./helper.js",
+		);
+		expect(ws.currentEpoch).toBe(before);
+	});
+
+	// A file outside the analysed scope still counts against the cap, but it has
+	// no business appearing in the analysed set.
+	it("leaves an out-of-scope addition out of the analysed set", () => {
+		const root = scratch({
+			"src/a.ts":
+				'import { helper } from "../shared/helper";\nexport const a = helper;',
+			"shared/helper.ts": "export const helper = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+		resolveRelativeModule(
+			ws.project,
+			ws.project.getSourceFileOrThrow("a.ts"),
+			"../shared/helper",
+		);
+		expect(rels(ws)).toEqual(["src/a.ts"]);
 	});
 });
 

@@ -69,6 +69,7 @@ function environmentRank(code: DiagnosticCode): number {
 		case "testid-attribute-unresolved":
 		case "testid-attribute-conflict":
 		case "testid-attribute-inherited":
+		case "testid-attribute-sibling":
 		case "testid-attribute-maybe-spread":
 		case "testid-attribute-project-override":
 			return 0;
@@ -184,8 +185,9 @@ export class Workspace {
 	 * Ranked Playwright config paths. Deliberately *not* epoch-scoped: an edit to
 	 * a source file changes what the configs say, never which files exist, and
 	 * re-globbing the repository on every epoch bump would put a filesystem walk
-	 * on the hot path. {@link revalidate} clears it when a config-shaped file
-	 * actually appears.
+	 * on the hot path. {@link revalidate} refreshes it on the same throttled
+	 * cadence as the source re-glob (see {@link rediscoverConfigs}), and clears
+	 * it outright when a config-shaped file appears in or leaves the scan.
 	 */
 	private discovery: ConfigDiscovery | null = null;
 	private fileList: { epoch: number; value: SourceFile[] } | null = null;
@@ -349,10 +351,17 @@ export class Workspace {
 				skipFileDependencyResolution: true,
 				compilerOptions: synthesizedCompilerOptions(),
 			});
-			project.addSourceFilesAtPaths([
-				...defaultIncludeGlobs(root),
-				...defaultExcludeGlobs(root),
-			]);
+			// Same rule as the tsconfig branch above: a narrowed scope must not
+			// parse everything outside it first and filter afterwards. The include
+			// globs below are the whole scan then, and the resolver pulls in what
+			// they import — which is what makes the cap on files parsed mean
+			// something on a repository with no tsconfig.
+			if (!narrowed) {
+				project.addSourceFilesAtPaths([
+					...defaultIncludeGlobs(root),
+					...defaultExcludeGlobs(root),
+				]);
+			}
 			warnings.push(
 				info(
 					"no-tsconfig",
@@ -676,12 +685,15 @@ export class Workspace {
 			} catch {
 				// A glob that matches nothing is not an error.
 			}
+			this.rediscoverConfigs();
 		}
 
 		// A newly created Playwright config changes which file the analysis should
 		// be reading, and the candidate list is the one cache an epoch bump does
 		// not clear. Adding `playwright.config.ts` to a repository that had none
-		// must not require a server restart.
+		// must not require a server restart. This covers the config that is *in*
+		// the analysed scope, including its deletion, which the mtime sweep sees
+		// immediately rather than at the next re-glob.
 		if (
 			result.added.some(isPlaywrightConfigPath) ||
 			result.removed.some(isPlaywrightConfigPath)
@@ -728,6 +740,39 @@ export class Workspace {
 		]);
 	}
 
+	/**
+	 * Re-runs config discovery on the same cadence as the source re-glob.
+	 *
+	 * A Playwright config usually lives outside the analysed scope — always, for
+	 * a tsconfig-backed or `--src-dir`-narrowed workspace — so a config created
+	 * after startup never reaches `rescan()`'s `added` list, and the "a
+	 * config-shaped file appeared" check below could not see it. The cached
+	 * candidate list then outlived the process, and the new config's
+	 * `testIdAttribute` stayed invisible until a restart.
+	 *
+	 * One extra `globSync` per throttle window, alongside the source walk that
+	 * has just run — not one per call — and only when a list is cached at all.
+	 */
+	private rediscoverConfigs(): void {
+		const cached = this.discovery;
+		if (!cached) {
+			return;
+		}
+		const found = discoverPlaywrightConfigs(this.project, this.root);
+		if (
+			found.candidates.length === cached.candidates.length &&
+			found.candidates.every(
+				(candidate, index) => candidate === cached.candidates[index],
+			)
+		) {
+			return;
+		}
+		this.discovery = found;
+		// Which config is read decides the attribute, which decides every answer:
+		// the derived caches have to go with it.
+		this.bumpEpoch();
+	}
+
 	private recordMtimes(): void {
 		if (this.inMemory) {
 			return;
@@ -750,7 +795,10 @@ export class Workspace {
 	 *
 	 * Semantics, deliberately uniform across the constructor, the per-call
 	 * rescan and the resolver's on-demand loads: **the project never holds more
-	 * analysable files than `maxFiles`**. An addition that would break that is
+	 * parsed source files than `maxFiles`** — see {@link countsAgainstCap} for
+	 * what that counts, and note that it is *not* the analysed scope.
+	 *
+	 * An addition that would break the invariant is
 	 * rolled back, the workspace leaves the LRU, and `AnalysisLimitError` (wired
 	 * to `max_files_exceeded`) is raised. The rolled-back files are still on
 	 * disk, so the very next call re-detects the same violation and raises again
@@ -772,7 +820,7 @@ export class Workspace {
 		evictOnFailure = false,
 	): void {
 		const limit = this.options.maxFiles ?? DEFAULT_MAX_FILES;
-		const count = this.analysableCount();
+		const count = this.parsedCount();
 		if (count <= limit) {
 			return;
 		}
@@ -795,18 +843,30 @@ export class Workspace {
 	}
 
 	/**
-	 * Cap gate for a file the resolver added on demand.
+	 * Cap gate for a file that joined the project outside the workspace's own
+	 * scan: an on-demand resolver load, or a Playwright config read.
 	 *
-	 * The cheap raw count comes first: the analysable set is a subset of the
+	 * The cheap raw count comes first: the counted set is a subset of the
 	 * project's files, so nothing can be over the cap while the raw count is
 	 * not, and this runs on every on-demand load.
+	 *
+	 * A file that survives the cap and belongs to the analysed scope invalidates
+	 * the memoized file list. Without that, a module the resolver pulled in
+	 * mid-call stayed invisible to `sourceFiles()` not just for the rest of that
+	 * call but for the rest of the session: the next `revalidate()` finds its
+	 * mtime already recorded, reports no change, and never bumps the epoch that
+	 * would have rebuilt the list. Only the list is dropped, not the epoch — an
+	 * epoch bump would throw away the config read and every other per-epoch memo
+	 * on every one of the hundreds of resolutions a single walk performs.
 	 */
 	private admitResolvedFile(added: SourceFile): void {
 		const limit = this.options.maxFiles ?? DEFAULT_MAX_FILES;
-		if (this.project.getSourceFiles().length <= limit) {
-			return;
+		if (this.project.getSourceFiles().length > limit) {
+			this.enforceMaxFiles([added]);
 		}
-		this.enforceMaxFiles([added]);
+		if (this.analysable(added)) {
+			this.fileList = null;
+		}
 	}
 
 	/**
@@ -816,13 +876,11 @@ export class Workspace {
 	 * per epoch, and files added since — by the resolver, or by the rescan being
 	 * checked right now — are exactly the ones the cap has to see.
 	 */
-	private analysableCount(): number {
-		const include = this.options.include ?? [];
-		const exclude = this.options.exclude ?? [];
+	private parsedCount(): number {
 		let count = 0;
 		for (const sourceFile of this.project.getSourceFiles()) {
 			const absolute = sourceFile.getFilePath();
-			if (isAnalysable(absolute, this.rel(absolute), include, exclude)) {
+			if (countsAgainstCap(absolute, this.rel(absolute))) {
 				count += 1;
 			}
 		}
@@ -831,11 +889,32 @@ export class Workspace {
 }
 
 /**
+ * Whether a file the project holds is one the `maxFiles` cap counts.
+ *
+ * Everything parsed and retained, less what costs nothing to keep: a
+ * declaration file carries no analysable code, and an ignored path
+ * (`node_modules`, build output) is never the repository's own source.
+ *
+ * What is deliberately *not* applied here is the include/exclude scope. The cap
+ * is documented as a cap on files parsed, and `--src-dir` says which files are
+ * analysed, not how many the project may hold. Counting only the narrowed scope
+ * meant a project sitting exactly on the cap could import unlimited siblings
+ * outside it — every one of them parsed, retained and paid for — without ever
+ * reaching `max_files_exceeded`. The analysed set ({@link isAnalysable}) is a
+ * subset of this one, so a repository within the cap stays within it.
+ */
+function countsAgainstCap(absolute: string, relative: string): boolean {
+	return !isDeclarationFile(absolute) && !isIgnoredPath(relative);
+}
+
+/**
  * Whether one file belongs to the analysed project.
  *
- * Shared by `sourceFiles()` and the pre-scan `maxFiles` check so the two count
- * the same set: a pre-check that counted more than the loaded project would
- * reject repositories that are actually within the cap.
+ * Shared by `sourceFiles()` and the pre-scan `maxFiles` check, so the pre-check
+ * never counts a file the loaded project would have dropped and rejects a
+ * repository that is actually within the cap. It is a strict subset of
+ * {@link countsAgainstCap}, which is what the cap itself counts: what may be
+ * *analysed* is narrower than what may be *parsed*.
  */
 function isAnalysable(
 	absolute: string,
@@ -879,8 +958,10 @@ function configDirOf(configFile: string | null): string | undefined {
  *
  * Silent when the config cannot be read: the constructor's `enforceMaxFiles()`
  * is still the authority, this only moves the rejection earlier for the common
- * case. Counting the same filtered set as `sourceFiles()` keeps it from
- * rejecting a project the real count would have allowed.
+ * case. It counts the analysed set rather than everything the cap counts, which
+ * can only make it *less* eager to reject — the tsconfig's list says nothing
+ * about what the resolver will pull in later, and a pre-check that over-counted
+ * would refuse a repository the real count allows.
  */
 function precheckMaxFiles(
 	root: string,

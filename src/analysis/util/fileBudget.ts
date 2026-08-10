@@ -12,24 +12,44 @@ import type { Project, SourceFile } from "ts-morph";
  */
 export type FileAdmission = (added: SourceFile) => void;
 
-const admissions = new WeakMap<Project, FileAdmission>();
+const admissions = new WeakMap<Project, FileAdmission[]>();
 
-/** Registers the owning workspace's gate. One workspace, one project, one gate. */
+/**
+ * Registers an owning workspace's gate.
+ *
+ * Gates accumulate; they never replace one another. Two workspaces over one
+ * `Project` is unusual — `Workspace.fromProject` is the only door — but a second
+ * registration used to overwrite the first, so a later wrapper with a laxer
+ * `maxFiles` became the only cap enforced and the earlier workspace kept a
+ * guarantee that had quietly stopped holding. With every owner's gate on the
+ * chain, the strictest cap is the one that decides.
+ */
 export function registerFileAdmission(
 	project: Project,
 	admit: FileAdmission,
 ): void {
-	admissions.set(project, admit);
+	const existing = admissions.get(project);
+	if (existing) {
+		existing.push(admit);
+		return;
+	}
+	admissions.set(project, [admit]);
 }
 
 /**
- * Runs the owning workspace's gate over a file that was just added.
+ * Runs every owning workspace's gate over a file that was just added.
  *
  * Throws `AnalysisLimitError` when the addition puts the project past
  * `maxFiles`; the gate undoes the addition first, so the project is left
- * exactly as it was. A project nobody registered — a bare `Project` built by a
- * unit test — has no cap to enforce.
+ * exactly as it was, and the remaining gates are moot. A project nobody
+ * registered — a bare `Project` built by a unit test — has no cap to enforce.
  */
 export function admitAddedFile(project: Project, added: SourceFile): void {
-	admissions.get(project)?.(added);
+	const gates = admissions.get(project);
+	if (!gates) {
+		return;
+	}
+	for (const admit of gates) {
+		admit(added);
+	}
 }
