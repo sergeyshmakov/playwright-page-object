@@ -462,7 +462,7 @@ function missingComponent(
 	const inFile = [
 		...new Set(
 			all
-				.filter((component) => sameFile(component.file, scopeFile))
+				.filter((component) => isScannedFile(component.file, scopeFile))
 				.map((component) => component.name),
 		),
 	].sort();
@@ -569,7 +569,7 @@ export function handleGetTestIdTree(
 		// caller gave one; otherwise a name two files declare is ambiguous, and
 		// answering with whichever was scanned first is a guess.
 		const matches = scopeFile
-			? named.filter((component) => sameFile(component.file, scopeFile))
+			? named.filter((component) => isScannedFile(component.file, scopeFile))
 			: named;
 		if (matches.length === 0) {
 			throw missingComponent(args.component, scopeFile, named, components);
@@ -676,14 +676,18 @@ function foldFile(value: string): string {
 }
 
 /**
- * Mirrors how the engine resolves an `entry` file: posix separators, a trailing
- * path segment is enough ("Nested.tsx" matches "src/Nested.tsx"), and case is
- * folded only where the filesystem folds it too.
+ * Whether an engine-emitted path is the scanned file `resolveEntryFile` picked.
+ *
+ * Exact, deliberately. The suffix rule that makes `Nested.tsx` stand in for
+ * `src/deep/Nested.tsx` belongs to {@link matchEntryPath}, which has already run
+ * by the time anything here compares paths — and applying it a second time to
+ * the *result* undoes it: `src/App.tsx`, resolved exactly against the scan,
+ * matched `packages/ui/src/App.tsx` again, so a monorepo that declares the
+ * requested component in the package copy was answered with the package copy
+ * however fully the caller spelled the path.
  */
-function sameFile(rel: string, wanted: string): boolean {
-	const left = foldFile(rel);
-	const right = foldFile(wanted);
-	return left === right || left.endsWith(`/${right}`);
+function isScannedFile(rel: string, resolved: string): boolean {
+	return foldFile(rel) === foldFile(resolved);
 }
 
 /**

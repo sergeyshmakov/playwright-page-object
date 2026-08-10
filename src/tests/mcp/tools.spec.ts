@@ -784,6 +784,56 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	// Resolving `file` exactly is only half of it: the `component` filter then
+	// asked the same question a second time with a suffix rule, so the resolved
+	// path was widened straight back to every file ending in it. A repository
+	// that declares the name in only one of them was answered with that one,
+	// whatever path the caller spelled.
+	it("keeps the exact file when component narrows the search", async () => {
+		await withProject(
+			"ppo-entry-exact-component-",
+			{
+				"packages/ui/src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="PackageRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="AppRoot" />;',
+					"}",
+					"export function Home() {",
+					'\treturn <div data-testid="HomeRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				// Both files declare `App`; the fully spelled path settles it rather
+				// than making the pair ambiguous all over again.
+				const exact = await callTool(client, "get_testid_tree", {
+					file: "src/App.tsx",
+					component: "App",
+				});
+				expect(exact.isError).toBe(false);
+				const serialized = JSON.stringify(exact.envelope.data);
+				expect(serialized).toContain("AppRoot");
+				expect(serialized).not.toContain("PackageRoot");
+
+				// And a name the named file does not declare is a miss, not a licence
+				// to root at a deeper file whose path happens to end the same way.
+				const missing = await callTool(client, "get_testid_tree", {
+					file: "packages/ui/src/App.tsx",
+					component: "Home",
+				});
+				expect(missing.isError).toBe(true);
+				expect(missing.envelope.error?.code).toBe("file_not_found");
+				expect(missing.envelope.error?.candidates).toEqual(["src/App.tsx"]);
+			},
+		);
+	}, 30_000);
+
 	// A one-character typo in `component` used to be a dead end: file_not_found
 	// with no suggestions, no candidates, and a hint that only said to try
 	// something else.
