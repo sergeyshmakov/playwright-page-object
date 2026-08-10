@@ -192,6 +192,49 @@ describe("MCP server over in-memory transport", () => {
 		expect(rootDef.methods.length).toBeGreaterThan(0);
 	}, 30_000);
 
+	/**
+	 * The engine memoizes the tree and hands the same object to every caller, so
+	 * `includeMethods: false` must not be able to trim it. It used to delete the
+	 * methods in place, which — once the cache existed — silently emptied the
+	 * `methods` list of every later call in the session.
+	 */
+	it("includeMethods:false does not strip methods from later calls", async () => {
+		const { client } = await connect(exampleRoot);
+		const methodCount = async (includeMethods: boolean): Promise<number> => {
+			const { envelope } = await callTool(client, "get_page_object_tree", {
+				class: "CheckoutPage",
+				includeMethods,
+			});
+			const data = envelope.data as {
+				root: string;
+				defs: Record<string, { methods: unknown[] }>;
+			};
+			return data.defs[data.root].methods.length;
+		};
+
+		const full = await methodCount(true);
+		expect(full).toBeGreaterThan(0);
+		expect(await methodCount(false)).toBe(0);
+		expect(await methodCount(true)).toBe(full);
+	}, 30_000);
+
+	/**
+	 * A control declares no page object `list_page_objects` would show, so the
+	 * lookup has to widen to the controls-inclusive index to find its file. The
+	 * handler consults the plain index first — the one every other call already
+	 * built — so this is the path that proves the widening still happens.
+	 */
+	it("map_coverage scopes to a file that declares only a control", async () => {
+		const { client } = await connect(exampleRoot);
+		const { isError, envelope } = await callTool(client, "map_coverage", {
+			file: "e2e/page-objects/controls/ButtonControl.ts",
+			buckets: [],
+		});
+		expect(isError).toBe(false);
+		expect(envelope.ok).toBe(true);
+		expect(envelope.data).toHaveProperty("summary");
+	}, 30_000);
+
 	it("rejects a call with neither class nor file", async () => {
 		const { client } = await connect(exampleRoot);
 		const { isError, envelope } = await callTool(

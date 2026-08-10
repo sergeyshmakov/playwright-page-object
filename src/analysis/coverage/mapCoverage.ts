@@ -442,9 +442,41 @@ function labelsOf(matches: Match[]): string[] {
  * "Apply" })` is a first-class selector; flagging it would train people to
  * ignore the report.
  */
+/**
+ * Cache identity for one report. Same rule as the tree: engine inputs only,
+ * caller's raw `attribute` rather than the resolved one, and nothing about how
+ * the handler intends to page or slice the buckets afterwards.
+ */
+function coverageKey(options: CoverageOptions): string {
+	return `coverage::${JSON.stringify({
+		attribute: options.attribute ?? null,
+		includeRawLocators: options.includeRawLocators === true,
+		uiInclude: options.uiInclude ?? null,
+		poInclude: options.poInclude ?? null,
+		assumeForwarded: options.assumeForwarded === true,
+	})}`;
+}
+
+/**
+ * Builds the coverage report.
+ *
+ * Memoized per epoch; the result is a wire shape, and callers must read it
+ * without writing to it. `buckets`, `limit` and `offset` are the handler's
+ * business and deliberately absent from the key: they slice this report rather
+ * than change it.
+ */
 export function buildCoverageReport(
 	ws: Workspace,
 	options: CoverageOptions = {},
+): CoverageReport {
+	return ws.memo(coverageKey(options), [], () =>
+		computeCoverageReport(ws, options),
+	);
+}
+
+function computeCoverageReport(
+	ws: Workspace,
+	options: CoverageOptions,
 ): CoverageReport {
 	const attribute = options.attribute
 		? { attribute: options.attribute, source: "param" as const }

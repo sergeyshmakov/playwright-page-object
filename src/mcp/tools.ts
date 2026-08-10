@@ -17,6 +17,7 @@ import {
 	normalizeRelPath,
 	type PageObjectSummary,
 	type SelectorInfo,
+	scannedComponents,
 	type UiNode,
 	type UiUnresolvedReason,
 	type Workspace,
@@ -309,11 +310,21 @@ export function handleGetPageObjectTree(
 		maxDepth: args.depth,
 	});
 
-	if (!args.includeMethods) {
-		for (const def of Object.values(tree.defs)) {
-			def.methods = [];
-		}
-	}
+	// Copied, never trimmed in place. The engine memoizes the tree and hands the
+	// same object to every caller, so dropping the methods here would delete them
+	// for the next call that asks for them — a response that silently loses a
+	// section because an earlier call in the session passed includeMethods:false.
+	const shown = args.includeMethods
+		? tree
+		: {
+				...tree,
+				defs: Object.fromEntries(
+					Object.entries(tree.defs).map(([id, def]) => [
+						id,
+						{ ...def, methods: [] },
+					]),
+				),
+			};
 
 	const meta = {
 		root: tree.projectRoot,
@@ -331,11 +342,11 @@ export function handleGetPageObjectTree(
 	};
 
 	if (args.format === "outline") {
-		return ok(renderPageObjectOutline(tree), meta, shrink);
+		return ok(renderPageObjectOutline(shown), meta, shrink);
 	}
 
 	return ok(
-		{ root: tree.root, defs: tree.defs, stats: tree.stats },
+		{ root: shown.root, defs: shown.defs, stats: shown.stats },
 		meta,
 		shrink,
 	);
@@ -556,12 +567,11 @@ export function handleGetTestIdTree(
 	let siblings: ComponentInfo[] = [];
 	const scopeFile = scope?.file;
 	if (args.component) {
-		const probe = buildTestIdTree(workspace, {
-			attribute: args.attribute,
-			maxDepth: 1,
-			followComponents: false,
-		});
-		const components = Object.values(probe.components);
+		// The component inventory, not a tree. This used to build a whole depth-1
+		// tree — scanning every JSX file for ids and running a walk — and read one
+		// field off it, which is a second full pass over the sources before the
+		// real tree below has even started.
+		const components = Object.values(scannedComponents(workspace));
 		const named = components.filter(
 			(component) => component.name === args.component,
 		);
@@ -880,12 +890,30 @@ export function handleMapCoverage(
 		// objects that were never in scope. Resolve it against the index first, the
 		// way the `class` branch does. Controls count: they are only left out of
 		// `list_page_objects`, not out of the coverage scan.
-		const index = discoverPageObjects(workspace, { includeControls: true });
-		const files = [...new Set(index.pageObjects.map((item) => item.file))];
+		//
+		// The plain index is consulted first because it is the one every other
+		// handler already built. Widening to controls is a *second* full discovery
+		// under a different memo key — measured at 770 ms on a 4,924-file
+		// repository — and only a file that declares nothing but controls needs it.
+		// The answer is the same either way: the controls index is a superset, so a
+		// file found in the plain one is found in both, and a file in neither
+		// produces the same error from the same widened candidate list.
 		const resolved = relativizeFile(workspace, args.file);
 		note = resolved.note;
 		const wanted = foldFile(resolved.file);
-		const match = files.find((file) => foldFile(file) === wanted);
+		const filesOf = (includeControls: boolean): string[] => [
+			...new Set(
+				discoverPageObjects(workspace, { includeControls }).pageObjects.map(
+					(item) => item.file,
+				),
+			),
+		];
+		let files = filesOf(false);
+		let match = files.find((file) => foldFile(file) === wanted);
+		if (!match) {
+			files = filesOf(true);
+			match = files.find((file) => foldFile(file) === wanted);
+		}
 		if (!match) {
 			throw new ToolError(
 				"file_not_found",

@@ -7,6 +7,7 @@ import {
 } from "ts-morph";
 import { dedupeDiagnostics, info } from "../diagnostics";
 import type {
+	ComponentInfo,
 	Diagnostic,
 	SourceLoc,
 	TestIdOccurrence,
@@ -17,6 +18,7 @@ import type {
 } from "../types";
 import { Budget } from "../util/budget";
 import { keyFold, matchesAnyGlob, normalizeRelPath } from "../util/paths";
+import { lineAndColumnAt } from "../util/position";
 import { resolveExportedName } from "../util/resolve";
 import { isWorkspaceLocal } from "../util/workspaceRoot";
 import { isJsxFile, type Workspace } from "../workspace";
@@ -621,15 +623,74 @@ function partialReason(shape: TreeShape, budgetExhausted: boolean): string {
 }
 
 /**
+ * Cache identity for one tree: every option that changes what is built.
+ *
+ * `attribute` is the caller's raw value, not the resolved one. Passing the
+ * workspace default explicitly reports `attributeSource: "param"`, which is a
+ * different answer to the same-looking question.
+ *
+ * Nothing about *presentation* belongs here. `format`, `limit` and `offset` are
+ * applied by the MCP handlers to the finished tree, so keying on them would
+ * build the same tree once per rendering.
+ */
+function treeKey(options: TestIdTreeOptions): string {
+	return `testid-tree::${JSON.stringify({
+		attribute: options.attribute ?? null,
+		entry: options.entry ?? null,
+		entryComponent: options.entryComponent ?? null,
+		followComponents: options.followComponents !== false,
+		include: options.include ?? null,
+		exclude: options.exclude ?? null,
+		maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
+		maxNodes: options.maxNodes ?? DEFAULT_MAX_NODES,
+	})}`;
+}
+
+/**
  * Builds the UI test-id tree.
  *
  * `inventory` is complete in every fidelity mode on purpose: coverage runs off
  * the inventory, not the tree, so a component that exists but is unreachable
  * from the auto-detected entry must never become "dead selector" fuel.
+ *
+ * Memoized per epoch. The result is a wire shape — plain JSON all the way
+ * down, no `Node` or `SourceFile` anywhere in it — so a cached tree cannot
+ * outlive the AST it was read from. Callers must treat it as shared and read
+ * it without writing to it.
  */
 export function buildTestIdTree(
 	ws: Workspace,
 	options: TestIdTreeOptions = {},
+): TestIdTree {
+	return ws.memo(treeKey(options), [], () => computeTestIdTree(ws, options));
+}
+
+/**
+ * Every component the scan can see, without building a tree for it.
+ *
+ * A caller that only needs the component *inventory* — to resolve a name to a
+ * file, or to list what a file declares — was building a whole depth-1 tree and
+ * reading one field off it, which meant scanning every JSX file for test ids and
+ * running a walk whose output was discarded. This is the field on its own; it is
+ * exactly what {@link buildTestIdTree} puts in `components`, computed the same
+ * way from the same file set.
+ */
+export function scannedComponents(
+	ws: Workspace,
+	options: Pick<TestIdTreeOptions, "include" | "exclude"> = {},
+): Record<string, ComponentInfo> {
+	const key = `components::${JSON.stringify({
+		include: options.include ?? null,
+		exclude: options.exclude ?? null,
+	})}`;
+	return ws.memo(key, [], () =>
+		collectComponents(ws, selectFiles(ws, options)),
+	);
+}
+
+function computeTestIdTree(
+	ws: Workspace,
+	options: TestIdTreeOptions,
 ): TestIdTree {
 	const startedAt = Date.now();
 	const resolvedAttribute = options.attribute
@@ -1054,7 +1115,8 @@ class TreeBuilder {
 			if (!this.spendNode()) {
 				break;
 			}
-			const position = definition.sourceFile.getLineAndColumnAtPos(
+			const position = lineAndColumnAt(
+				definition.sourceFile,
 				expression.getStart(),
 			);
 			branches.push({
@@ -1422,7 +1484,7 @@ class TreeBuilder {
 		node: Node,
 		reason: UiUnresolvedReason,
 	): UiNode {
-		const position = owner.sourceFile.getLineAndColumnAtPos(node.getStart());
+		const position = lineAndColumnAt(owner.sourceFile, node.getStart());
 		return {
 			tag: "#unresolved",
 			nodeType: "unresolved",
@@ -1459,7 +1521,7 @@ class TreeBuilder {
 
 		const scanned = this.scannedAt(owner, opening.getStart());
 		const tag = opening.getTagNameNode().getText();
-		const position = owner.sourceFile.getLineAndColumnAtPos(opening.getStart());
+		const position = lineAndColumnAt(owner.sourceFile, opening.getStart());
 		const node: UiNode = {
 			tag,
 			// Same predicate the scan uses, so an id's `reach` and the node it hangs
