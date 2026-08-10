@@ -531,11 +531,15 @@ export function buildCoverageReport(
 		propStatic: propIndex.statics,
 		propPatterns: propIndex.patterns,
 		unknownRaw: partition.dynamic,
+		// Every occurrence lands in exactly one of the partition's four buckets,
+		// so an empty inventory is precisely "the scan found no test id at all".
+		uiEvidence: uiTree.inventory.length > 0,
 	};
 
 	const coveredUi = new Set<UiTestId>();
 	const speculativeCredit = new Map<UiTestId, string[]>();
 	let unprovenSelectors = 0;
+	let unverifiableSelectors = 0;
 	// A property of the run, not of any one selector, so it is read once.
 	const scopeIncomplete = uiScopeIncomplete(uiTree);
 
@@ -598,6 +602,23 @@ export function buildCoverageReport(
 				raw: usage.text,
 				origin: usage.origin,
 				evidence,
+			});
+			continue;
+		}
+
+		// Nothing on the UI side to compare against, so this selector was never
+		// judged. It is unverifiable, not dead, and the difference is the whole
+		// report: `deadSelectors` stays empty and the remedy lives in the
+		// `no-matchable-testids` warning.
+		if (classification.verdict === "no-ui-evidence") {
+			unverifiableSelectors += 1;
+			unknownSelectors.push({
+				defId: usage.defId,
+				memberPath: usage.memberPath,
+				loc: usage.loc,
+				reason: "no-ui-evidence",
+				raw: usage.text,
+				origin: usage.origin,
 			});
 			continue;
 		}
@@ -688,6 +709,7 @@ export function buildCoverageReport(
 			assumeForwarded,
 			assumedGroups,
 			unprovenSelectors,
+			unverifiableSelectors,
 			catchAllSelectors,
 			testIdSelectors: testIdUsages.length,
 			deadCount: deadSelectors.length,
@@ -744,6 +766,8 @@ interface WarningInputs {
 	assumeForwarded: boolean;
 	assumedGroups: number;
 	unprovenSelectors: number;
+	/** Selectors this run could not judge at all, for want of any UI evidence. */
+	unverifiableSelectors: number;
 	catchAllSelectors: number;
 	testIdSelectors: number;
 	deadCount: number;
@@ -781,7 +805,10 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 					`(${partition.dynamic.length} built at runtime, ${propOccurrences} written as an unproven component prop, ${partition.catchAll.length} matching every id). ` +
 					`The attribute read was "${inputs.attribute.attribute}" (from ${inputs.attribute.source}). ` +
 					"Either the components write a different attribute than the one resolved, or the scanned sources do not contain the UI at all. " +
-					"Re-run with the attribute the components actually write, or with the application sources in scope. Until then the coverage ratio is null rather than a score.",
+					"Re-run with the attribute the components actually write, or with the application sources in scope. Until then the coverage ratio is null rather than a score" +
+					(inputs.unverifiableSelectors > 0
+						? `, and the ${inputs.unverifiableSelectors} selector(s) this run could not judge are in unknownSelectors with reason "no-ui-evidence" rather than in deadSelectors — with nothing to compare against, none of them was tested.`
+						: "."),
 				undefined,
 				{
 					attribute: inputs.attribute.attribute,

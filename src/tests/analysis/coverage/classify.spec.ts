@@ -63,6 +63,7 @@ function sides(input: {
 	rendered?: UiTestId[];
 	prop?: UiTestId[];
 	unknownRaw?: TestIdOccurrence[];
+	uiEvidence?: boolean;
 }): ClassifySides {
 	const rendered = indexSide(input.rendered ?? []);
 	const prop = indexSide(input.prop ?? []);
@@ -74,6 +75,9 @@ function sides(input: {
 		propStatic: prop.statics,
 		propPatterns: prop.patterns,
 		unknownRaw: input.unknownRaw ?? [],
+		// The ladder's own tests are about ranking evidence, so evidence exists
+		// unless a test is specifically about a scan that found none.
+		uiEvidence: input.uiEvidence ?? true,
 	};
 }
 
@@ -179,6 +183,26 @@ describe("classifySelector — the evidence ladder", () => {
 				prop: [staticUi("Ghost")],
 				unknownRaw: [dynamicOccurrence("buildId(prefix)")],
 			}),
+		);
+		expect(result).toMatchObject({ stage: "F", verdict: "dead" });
+	});
+
+	// The same F rung, and the difference is the whole report: "dead" is a claim
+	// about the ids the app renders, and a blind scan has no such set.
+	it("F: says unverifiable, not dead, when the scan found no test id at all", () => {
+		const result = classifySelector(
+			{ testId: "Nowhere" },
+			sides({ uiEvidence: false }),
+		);
+		expect(result).toMatchObject({ stage: "F", verdict: "no-ui-evidence" });
+	});
+
+	// One unreadable id must not switch dead detection off for the whole
+	// repository — that is the catch-all failure in the other direction.
+	it("still says dead when the scan found ids it merely could not use", () => {
+		const result = classifySelector(
+			{ testId: "Nowhere" },
+			sides({ unknownRaw: [dynamicOccurrence("buildId(prefix)")] }),
 		);
 		expect(result).toMatchObject({ stage: "F", verdict: "dead" });
 	});

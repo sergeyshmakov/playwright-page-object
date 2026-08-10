@@ -877,6 +877,93 @@ describe("buildCoverageReport — a ternary inside a template", () => {
 	});
 });
 
+/**
+ * The report used to contradict itself at the top: `coverage: null` and a
+ * `no-matchable-testids` warning saying nothing could be compared, next to a
+ * `deadSelectors` list holding every working selector in the suite — 1454 of
+ * them in the field. An agent that skips warnings reads a catastrophe.
+ */
+describe("buildCoverageReport — a scan that found no test id at all", () => {
+	const WRONG_ATTRIBUTE = {
+		"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+		"src/App.tsx": [
+			"export default function App() {",
+			'  return <main data-tid="AppRoot"><input data-tid="EmailInput" /></main>;',
+			"}",
+		].join("\n"),
+		"e2e/LoginPage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			'@RootSelector("AppRoot")',
+			"export class LoginPage extends RootPageObject {",
+			'  @Selector("EmailInput")',
+			"  accessor Email!: Locator;",
+			"}",
+		].join("\n"),
+	};
+
+	// Reads `data-testid` against sources that write `data-tid`.
+	const result = buildCoverageReport(makeWorkspace(WRONG_ATTRIBUTE));
+
+	it("calls every selector unverifiable instead of dead", () => {
+		expect(result.summary.matchableUiTestIds).toBe(0);
+		expect(result.summary.coverage).toBeNull();
+		expect(result.deadSelectors).toEqual([]);
+		expect(result.summary.deadSelectors).toBe(0);
+
+		const reasons = result.unknownSelectors.map((entry) => entry.reason);
+		expect(reasons).toEqual(["no-ui-evidence", "no-ui-evidence"]);
+		expect(result.summary.unknownSelectors).toBe(2);
+	});
+
+	it("keeps the selector total whole across the buckets", () => {
+		// Nothing vanished in the re-bucketing: every selector is still counted
+		// exactly once, which is what makes the zero above readable.
+		expect(
+			result.matched.length +
+				result.unknownSelectors.length +
+				result.deadSelectors.length,
+		).toBe(result.summary.testIdSelectors);
+	});
+
+	it("names the remedy and where the selectors went", () => {
+		const warning = result.warnings.find(
+			(entry) => entry.code === "no-matchable-testids",
+		);
+		expect(warning?.message).toContain("no-ui-evidence");
+		expect(warning?.message).toContain("data-testid");
+	});
+
+	// The whole point of narrowing the condition: a repository the scan can read
+	// must still get dead detection.
+	it("leaves dead detection alone once the attribute is right", () => {
+		const right = buildCoverageReport(makeWorkspace(WRONG_ATTRIBUTE), {
+			attribute: "data-tid",
+		});
+		expect(right.summary.matchableUiTestIds).toBe(2);
+		expect(right.unknownSelectors).toEqual([]);
+
+		const typo = buildCoverageReport(
+			makeWorkspace({
+				...WRONG_ATTRIBUTE,
+				"e2e/LoginPage.ts": [
+					'import type { Locator } from "@playwright/test";',
+					libImport("RootPageObject", "RootSelector", "Selector"),
+					'@RootSelector("AppRoot")',
+					"export class LoginPage extends RootPageObject {",
+					'  @Selector("EmailInpt")',
+					"  accessor Email!: Locator;",
+					"}",
+				].join("\n"),
+			}),
+			{ attribute: "data-tid" },
+		);
+		expect(typo.deadSelectors.map((entry) => entry.memberPath)).toEqual([
+			"LoginPage.Email",
+		]);
+	});
+});
+
 describe("buildCoverageReport — member paths", () => {
 	it("names nested controls by the path that reaches them", () => {
 		const result = buildCoverageReport(

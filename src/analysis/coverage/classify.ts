@@ -71,6 +71,23 @@ export interface ClassifySides {
 	propPatterns: PatternSide[];
 	/** Ids the scan could not read at all, for the containment probe. */
 	unknownRaw: TestIdOccurrence[];
+	/**
+	 * Whether the scan found a test id of *any* kind — rendered, written as a
+	 * component prop, built at runtime, or so loose it matches everything.
+	 *
+	 * False means the UI side is blind: the attribute that was read appears
+	 * nowhere in the scanned sources, or the sources are not the application's.
+	 * Then no selector can be judged, and answering "dead" for every one of them
+	 * (1454 of them, in the field) describes a broken suite when what is broken
+	 * is the read. "Dead" is a claim about the set of ids the app renders; with
+	 * no such set the claim is vacuous, so F says `no-ui-evidence` instead.
+	 *
+	 * Deliberately *not* "no id was usable". One `data-testid={id}` element makes
+	 * every id in a repository unusable for matching, and letting that suppress
+	 * dead detection everywhere would destroy the feature — which is the same
+	 * failure, in the other direction, as letting it match everything.
+	 */
+	uiEvidence: boolean;
 }
 
 export type SelectorClassification =
@@ -88,7 +105,11 @@ export type SelectorClassification =
 			literal: string;
 			occurrences: TestIdOccurrence[];
 	  }
-	| { stage: "F"; verdict: "dead" };
+	/**
+	 * `"no-ui-evidence"` is F's other answer, for a run with nothing on the UI
+	 * side to compare against at all. See {@link hasComparableUi}.
+	 */
+	| { stage: "F"; verdict: "dead" | "no-ui-evidence" };
 
 /**
  * Shortest literal worth searching for inside a runtime-built id.
@@ -290,6 +311,12 @@ export function classifySelector(
 				occurrences,
 			};
 		}
+	}
+
+	// Last, not first: containment above is real evidence and still worth
+	// reporting even in a run that has nothing else.
+	if (!sides.uiEvidence) {
+		return { stage: "F", verdict: "no-ui-evidence" };
 	}
 
 	return { stage: "F", verdict: "dead" };
