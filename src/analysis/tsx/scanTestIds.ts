@@ -277,11 +277,19 @@ function expandParts(parts: PartSpec[]): Part[][] {
  * as a ternary spelled at the top of the attribute already produces two
  * occurrences. All-literal after expansion is a static id, not a pattern: there
  * is nothing left to match loosely.
+ *
+ * The choice is read off the *parts*, not off the expansion. Over
+ * {@link MAX_TEMPLATE_VARIANTS} the expansion collapses back to one generic
+ * pattern, and judging by the variant count then reported an id that plainly
+ * changes with a ternary branch as unconditional.
  */
 function valuesFromParts(
 	parts: PartSpec[],
 	raw: string,
 ): { values: TestIdValue[]; fromTernary: boolean } {
+	const staticChoice = parts.some(
+		(part) => part.kind === "expr" && (part.values?.length ?? 0) > 1,
+	);
 	const variants = expandParts(parts);
 	const values = variants.map((variant) => {
 		if (variant.length === 0) {
@@ -294,7 +302,7 @@ function valuesFromParts(
 			? staticValue(raw, variant.map((part) => part.text).join(""))
 			: patternFromParts(variant, raw);
 	});
-	return { values, fromTernary: variants.length > 1 };
+	return { values, fromTernary: variants.length > 1 || staticChoice };
 }
 
 function patternFromParts(parts: Part[], raw: string): TestIdValue {

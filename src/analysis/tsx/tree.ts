@@ -250,6 +250,47 @@ export function entryFileCandidates(
 	return selectFiles(ws, options).map((file) => ws.rel(file.getFilePath()));
 }
 
+/**
+ * The scanned file an `entry` names.
+ *
+ * Exactness wins, always. A suffix is a convenience for `Nested.tsx` standing in
+ * for `src/deep/Nested.tsx`, and letting it compete with the exact path in one
+ * `.find()` pass handed the answer to whichever file sorted first: a monorepo
+ * holding both `src/App.tsx` and `packages/ui/src/App.tsx` rooted the tree at
+ * the package when the documented, fully-spelled path named the app. A suffix
+ * that fits several files names none of them, and saying so beats picking one.
+ */
+function matchEntryFile(
+	ws: Workspace,
+	files: SourceFile[],
+	entry: string,
+):
+	| { kind: "exact" | "suffix"; file: SourceFile }
+	| { kind: "ambiguous"; candidates: string[] }
+	| { kind: "none" } {
+	const wanted = keyFold(toPosix(entry));
+	const suffix: SourceFile[] = [];
+	for (const file of files) {
+		const rel = keyFold(ws.rel(file.getFilePath()));
+		if (rel === wanted) {
+			return { kind: "exact", file };
+		}
+		if (rel.endsWith(`/${wanted}`)) {
+			suffix.push(file);
+		}
+	}
+	if (suffix.length === 1) {
+		return { kind: "suffix", file: suffix[0] };
+	}
+	if (suffix.length > 1) {
+		return {
+			kind: "ambiguous",
+			candidates: suffix.map((file) => ws.rel(file.getFilePath())).sort(),
+		};
+	}
+	return { kind: "none" };
+}
+
 function findEntryComponent(
 	ws: Workspace,
 	files: SourceFile[],
@@ -266,17 +307,20 @@ function findEntryComponent(
 	};
 
 	if (options.entry) {
-		const wanted = keyFold(toPosix(options.entry));
-		const target = files.find((file) => {
-			const rel = keyFold(ws.rel(file.getFilePath()));
-			return rel === wanted || rel.endsWith(`/${wanted}`);
-		});
-		if (!target) {
+		const matched = matchEntryFile(ws, files, options.entry);
+		if (matched.kind === "none") {
 			return {
 				definition: null,
 				reason: `Entry file "${options.entry}" was not found among the scanned files.`,
 			};
 		}
+		if (matched.kind === "ambiguous") {
+			return {
+				definition: null,
+				reason: `Entry file "${options.entry}" matches ${matched.candidates.length} scanned files (${matched.candidates.slice(0, 5).join(", ")}); pass the workspace-relative path.`,
+			};
+		}
+		const target = matched.file;
 		if (options.entryComponent) {
 			const named = componentNamed(ws, target, options.entryComponent);
 			if (named) {
@@ -754,6 +798,12 @@ function backfillInventory(
  * "dead selector" for a page object that works. The tree node is corrected, and
  * the inventory occurrence stays in coverage's `unknown` bucket where it
  * belongs.
+ *
+ * The placeholder only goes when *every* site that reached a location was
+ * readable. One `<Row dataTid="Known" />` next to one `<Row dataTid={runtime} />`
+ * resolves the first and learns nothing from the second, and dropping the
+ * placeholder on the strength of the first reported the second site's id as
+ * dead rather than unknown.
  */
 function mergeResolvedOccurrences(
 	inventory: TestIdOccurrence[],
@@ -761,11 +811,13 @@ function mergeResolvedOccurrences(
 ): void {
 	const resolved: TestIdOccurrence[] = [];
 	const resolvedLocs = new Set<string>();
+	const unknownLocs = new Set<string>();
 	const seen = new Set<string>();
 
 	const visit = (node: UiNode) => {
+		const at = `${node.loc.file}:${node.loc.line}:${node.loc.column ?? 0}`;
 		if (node.testId && (node.viaProp || node.viaSpread || node.viaDefault)) {
-			const key = `${node.loc.file}:${node.loc.line}:${node.loc.column ?? 0}`;
+			const key = at;
 			resolvedLocs.add(key);
 			const occurrence: TestIdOccurrence = {
 				value: node.testId,
@@ -799,6 +851,10 @@ function mergeResolvedOccurrences(
 				seen.add(identity);
 				resolved.push(occurrence);
 			}
+		} else if (node.testId?.kind === "dynamic") {
+			// This site was reached and stayed unreadable, so the placeholder at
+			// this location is still the only record of what it renders.
+			unknownLocs.add(at);
 		}
 		for (const child of node.children) {
 			visit(child);
@@ -817,7 +873,7 @@ function mergeResolvedOccurrences(
 			continue;
 		}
 		const key = `${occurrence.loc.file}:${occurrence.loc.line}:${occurrence.loc.column ?? 0}`;
-		if (resolvedLocs.has(key)) {
+		if (resolvedLocs.has(key) && !unknownLocs.has(key)) {
 			inventory.splice(index, 1);
 		}
 	}
@@ -867,6 +923,27 @@ class TreeBuilder {
 	 */
 	private boundaries = 0;
 
+	/**
+	 * Nodes this walk put in the tree. Counted here rather than read off the
+	 * budget because the last slot is claimed before it is emitted — see
+	 * {@link spendNode} — and {@link walkChildren} has to be able to tell "this
+	 * child produced nothing because the budget is gone" from "this child cost
+	 * nodes and still produced nothing".
+	 */
+	private emitted = 0;
+
+	/**
+	 * The one node slot held back for a `node-budget-reached` marker.
+	 *
+	 * The marker is a node in the returned tree like every other one. Appending
+	 * it after the cap was reached charged nothing, and a deeply nested tree
+	 * unwinds through one child list per ancestor, each appending another: a
+	 * `maxNodes: 5` walk returned ten nodes. Claiming the final slot up front
+	 * makes the cap a bound on what ships, and one marker — at the innermost
+	 * list, where the walk actually stopped — is what it buys.
+	 */
+	private markerSlot: "free" | "held" | "spent" = "free";
+
 	constructor(
 		private readonly ws: Workspace,
 		private readonly attribute: string,
@@ -874,6 +951,30 @@ class TreeBuilder {
 		private readonly warnings: Diagnostic[],
 		private readonly followComponents: boolean,
 	) {}
+
+	/**
+	 * Spends one node on tree content, keeping the marker slot back.
+	 *
+	 * The budget still records the refusal — `truncated` and the partial-fidelity
+	 * reason are read off it — which is why the reserved slot is taken from it
+	 * rather than simply subtracted from the cap.
+	 */
+	private spendNode(): boolean {
+		if (
+			this.markerSlot === "free" &&
+			this.budget.spent + 1 >= this.budget.maxNodes
+		) {
+			this.budget.spend();
+			this.budget.spend();
+			this.markerSlot = "held";
+			return false;
+		}
+		if (!this.budget.spend()) {
+			return false;
+		}
+		this.emitted += 1;
+		return true;
+	}
 
 	private scannedAt(
 		owner: ComponentDefinition,
@@ -1185,7 +1286,7 @@ class TreeBuilder {
 		const out: UiNode[] = [];
 		let starved = false;
 		for (const child of children) {
-			const spentBefore = this.budget.spent;
+			const emittedBefore = this.emitted;
 			const walked = this.walk(child, owner, depth, path, state);
 			if (walked.length > 0) {
 				out.push(...walked);
@@ -1193,7 +1294,7 @@ class TreeBuilder {
 			}
 			// The budget ran out mid-child: the loss is real but charging a marker
 			// for it is impossible, so one marker stands for the whole child list.
-			if (this.budget.spent === spentBefore && this.budget.nodeLimitHit) {
+			if (this.emitted === emittedBefore && this.budget.nodeLimitHit) {
 				starved = true;
 				continue;
 			}
@@ -1206,7 +1307,10 @@ class TreeBuilder {
 				out.push(...this.marker(owner, child, "opaque-expression"));
 			}
 		}
-		if (starved) {
+		// The reserved slot, spent where the walk first ran out: the innermost list
+		// unwinds first, so that is the one that stands for the cut.
+		if (starved && this.markerSlot === "held") {
+			this.markerSlot = "spent";
 			out.push(
 				this.markerNode(owner, children[0] ?? owner.fn, "node-budget-reached"),
 			);
@@ -1271,7 +1375,7 @@ class TreeBuilder {
 		node: Node,
 		reason: UiUnresolvedReason,
 	): UiNode[] {
-		if (!this.budget.spend()) {
+		if (!this.spendNode()) {
 			this.boundaries += 1;
 			return [];
 		}
@@ -1313,7 +1417,7 @@ class TreeBuilder {
 		) {
 			return [];
 		}
-		if (!this.budget.spend()) {
+		if (!this.spendNode()) {
 			this.boundaries += 1;
 			return [];
 		}
@@ -1493,7 +1597,7 @@ class TreeBuilder {
 			if (name === this.attribute) {
 				continue;
 			}
-			const expression = jsxValuedAttribute(attribute);
+			const expression = this.jsxValuedAttribute(attribute, owner);
 			if (!expression) {
 				continue;
 			}
@@ -1506,8 +1610,10 @@ class TreeBuilder {
 			// A render prop is JSX the *callee* decides when, where and how often to
 			// produce — `renderItem={(i) => <li/>}` may run once per row or never.
 			// Walking its body would report those elements as rendered here, at this
-			// position, exactly once. Flag the JSX instead of misplacing it.
-			const walked = isInlineFunction(expression)
+			// position, exactly once. Flag the JSX instead of misplacing it. Judged
+			// on what the name resolves to, so passing the very same arrow by name
+			// is read the same way.
+			const walked = isInlineFunction(this.propContentSource(expression, owner))
 				? []
 				: this.walk(expression, owner, depth, path, state, {
 						varHops: MAX_VARIABLE_HOPS,
@@ -1525,6 +1631,46 @@ class TreeBuilder {
 			);
 		}
 		return out;
+	}
+
+	/**
+	 * The JSX-bearing expression of an attribute, when it has one.
+	 *
+	 * "Has one" takes the same single hop to a local variable the slot walk has
+	 * always taken: `const footer = <span data-tid="F"/>` handed over as
+	 * `footer={footer}` is the caller's own JSX, and testing the identifier for
+	 * JSX syntax dropped it — no node, no marker, and a tree that reported
+	 * `fidelity: "full"` while omitting an id it could see.
+	 */
+	private jsxValuedAttribute(
+		attribute: JsxAttribute,
+		owner: ComponentDefinition,
+	): Node | null {
+		const initializer = attribute.getInitializer();
+		if (!initializer || !Node.isJsxExpression(initializer)) {
+			return null;
+		}
+		const expression = initializer.getExpression();
+		if (!expression) {
+			return null;
+		}
+		return containsJsx(this.propContentSource(expression, owner))
+			? expression
+			: null;
+	}
+
+	/**
+	 * What a prop's value ultimately names: the expression itself, or the
+	 * initializer of the local variable it reads. One hop, the same bound
+	 * {@link walkLocalVariable} enforces when it walks the thing.
+	 */
+	private propContentSource(node: Node, owner: ComponentDefinition): Node {
+		const inner = unwrapExpression(node);
+		if (!Node.isIdentifier(inner)) {
+			return node;
+		}
+		const declaration = this.localVariablesOf(owner).get(inner.getText());
+		return declaration?.getInitializer() ?? node;
 	}
 
 	/** JSX between the component's tags: its children, wherever it renders them. */
@@ -1620,9 +1766,18 @@ class TreeBuilder {
 		if (!scanned) {
 			return;
 		}
-		const [value] = scanned.testIds;
+		const [value, ...rest] = scanned.testIds;
 		if (value && value.kind !== "dynamic") {
 			node.testId = value;
+			// Every branch of a static choice, not just the one that sorted first:
+			// the scan already inventories them all, and a tree that shows one of
+			// them contradicts the coverage report built from the same read.
+			const alternatives = rest.filter(
+				(alternative) => alternative.kind !== "dynamic",
+			);
+			if (alternatives.length > 0) {
+				node.testIdAlternatives = alternatives;
+			}
 			return;
 		}
 		if (value && value.kind === "dynamic") {
@@ -1680,12 +1835,17 @@ class TreeBuilder {
 			if (this.provablyAbsent(reference, owner, state)) {
 				const declared = owner.propDefaults.get(reference.name);
 				if (declared) {
-					return {
-						kind: "value",
-						value: declared,
-						viaProp: reference.name,
-						viaDefault: true,
-					};
+					// A default the reader cannot name still renders an id. Calling
+					// that absent told an agent no selector exists here, which is the
+					// one answer the source rules out.
+					return declared.kind === "dynamic"
+						? { kind: "unknown" }
+						: {
+								kind: "value",
+								value: declared,
+								viaProp: reference.name,
+								viaDefault: true,
+							};
 				}
 				return { kind: "absent" };
 			}
@@ -1836,18 +1996,37 @@ function withPlacement(
 	return nodes;
 }
 
-/** The JSX-bearing expression of an attribute, when it has one. */
-function jsxValuedAttribute(attribute: JsxAttribute): Node | null {
-	const initializer = attribute.getInitializer();
-	if (!initializer || !Node.isJsxExpression(initializer)) {
-		return null;
+/**
+ * Peels the wrappers the walk sees straight through: parentheses and every
+ * spelling of a type assertion. Kept in one place because a predicate that
+ * disagrees with `walk` about what an expression *is* decides the opposite
+ * thing about it.
+ */
+function unwrapExpression(node: Node): Node {
+	let current = node;
+	while (
+		Node.isParenthesizedExpression(current) ||
+		Node.isAsExpression(current) ||
+		Node.isNonNullExpression(current) ||
+		Node.isTypeAssertion(current) ||
+		Node.isSatisfiesExpression(current)
+	) {
+		current = current.getExpression();
 	}
-	const expression = initializer.getExpression();
-	return expression && containsJsx(expression) ? expression : null;
+	return current;
 }
 
+/**
+ * Whether an expression is a function written right here.
+ *
+ * Unwrapped first: `renderItem={((i) => <li/>) as never}` is the same render
+ * prop as `renderItem={(i) => <li/>}`, and testing the wrapper reported the
+ * `<li>` as UI rendered at this position when the callee decides whether it
+ * runs at all.
+ */
 function isInlineFunction(node: Node): boolean {
-	return Node.isArrowFunction(node) || Node.isFunctionExpression(node);
+	const inner = unwrapExpression(node);
+	return Node.isArrowFunction(inner) || Node.isFunctionExpression(inner);
 }
 
 /** Whether an expression syntactically contains JSX anywhere inside it. */

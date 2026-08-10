@@ -46,10 +46,17 @@ export interface ComponentDefinition {
 	/** Local binding name to prop name for `({ testId: id })`-style aliases. */
 	propAliases: Map<string, string>;
 	/**
-	 * Local binding name to the statically-known default it declares
-	 * (`{ testId = "Row" }`). A dynamic default is left out: the point of the map
-	 * is to answer "what renders when the call site passes nothing", and an
-	 * unreadable default answers nothing.
+	 * Local binding name to the default it declares (`{ testId = "Row" }`).
+	 *
+	 * The map answers "what renders when the call site passes nothing", and the
+	 * answer has three shapes, all of which have to be told apart. One statically
+	 * known value is recorded as it is. A default nobody can read
+	 * (`{ testId = makeId() }`) or one that is itself a choice
+	 * (`{ testId = cond ? "A" : "B" }`) is recorded as a `dynamic` marker: an id
+	 * *does* render, it just cannot be named here. A name that is absent declares
+	 * no default at all, and only then does the attribute provably render nothing.
+	 * Leaving the unreadable ones out collapsed the middle case onto the last one
+	 * and reported `testIdAbsent` for an element that renders an id.
 	 */
 	propDefaults: Map<string, TestIdValue>;
 	/** `rest` in `({ a, ...rest })`, or the whole parameter name (`props`). */
@@ -129,6 +136,27 @@ interface PropsRead {
 }
 
 /**
+ * What a parameter default is worth as an answer to "what renders here".
+ *
+ * Exactly one statically-known value is that answer. Anything else — a call, a
+ * ternary between two literals, a template with a hole — renders *something*
+ * the walk cannot name, and the honest record of that is a `dynamic` marker
+ * carrying the source text. Recording the first branch of a choice claimed one
+ * id was the default when the other one is just as real.
+ */
+function defaultValueOf(initializer: Node): TestIdValue {
+	const { values } = readExpressionValue(initializer);
+	const [only] = values;
+	return values.length === 1 && only.kind !== "dynamic"
+		? only
+		: {
+				kind: "dynamic",
+				raw: initializer.getText(),
+				reason: "computed-expression",
+			};
+}
+
+/**
  * Reads the component's props parameter.
  *
  * `propNames` holds the *prop* names as a caller writes them in JSX. For
@@ -168,10 +196,7 @@ function readProps(fn: ComponentFunction): PropsRead {
 			}
 			const initializer = element.getInitializer();
 			if (initializer) {
-				const [value] = readExpressionValue(initializer).values;
-				if (value && value.kind !== "dynamic") {
-					propDefaults.set(local, value);
-				}
+				propDefaults.set(local, defaultValueOf(initializer));
 			}
 		}
 		return { propNames, spreadSourceNames, propAliases, propDefaults };
@@ -422,6 +447,9 @@ export interface ExternalModuleEvidence {
 
 const MAX_EXTERNAL_MODULES = 10;
 
+/** Separator that cannot occur in a path or in a module specifier. */
+const CACHE_FIELD = "\u0000";
+
 /**
  * Counts component tags rendered from modules outside the scanned sources.
  *
@@ -439,7 +467,16 @@ const MAX_EXTERNAL_MODULES = 10;
  */
 export class ExternalModuleCensus {
 	private readonly modules = new Set<string>();
-	/** Specifier to "resolves outside the workspace", resolved at most once. */
+	/**
+	 * Importing file plus specifier to "resolves outside the workspace", resolved
+	 * at most once.
+	 *
+	 * The specifier alone is not the question being asked. `resolveModuleSpecifier`
+	 * walks up from the *importing* file looking for `node_modules/<pkg>`, so in a
+	 * monorepo where one package links `@acme/ui` to its own sources and another
+	 * has an installed copy, one specifier has two answers and whichever file was
+	 * scanned first decided for every other.
+	 */
 	private readonly outside = new Map<string, boolean>();
 	private tagCount = 0;
 
@@ -473,7 +510,8 @@ export class ExternalModuleCensus {
 	}
 
 	private isOutside(fromFile: SourceFile, specifier: string): boolean {
-		const cached = this.outside.get(specifier);
+		const key = `${fromFile.getFilePath()}${CACHE_FIELD}${specifier}`;
+		const cached = this.outside.get(key);
 		if (cached !== undefined) {
 			return cached;
 		}
@@ -490,7 +528,7 @@ export class ExternalModuleCensus {
 		} catch {
 			outside = true;
 		}
-		this.outside.set(specifier, outside);
+		this.outside.set(key, outside);
 		return outside;
 	}
 }

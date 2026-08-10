@@ -164,6 +164,32 @@ describe("tree fidelity", () => {
 		expect(gap?.message).toContain("src/Middle.tsx");
 	});
 
+	// `maxNodes` is a cap on the payload, not only on the walk. Each unwinding
+	// child list used to append a `node-budget-reached` marker that nothing had
+	// charged for, so a deep nest returned twice the cap it was given.
+	it("never returns more nodes than maxNodes allows", () => {
+		let body = '<span data-testid="Leaf" />';
+		for (let level = 0; level < 12; level += 1) {
+			body = `<div data-testid="D${level}">${body}<em data-testid="S${level}" /></div>`;
+		}
+		const { tree, nodes } = treeFor(
+			{
+				"src/App.tsx": [
+					"export default function App() {",
+					`  return ${body};`,
+					"}",
+				].join("\n"),
+			},
+			{ maxNodes: 5 },
+		);
+
+		expect(nodes.length).toBeLessThanOrEqual(5);
+		expect(tree.stats.nodes).toBe(nodes.length);
+		expect(tree.truncated).toBe(true);
+		// The cut is still reported — once, where the walk ran out.
+		expect(tree.stats.unresolvedByReason["node-budget-reached"]).toBe(1);
+	});
+
 	it("counts stats over exactly the nodes it emitted", () => {
 		const { tree, nodes } = treeFor({
 			"src/App.tsx": [

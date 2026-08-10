@@ -324,27 +324,53 @@ describe("cross-site component de-duplication", () => {
 		expect(bare.children[0].testIdAbsent).toBe(true);
 	});
 
+	// The cut has to be real for this to guard anything. Depth is spent per
+	// component boundary, so the slot child is a two-component chain and
+	// `maxDepth: 2` stops it — inside the first `Card`'s children, while `Card`
+	// itself still expands cleanly at depth 1. Capturing the boundary count
+	// before the content walk instead of after makes the second site expand on
+	// its own, which is exactly the regression.
 	it("does not let a budget cut inside slot children poison the memo", () => {
-		const { nodes } = treeFor({
-			"src/Card.tsx": [
-				"export default function Card({ children }: { children?: unknown }) {",
-				'  return <div data-testid="Card">{children as never}</div>;',
-				"}",
-			].join("\n"),
-			"src/App.tsx": [
-				'import Card from "./Card";',
-				"export default function App() {",
-				"  return (",
-				"    <div>",
-				"      <Card>",
-				'        <span data-testid="S1"><i data-testid="S2" /></span>',
-				"      </Card>",
-				"      <Card />",
-				"    </div>",
-				"  );",
-				"}",
-			].join("\n"),
-		});
+		const { nodes, tree } = treeFor(
+			{
+				"src/Card.tsx": [
+					"export default function Card({ children }: { children?: unknown }) {",
+					'  return <div data-testid="Card">{children as never}</div>;',
+					"}",
+				].join("\n"),
+				"src/Outer.tsx": [
+					'import Deep from "./Deep";',
+					"export default function Outer() { return <Deep />; }",
+				].join("\n"),
+				"src/Deep.tsx": [
+					"export default function Deep() {",
+					'  return <span data-testid="Deep" />;',
+					"}",
+				].join("\n"),
+				"src/App.tsx": [
+					'import Card from "./Card";',
+					'import Outer from "./Outer";',
+					"export default function App() {",
+					"  return (",
+					"    <div>",
+					"      <Card>",
+					"        <Outer />",
+					"      </Card>",
+					"      <Card />",
+					"    </div>",
+					"  );",
+					"}",
+				].join("\n"),
+			},
+			{ maxDepth: 2 },
+		);
+
+		// The cut happened, and it happened inside the caller's slot content.
+		const cut = nodes.find(
+			(node) => node.unresolved?.reason === "depth-limit-reached",
+		);
+		expect(cut?.tag).toBe("Deep");
+		expect(tree.truncated).toBe(true);
 
 		// Both `Card` sites pass nothing as props, so they share an expansion key
 		// even though only one of them passes children.

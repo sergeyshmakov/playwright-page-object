@@ -243,6 +243,69 @@ describe("children passed to a component the walk cannot expand", () => {
 		);
 	});
 
+	// The wrappers `walk` sees straight through have to be invisible to the
+	// render-prop test as well, or a cast turns the callee's callback into UI
+	// this site is reported to render.
+	it("flags a render prop written behind a type assertion", () => {
+		const { nodes } = treeFor({
+			"src/App.tsx": app(
+				['import { List } from "@ext/ui";'],
+				'<List renderItem={((i: number) => <li data-testid="Item" />) as never} />',
+			),
+		});
+
+		expect(byTestId(nodes, "Item")).toBeUndefined();
+		const marker = markers(nodes)[0];
+		expect(marker?.unresolved).toEqual({ reason: "unresolved-jsx" });
+		expect(marker?.placement).toEqual({ kind: "prop", name: "renderItem" });
+	});
+
+	// The slot walk has always taken this hop; the prop gate tested the
+	// identifier for JSX syntax instead of what it names, so the element
+	// vanished with no marker at all — and the tree still called itself full.
+	it("walks JSX handed to a prop through a local variable", () => {
+		const { tree, nodes } = treeFor({
+			"src/Card.tsx": [
+				"export default function Card({ footer }: { footer?: unknown }) {",
+				'  return <div data-testid="Card">{footer as never}</div>;',
+				"}",
+			].join("\n"),
+			"src/App.tsx": [
+				'import Card from "./Card";',
+				"export default function App() {",
+				'  const footer = <span data-testid="Footer" />;',
+				"  return <Card footer={footer} />;",
+				"}",
+			].join("\n"),
+		});
+
+		expect(byTestId(nodes, "Footer")?.placement).toEqual({
+			kind: "prop",
+			name: "footer",
+		});
+		expect(tree.fidelity).toBe("full");
+	});
+
+	// The same hop, landing on a function: a render prop passed by name is the
+	// callee's to invoke exactly as an inline one is.
+	it("flags a render prop passed to a prop by name", () => {
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import { List } from "@ext/ui";',
+				"export default function App() {",
+				'  const renderItem = (i: number) => <li data-testid="Named" />;',
+				"  return <List renderItem={renderItem} />;",
+				"}",
+			].join("\n"),
+		});
+
+		expect(byTestId(nodes, "Named")).toBeUndefined();
+		expect(markers(nodes)[0]?.placement).toEqual({
+			kind: "prop",
+			name: "renderItem",
+		});
+	});
+
 	it("flags an unwalkable call in a component's children", () => {
 		const { nodes } = treeFor({
 			"src/App.tsx": [

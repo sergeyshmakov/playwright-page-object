@@ -438,6 +438,18 @@ export interface UiNode {
 	 */
 	nodeType: "element" | "component" | "branch" | "unresolved";
 	testId?: TestIdValue;
+	/**
+	 * The other ids this one element renders, when its attribute writes a static
+	 * choice: `data-testid={big ? "Main" : "Alt"}` and the same ternary spelled
+	 * inside a template both render one of several ids, exactly one per render.
+	 *
+	 * `testId` holds the first branch and this holds the rest, so a reader that
+	 * knows only `testId` still sees a real id — but every branch is here, and the
+	 * node is `conditional`. Dropping them made the tree contradict the flat
+	 * inventory, which has always carried one occurrence per branch: a selector
+	 * for the second branch looked dead in the tree and alive in coverage.
+	 */
+	testIdAlternatives?: TestIdValue[];
 	file: string;
 	loc: SourceLoc;
 	/** Enclosing component name at the declaration site. */

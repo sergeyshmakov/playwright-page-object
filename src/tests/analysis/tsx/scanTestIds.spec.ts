@@ -161,6 +161,10 @@ describe("scanFileTestIds — value forms", () => {
 			kind: "pattern",
 			regex: { source: "^.+_.+_.+$" },
 		});
+		// Falling back to the generic pattern is a statement about the *value*,
+		// not about the element: the id still changes with a ternary branch, and
+		// reading `conditional` off the variant count denied it.
+		expect(occurrences[0].conditional).toBe(true);
 	});
 
 	it("expands a ternary operand of a concatenation too", () => {

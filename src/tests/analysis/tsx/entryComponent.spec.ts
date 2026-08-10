@@ -90,3 +90,45 @@ describe("entryComponent", () => {
 		expect(tree.roots[0].testId).toMatchObject({ value: "BetaBox" });
 	});
 });
+
+/**
+ * Which file an `entry` names.
+ *
+ * A trailing segment is accepted as a convenience, and it used to compete with
+ * the exact path in one pass: whichever spelling a file happened to sort under
+ * first won. A monorepo holding `packages/ui/src/App.tsx` answered a request
+ * for the documented `src/App.tsx` with the package's component.
+ */
+describe("entry file matching", () => {
+	const MONOREPO = {
+		"packages/ui/src/App.tsx": [
+			"export default function PkgApp() {",
+			'  return <div data-testid="PkgBox" />;',
+			"}",
+		].join("\n"),
+		"src/App.tsx": [
+			"export default function RootApp() {",
+			'  return <div data-testid="RootBox" />;',
+			"}",
+		].join("\n"),
+	};
+
+	it("prefers the exact path over a suffix match found earlier", () => {
+		const tree = treeFor(MONOREPO, { entry: "src/App.tsx" });
+		expect(tree.roots[0].file).toBe("src/App.tsx");
+		expect(tree.roots[0].testId).toMatchObject({ value: "RootBox" });
+	});
+
+	it("still accepts a suffix that names exactly one file", () => {
+		const tree = treeFor(MONOREPO, { entry: "ui/src/App.tsx" });
+		expect(tree.roots[0].file).toBe("packages/ui/src/App.tsx");
+	});
+
+	it("refuses a suffix that fits several files rather than picking one", () => {
+		const tree = treeFor(MONOREPO, { entry: "App.tsx" });
+		expect(tree.fidelity).toBe("flat");
+		expect(tree.fidelityReason).toContain("packages/ui/src/App.tsx");
+		expect(tree.fidelityReason).toContain("src/App.tsx");
+		expect(tree.warnings.map((diag) => diag.code)).toContain("entry-not-found");
+	});
+});

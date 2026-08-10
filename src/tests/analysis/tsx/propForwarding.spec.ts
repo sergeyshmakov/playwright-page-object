@@ -150,6 +150,51 @@ describe("one-hop prop forwarding", () => {
 		expect(button?.viaProp).toBe("testId");
 	});
 
+	// A default the walk cannot read is still a default: something renders. The
+	// map used to drop it, which left the name looking undeclared and produced
+	// `testIdAbsent` — "no selector exists here" — for an element that renders
+	// an id on every single render.
+	it("reports an unreadable parameter default as unknown, not absent", () => {
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Btn from "./Btn";',
+				"export default function App() { return <Btn />; }",
+			].join("\n"),
+			"src/Btn.tsx": [
+				'const makeId = () => "generated";',
+				"export default function Btn({ testId = makeId() }: { testId?: string }) {",
+				"  return <button data-testid={testId} />;",
+				"}",
+			].join("\n"),
+		});
+		const button = nodes.find((node) => node.tag === "button");
+		expect(button?.testIdAbsent).toBeUndefined();
+		expect(button?.testId?.kind).toBe("dynamic");
+	});
+
+	// Two branches are two ids. Recording the first one claimed the second never
+	// renders, and marked the claim `viaDefault` — proven.
+	it("names no branch when the default is itself a static choice", () => {
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Btn from "./Btn";',
+				"export default function App() { return <Btn />; }",
+			].join("\n"),
+			"src/Btn.tsx": [
+				"export default function Btn({",
+				"  big = true,",
+				'  testId = big ? "Big" : "Small",',
+				"}: { big?: boolean; testId?: string }) {",
+				"  return <button data-testid={testId} />;",
+				"}",
+			].join("\n"),
+		});
+		const button = nodes.find((node) => node.tag === "button");
+		expect(button?.testId?.value).toBeUndefined();
+		expect(button?.testId?.kind).toBe("dynamic");
+		expect(button?.viaDefault).toBeUndefined();
+	});
+
 	it("folds a forwarded id into the flat inventory and drops the placeholder", () => {
 		const { tree } = treeFor({
 			"src/App.tsx": [
@@ -168,6 +213,38 @@ describe("one-hop prop forwarding", () => {
 		expect(
 			tree.inventory.find((entry) => entry.value.value === "Folded")?.viaProp,
 		).toBe("testId");
+	});
+
+	// One location, two render sites, one of them unreadable. Folding the
+	// readable one in and deleting the placeholder left the location claiming a
+	// single known id, so a selector for whatever the other site passes came
+	// back as a dead selector instead of an unknown one.
+	it("keeps the placeholder when another site at the same location stayed unknown", () => {
+		const { tree } = treeFor({
+			"src/Row.tsx": [
+				"export default function Row({ rowId }: { rowId?: string }) {",
+				"  return <tr data-testid={rowId} />;",
+				"}",
+			].join("\n"),
+			"src/App.tsx": [
+				'import Row from "./Row";',
+				"export default function App({ runtimeId }: { runtimeId: string }) {",
+				"  return (",
+				"    <table>",
+				'      <Row rowId="Known" />',
+				"      <Row rowId={runtimeId} />",
+				"    </table>",
+				"  );",
+				"}",
+			].join("\n"),
+		});
+		const atRow = tree.inventory.filter(
+			(entry) => entry.file === "src/Row.tsx",
+		);
+		expect(atRow.map((entry) => entry.value.value)).toContain("Known");
+		expect(
+			atRow.filter((entry) => entry.value.kind === "dynamic"),
+		).toHaveLength(1);
 	});
 
 	it("binds a prop destructured under a quoted key", () => {
