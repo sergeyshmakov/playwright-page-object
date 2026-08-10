@@ -105,6 +105,27 @@ describe("validateServerOptions", () => {
 		).toEqual([]);
 	});
 
+	/**
+	 * Startup used to classify a scope with its own `[*?[\]{}]` regex, which reads
+	 * every extglob without a star in it — `@(a|b)`, `+(a|b)`, `?(a)`, `!(a)` — as
+	 * a plain path, stats it, does not find it and refuses to start. The engine
+	 * scans with picomatch, so this asks picomatch too, through the one exported
+	 * verdict both sides share.
+	 */
+	it("recognizes an extglob scope as a pattern rather than a path", () => {
+		expect(
+			validateServerOptions({
+				projectRoot: root,
+				srcDirs: [
+					"src/@(App|Admin).tsx",
+					"src/+(a|b).ts",
+					"src/?(only).ts",
+					"src/!(generated)/**",
+				],
+			}),
+		).toEqual([]);
+	});
+
 	it("accepts absolute paths", () => {
 		expect(
 			validateServerOptions({

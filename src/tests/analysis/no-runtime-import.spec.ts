@@ -97,6 +97,57 @@ describe("ts-morph import boundary", () => {
 		expect(visited.size).toBeGreaterThan(3);
 	});
 
+	/**
+	 * `src/mcp/options.ts` is the CLI's startup check: it stats four paths and
+	 * refuses to start on a bad one, before anything is parsed. It reads one
+	 * helper out of `src/analysis/util/paths` — the single "is this a glob?"
+	 * verdict, so startup and the scanner cannot disagree about `--src-dir` — and
+	 * that deep import is only safe while it stays clear of the analyser. A
+	 * future edit reaching for the `src/analysis` barrel instead would put the
+	 * whole ts-morph graph on the startup path and bring back the local copy this
+	 * import replaced.
+	 */
+	it("is unreachable from the src/mcp/options.ts import graph", () => {
+		const entry = project.getSourceFileOrThrow(
+			path.join(REPO_ROOT, "src", "mcp", "options.ts"),
+		);
+		const visited = new Set<string>();
+		const reached: string[] = [];
+
+		const walk = (file: ReturnType<Project["getSourceFileOrThrow"]>) => {
+			if (visited.has(file.getFilePath())) {
+				return;
+			}
+			visited.add(file.getFilePath());
+			const rel = toPosixRelative(REPO_ROOT, file.getFilePath());
+			for (const declaration of [
+				...file.getImportDeclarations(),
+				...file.getExportDeclarations(),
+			]) {
+				const specifier = declaration.getModuleSpecifierValue();
+				if (!specifier) {
+					continue;
+				}
+				if (specifier === "ts-morph" || specifier.startsWith("ts-morph/")) {
+					reached.push(`${rel} -> ${specifier}`);
+					continue;
+				}
+				if (!isRelativeSpecifier(specifier)) {
+					continue;
+				}
+				const target = resolveRelativeModule(project, file, specifier);
+				if (target) {
+					walk(target);
+				}
+			}
+		};
+
+		walk(entry);
+		expect(reached).toEqual([]);
+		// Sanity check: the walk really did leave the file.
+		expect(visited.size).toBeGreaterThan(1);
+	});
+
 	it("does reach ts-morph from the analysis barrel, proving the walk works", () => {
 		const barrel = project.getSourceFileOrThrow(
 			path.join(REPO_ROOT, "src", "analysis", "index.ts"),

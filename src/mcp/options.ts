@@ -1,5 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+// Deep import, and deliberately so: this module runs before the server exists
+// and must not pull the analysis barrel's ts-morph graph in with it, but the
+// question "is this a glob?" has exactly one right answer per repository and it
+// belongs to the matcher that will read the pattern next. `util/paths` imports
+// `node:path` and `picomatch`, nothing else — `src/tests/analysis/
+// no-runtime-import.spec.ts` holds that shut.
+import { isGlobPattern } from "../analysis/util/paths";
 
 /** Runtime options resolved from CLI flags (see src/cli.ts). */
 export interface McpServerOptions {
@@ -28,9 +35,6 @@ export interface McpServerOptions {
 	 */
 	assumeForwarded?: boolean;
 }
-
-/** Characters that make a `--src-dir` value a glob rather than a plain path. */
-const GLOB_MAGIC = /[*?[\]{}]/;
 
 /**
  * Checks the paths a server was started with, before any analysis runs.
@@ -69,8 +73,10 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 	}
 	for (const dir of options.srcDirs ?? []) {
 		// A glob is checked by matching it, not by stat'ing it, and a `!` prefix is
-		// an exclusion whose target legitimately may not exist.
-		if (GLOB_MAGIC.test(dir) || dir.startsWith("!")) {
+		// an exclusion whose target legitimately may not exist. The verdict comes
+		// from picomatch, so an extglob without a `*` in it — `src/@(App|Admin).tsx`
+		// — is not mistaken for a plain path and refused for not existing.
+		if (dir.startsWith("!") || isGlobPattern(dir)) {
 			continue;
 		}
 		const resolved = resolveAgainst(root, dir);
