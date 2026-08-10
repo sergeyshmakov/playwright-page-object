@@ -49,7 +49,10 @@ export function toInlineTree(
 	): InlinePageObjectNode => {
 		const def: PageObjectNode | undefined = tree.defs[ref];
 		if (!def) {
-			return { ref, className: ref.split("#").pop() ?? ref };
+			// The node budget refused this class, so it is absent from `defs`
+			// entirely. Without the marker it reads as a control with no members
+			// rather than one we never looked at.
+			return { ref, className: ref.split("#").pop() ?? ref, truncated: true };
 		}
 		const base: InlinePageObjectNode = {
 			ref,

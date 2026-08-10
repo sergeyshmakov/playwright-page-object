@@ -209,17 +209,26 @@ describe("buildPageObjectTree — budgets", () => {
 		);
 	});
 
-	it("emits stubs once the node budget is gone", () => {
+	// The cap has to bound the payload, which is the whole reason it exists.
+	// Emitting a stub per refused class did not: the walk kept visiting edges,
+	// so `defs` grew with the entire reachable class set and the warnings grew
+	// one per class alongside it.
+	it("stops emitting definitions once the node budget is gone", () => {
 		const tree = buildPageObjectTree(makeWorkspace(SHARED), "HomePage", {
 			maxNodes: 2,
 		});
+
 		expect(tree.truncated).toBe(true);
-		expect(tree.warnings.map((diag) => diag.code)).toContain(
-			"node-budget-reached",
+		expect(Object.keys(tree.defs).length).toBeLessThanOrEqual(2);
+
+		const budgetWarnings = tree.warnings.filter(
+			(diag) => diag.code === "node-budget-reached",
 		);
-		const stubbed = Object.values(tree.defs).filter((def) => !def.expanded);
-		expect(stubbed.length).toBeGreaterThan(0);
-		expect(stubbed[0].members).toHaveLength(0);
+		expect(
+			budgetWarnings,
+			"one summary, not one per refused class",
+		).toHaveLength(1);
+		expect(budgetWarnings[0].message).toMatch(/\d+ more class/);
 	});
 });
 
@@ -450,15 +459,18 @@ describe("inline projection", () => {
 		expect(apply?.child).toMatchObject({ truncated: true });
 	});
 
-	it("marks a budget stub as truncated rather than as a complete leaf", () => {
+	// A class the budget refused is absent from `defs` entirely, so the inline
+	// view has only the ref to go on. Unmarked it reads as a control with no
+	// members, which is a different claim from "we never looked at it".
+	it("marks a class the budget refused as truncated, not as a complete leaf", () => {
 		const tree = buildPageObjectTree(makeWorkspace(SHARED), "HomePage", {
 			maxNodes: 2,
 		});
 		const inline = toInlineTree(tree, { maxDepth: 10 });
-		const stubs: string[] = [];
+		const missing: string[] = [];
 		const walk = (node: typeof inline): void => {
-			if (tree.defs[node.ref]?.expanded === false) {
-				stubs.push(node.ref);
+			if (!tree.defs[node.ref]) {
+				missing.push(node.ref);
 				expect(node.truncated).toBe(true);
 				expect(node.members).toBeUndefined();
 			}
@@ -472,7 +484,7 @@ describe("inline projection", () => {
 			}
 		};
 		walk(inline);
-		expect(stubs.length).toBeGreaterThan(0);
+		expect(missing.length).toBeGreaterThan(0);
 	});
 });
 

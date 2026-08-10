@@ -232,23 +232,19 @@ export function buildPageObjectTree(
 	// walk can detect.
 	const warnings: Diagnostic[] = [...ws.environmentWarnings()];
 	let truncated = false;
+	/** Classes the node budget refused, reported once rather than each. */
+	let omitted = 0;
 
 	const ensureExternal = (ref: string): void => {
 		if (defs[ref]) {
 			return;
 		}
 		if (!budget.spend()) {
-			// Silently dropping the stub left a member pointing at a `$ref` that is
-			// not in `defs`, which reads as "unresolvable" rather than "we ran out
-			// of room" — the outline said `(unresolved)` about a class the library
-			// itself ships.
+			// Counted, not warned per ref: the summary below says how many
+			// definitions the budget refused, and the outline reads a missing
+			// `$ref` as "not expanded: node budget" from that one warning.
 			truncated = true;
-			warnings.push(
-				warn(
-					"node-budget-reached",
-					`Node budget of ${budget.maxNodes} definitions reached; the library stub "${splitDefKey(ref).name}" was left out and references to it do not resolve.`,
-				),
-			);
+			omitted += 1;
 			return;
 		}
 		defs[ref] = externalStub(ref);
@@ -295,20 +291,14 @@ export function buildPageObjectTree(
 			return;
 		}
 		if (!budget.spend()) {
+			// A stub per over-budget class is how the cap stopped capping: the
+			// caller loop keeps walking edges, so `defs` grew with the whole
+			// reachable class set and the warnings grew one per class with it.
+			// Past the budget nothing more is emitted. A member whose `$ref` is
+			// now absent reads as "not expanded: node budget" from the single
+			// summary warning, which is what the outline already renders.
 			truncated = true;
-			defs[entry.key] = {
-				...toNode(entry, discovery, options),
-				members: [],
-				methods: [],
-				expanded: false,
-			};
-			warnings.push(
-				warn(
-					"node-budget-reached",
-					`Node budget of ${budget.maxNodes} definitions reached; "${entry.className}" was emitted as a stub.`,
-					{ file: entry.file, line: 0 },
-				),
-			);
+			omitted += 1;
 			return;
 		}
 
@@ -350,6 +340,15 @@ export function buildPageObjectTree(
 	};
 
 	ensure(rootEntry, 0);
+
+	if (omitted > 0) {
+		warnings.push(
+			warn(
+				"node-budget-reached",
+				`Node budget of ${budget.maxNodes} definitions reached; ${omitted} more class${omitted === 1 ? " was" : "es were"} left out and references to them do not resolve. Re-call with a smaller depth, or address one of the nested classes directly.`,
+			),
+		);
+	}
 
 	let members = 0;
 	let methods = 0;
