@@ -73,7 +73,17 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 		if (GLOB_MAGIC.test(dir) || dir.startsWith("!")) {
 			continue;
 		}
-		if (!exists(resolveAgainst(root, dir))) {
+		const resolved = resolveAgainst(root, dir);
+		// The analysis drops every path outside the root before it counts anything,
+		// so a scope that lands outside contributes no file at all: the server would
+		// start, every tool would answer with an empty index, and nothing would say
+		// why. A relative value resolves against the root and is inside it unless it
+		// climbs out with `..`; an absolute one inside the root is fine.
+		if (!isInside(root, resolved)) {
+			problems.push(`--src-dir is outside --project-root: ${dir}`);
+			continue;
+		}
+		if (!exists(resolved)) {
 			problems.push(`--src-dir does not exist: ${dir}`);
 		}
 	}
@@ -83,6 +93,23 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 
 function resolveAgainst(root: string, candidate: string): string {
 	return path.isAbsolute(candidate) ? candidate : path.resolve(root, candidate);
+}
+
+/**
+ * Whether a resolved path is the root or sits under it.
+ *
+ * `path.relative` rather than a string prefix: it normalises `..` segments and
+ * handles the Windows case where the two paths are on different drives (it
+ * answers with an absolute path then).
+ */
+function isInside(root: string, candidate: string): boolean {
+	const relative = path.relative(root, candidate);
+	return (
+		relative === "" ||
+		(!relative.startsWith(`..${path.sep}`) &&
+			relative !== ".." &&
+			!path.isAbsolute(relative))
+	);
 }
 
 function isDirectory(candidate: string): boolean {

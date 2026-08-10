@@ -114,4 +114,41 @@ describe("validateServerOptions", () => {
 			}),
 		).toEqual([]);
 	});
+
+	/**
+	 * The analysis drops every path outside the root before it counts anything, so
+	 * a scope pointing outside contributes no file at all. The server used to
+	 * start on one and answer every call with an empty index, saying nothing about
+	 * why — the exact silent-wrong startup this validation exists to prevent.
+	 */
+	it("rejects a src dir outside the project root", () => {
+		const outside = path.dirname(root);
+		expect(
+			validateServerOptions({ projectRoot: root, srcDirs: [outside] }),
+		).toEqual([`--src-dir is outside --project-root: ${outside}`]);
+	});
+
+	it("rejects a relative src dir that climbs out of the root", () => {
+		expect(
+			validateServerOptions({ projectRoot: root, srcDirs: ["../elsewhere"] }),
+		).toEqual(["--src-dir is outside --project-root: ../elsewhere"]);
+	});
+
+	// Only one complaint per scope: "outside the root" already says why the path
+	// is unusable, and stat'ing it would add "does not exist" about a directory
+	// that would be refused even if it were there.
+	it("says only that an outside src dir is outside", () => {
+		const problems = validateServerOptions({
+			projectRoot: root,
+			srcDirs: ["../nope/missing"],
+		});
+		expect(problems).toHaveLength(1);
+		expect(problems[0]).toContain("outside --project-root");
+	});
+
+	it("still accepts the root itself and a nested directory", () => {
+		expect(
+			validateServerOptions({ projectRoot: root, srcDirs: [".", "src"] }),
+		).toEqual([]);
+	});
 });
