@@ -78,8 +78,16 @@ export function locateTsConfig(
  *
  * Returns `null` when the config cannot be read, in which case the caller has
  * to fall back to counting the loaded project.
+ *
+ * `verifyExists` is on by default and costs one `stat` per selected file. A
+ * caller that is about to try loading each name — where a name that is not
+ * there simply loads nothing — should pass `false` and skip several thousand
+ * syscalls; a caller that is *counting* has to pay for them (see below).
  */
-export function tsConfigFileNames(tsConfigFilePath: string): string[] | null {
+export function tsConfigFileNames(
+	tsConfigFilePath: string,
+	{ verifyExists = true }: { verifyExists?: boolean } = {},
+): string[] | null {
 	try {
 		const read = ts.readConfigFile(tsConfigFilePath, (file) =>
 			ts.sys.readFile(file),
@@ -92,6 +100,9 @@ export function tsConfigFileNames(tsConfigFilePath: string): string[] | null {
 			ts.sys,
 			path.dirname(tsConfigFilePath),
 		);
+		if (!verifyExists) {
+			return parsed.fileNames;
+		}
 		// A stale entry in the `files` array is reported by `tsc` but still comes
 		// back in `fileNames`, while the project only ever loads what exists. Left
 		// in, it inflates the pre-scan count and rejects a repository that is

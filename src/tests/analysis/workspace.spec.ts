@@ -602,6 +602,50 @@ describe("Workspace.revalidate", () => {
 		expect(ws.revalidate().added).toEqual(["src/b.ts"]);
 	});
 
+	/**
+	 * The tsconfig-backed rescan no longer goes through
+	 * `addSourceFilesFromTsConfig` — it reads the config's file set itself and
+	 * adds only the names the project does not already hold, which is half the
+	 * work for the same answer. "The same answer" is this: a file created after
+	 * startup still appears, and the call still reports it as added.
+	 */
+	it("detects a new file through a tsconfig-backed rescan", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022" },
+				include: ["src"],
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		expect(ws.tsconfigPath).not.toBeNull();
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+
+		write(root, "src/b.ts", "export const b = 1;");
+		expect(ws.revalidate().added).toEqual(["src/b.ts"]);
+		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+
+		// And a second sweep with nothing new reports nothing new — the rescan
+		// must not read every already-loaded file back in as an addition.
+		expect(ws.revalidate().added).toEqual([]);
+	});
+
+	it("honours the tsconfig's exclude on the rescan", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022" },
+				include: ["src"],
+				exclude: ["src/generated"],
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		write(root, "src/generated/x.ts", "export const x = 1;");
+		write(root, "src/b.ts", "export const b = 1;");
+		expect(ws.revalidate().added).toEqual(["src/b.ts"]);
+		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
 	it("detects a deleted file and drops it from the project", () => {
 		const root = scratch({
 			"src/a.ts": "export const a = 1;",
@@ -795,6 +839,42 @@ describe("Workspace maxFiles enforcement", () => {
 			maxFiles: 2,
 		});
 		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+		expect(() =>
+			resolveRelativeModule(
+				ws.project,
+				ws.project.getSourceFileOrThrow("a.ts"),
+				"../shared/helper",
+			),
+		).toThrow(AnalysisLimitError);
+		expect(parsed(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
+	/**
+	 * The admission count is a running total now, not a fresh
+	 * `getSourceFiles().length` per admitted file. A total that drifted low would
+	 * be a cap that quietly stopped applying, so the one path that can move the
+	 * file set behind its back — a revalidate — has to reset it.
+	 */
+	it("keeps enforcing the cap after a rescan changed the file set", () => {
+		const root = scratch({
+			"src/a.ts":
+				'import { helper } from "../shared/helper";\nexport const a = helper;',
+			"shared/helper.ts": "export const helper = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src"],
+			maxFiles: 2,
+			staleAfterMs: 0,
+		});
+		// One in-scope file so far; the cap has room for exactly one more.
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+
+		write(root, "src/b.ts", "export const b = 1;");
+		ws.revalidate();
+		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+
+		// The rescan filled the cap, and the on-demand load has to see that.
 		expect(() =>
 			resolveRelativeModule(
 				ws.project,

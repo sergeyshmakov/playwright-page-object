@@ -63,6 +63,7 @@ export {
 	type EntryPathMatch,
 	entryFileCandidates,
 	matchEntryPath,
+	scannedComponents,
 	type TestIdTreeOptions,
 } from "./tsx/tree";
 export type * from "./types";
