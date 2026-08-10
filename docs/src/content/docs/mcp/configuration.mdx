@@ -49,7 +49,7 @@ A mistyped path would make every later answer use the wrong scope. The server ch
 - `--project-root` is not a directory,
 - `--tsconfig` is not a file,
 - `--playwright-config` is not a file,
-- a `--src-dir` that is not a glob and not an exclusion does not exist.
+- a `--src-dir` that is not a glob and not an exclusion does not exist, or resolves outside `--project-root` (the workspace ignores outside-root paths, so such a scope would silently contribute nothing).
 
 ```console
 $ npx playwright-page-object mcp --project-root example --src-dir nope
@@ -101,9 +101,13 @@ An attribute that came from anywhere but the chosen file's own literal is report
 
 ### What if the test-ID attribute lives in a separate config?
 
-Some repositories split `playwright.config.ts` (projects, reporters) and `playwright.base.config.ts` (`use`) without importing one from the other. When the chosen config says nothing about `use.testIdAttribute`, the server reads up to three of the remaining ranked candidates and takes the first attribute it finds, with a `testid-attribute-inherited` warning naming where it came from. Two siblings that disagree add a `testid-attribute-conflict` warning.
+Some repositories split `playwright.config.ts` (projects, reporters) and `playwright.base.config.ts` (`use`) without importing one from the other. When the chosen config says nothing about `use.testIdAttribute`, the server looks at the remaining ranked candidates and *reports* what it finds with a `testid-attribute-sibling` warning naming the file and the value. It does not apply it.
 
-`--playwright-config` suppresses discovery entirely, the sibling probe included. The named file is the config, or there is none. A caller who names a config and silently gets a different one read is worse off than one told the file is missing.
+Borrowing across unrelated configs is what that restraint prevents: a `playwright-ct.config.ts` setting `data-ct-id` for component tests has no runtime relationship to the end-to-end config your tests actually run, and scanning the whole repository with its attribute while the response names a different config is worse than scanning with the default. A config the chosen one imports, spreads, or merges *is* related, so it is read as a layer and does apply.
+
+Act on the warning with `--attribute <name>` or `--playwright-config <file>`. If the assumed attribute matches nothing in your sources, the [attribute check](#how-does-the-server-detect-a-wrong-attribute) tells you independently.
+
+`--playwright-config` suppresses discovery entirely, sibling reporting included. The named file is the config, or there is none. A caller who names a config and silently gets a different one read is worse off than one told the file is missing.
 
 Per-project overrides (`projects[].use.testIdAttribute`) are recorded and reported with `testid-attribute-project-override`, but the analysis uses the top-level value.
 
@@ -114,8 +118,9 @@ Per-project overrides (`projects[].use.testIdAttribute`) are recorded and report
 | 1 | `--attribute`, or the per-call `attribute` argument on `get_testid_tree` / `map_coverage` | `param` |
 | 2 | `use.testIdAttribute` in the chosen config's own literal | `playwright-config` |
 | 3 | The same key in a merge layer, a spread, or an imported base config | `playwright-config` |
-| 4 | The same key in a sibling config found by discovery | `playwright-config` |
-| 5 | Playwright's built-in `data-testid` | `default` |
+| 4 | Playwright's built-in `data-testid` | `default` |
+
+A sibling config discovered but never imported is not in this table: it is reported, never applied.
 
 `meta.attributeSource` ships on every successful response, so one field tells you which layer won. See the [common meta fields](/mcp/tools/#common-meta-fields) for the rest of the response context.
 
