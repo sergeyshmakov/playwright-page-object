@@ -9,12 +9,14 @@ import {
 } from "ts-morph";
 import type { DynamicReason } from "../types";
 import { admitAddedFile } from "./fileBudget";
-import { isIgnoredPath, toPosix } from "./paths";
+import { foldPath, isIgnoredPath, toPosix } from "./paths";
 import {
+	clearRealPathCache,
 	hasWorkspaceRoot,
 	isUnderWorkspaceRoot,
 	isWorkspaceLocal,
 	linkedWorkspaceDirectory,
+	linkedWorkspaceFile,
 } from "./workspaceRoot";
 
 export type RefKind = "class" | "function" | "variable" | "other";
@@ -97,9 +99,12 @@ const EXTENSION_CANDIDATES = [
  * Kept as the pre-gate in front of {@link isWorkspaceLocal}, which is the
  * authority: a workspace package linked into `node_modules` matches this and is
  * still first-party source.
+ *
+ * Folded where the filesystem folds, so the gate and the authority behind it
+ * read a differently cased segment the same way.
  */
 export function isInNodeModules(filePath: string): boolean {
-	return toPosix(filePath).includes("/node_modules/");
+	return foldPath(toPosix(filePath)).includes("/node_modules/");
 }
 
 export function isRelativeSpecifier(specifier: string): boolean {
@@ -377,6 +382,8 @@ const CACHE_FIELD = "\u0000";
 interface ProbeCache {
 	/** Importing directory and specifier, joined, to the probe's outcome. */
 	specifiers: Map<string, WorkspaceProbe>;
+	/** Real package directory to its parsed `package.json`, or `null`. */
+	manifests: Map<string, Record<string, unknown> | null>;
 	/** Real package directory to the entry bases its `package.json` declares. */
 	entries: Map<string, string[]>;
 }
@@ -386,10 +393,29 @@ const probeCaches = new WeakMap<Project, ProbeCache>();
 function probeCacheOf(project: Project): ProbeCache {
 	let cache = probeCaches.get(project);
 	if (!cache) {
-		cache = { specifiers: new Map(), entries: new Map() };
+		cache = { specifiers: new Map(), manifests: new Map(), entries: new Map() };
 		probeCaches.set(project, cache);
 	}
 	return cache;
+}
+
+/**
+ * Drops everything the resolver remembers about a project's filesystem.
+ *
+ * Every entry here is a statement about files as they were when it was made:
+ * "this package resolves to no source", "its manifest points at `dist`", "this
+ * `SourceFile` is its entry point". None survives an edit. Left in place across
+ * a long-lived session, the first answer outlived its evidence — a package kept
+ * being reported missing or built-only after its sources appeared, and a
+ * cached `SourceFile` that revalidation had since removed from the project was
+ * still handed out as the resolution.
+ *
+ * Called from `Workspace.bumpEpoch()`, which is exactly the event that says the
+ * files are no longer what they were.
+ */
+export function clearResolutionCaches(project: Project): void {
+	probeCaches.delete(project);
+	clearRealPathCache(project);
 }
 
 /** `@scope/name` or `name`, plus whatever subpath follows it. */
@@ -411,12 +437,49 @@ function splitPackageSpecifier(
 }
 
 /**
+ * Conditions read out of an `exports` entry, most source-like first. A monorepo
+ * points `source` (or `development`) at the unbuilt file precisely so tooling
+ * like this can find it.
+ */
+const EXPORT_CONDITIONS = [
+	"source",
+	"development",
+	"import",
+	"default",
+] as const;
+
+/** The package's parsed `package.json`, read at most once per package. */
+function packageManifest(
+	project: Project,
+	realPackageDir: string,
+): Record<string, unknown> | null {
+	const cache = probeCacheOf(project);
+	const cached = cache.manifests.get(realPackageDir);
+	if (cached !== undefined) {
+		return cached;
+	}
+	let manifest: Record<string, unknown> | null = null;
+	try {
+		const text = project
+			.getFileSystem()
+			.readFileSync(path.posix.join(realPackageDir, "package.json"));
+		const parsed: unknown = JSON.parse(text);
+		if (parsed && typeof parsed === "object") {
+			manifest = parsed as Record<string, unknown>;
+		}
+	} catch {
+		// No manifest, or unreadable: the conventional layouts still apply.
+	}
+	cache.manifests.set(realPackageDir, manifest);
+	return manifest;
+}
+
+/**
  * Entry path bases a package declares, resolved against its real directory.
  *
- * One `package.json` read per package, cached. `exports["."]` is consulted for
- * the conditions a monorepo uses to point at unbuilt sources; everything else
- * is the classic field set. Conventional source layouts are appended so a
- * package with no usable field still resolves.
+ * `exports["."]` is consulted for the conditions a monorepo uses to point at
+ * unbuilt sources; everything else is the classic field set. Conventional
+ * source layouts are appended so a package with no usable field still resolves.
  */
 function packageEntryBases(project: Project, realPackageDir: string): string[] {
 	const cache = probeCacheOf(project);
@@ -430,18 +493,7 @@ function packageEntryBases(project: Project, realPackageDir: string): string[] {
 			bases.push(path.posix.join(realPackageDir, toPosix(value)));
 		}
 	};
-	let manifest: Record<string, unknown> | undefined;
-	try {
-		const text = project
-			.getFileSystem()
-			.readFileSync(path.posix.join(realPackageDir, "package.json"));
-		const parsed: unknown = JSON.parse(text);
-		if (parsed && typeof parsed === "object") {
-			manifest = parsed as Record<string, unknown>;
-		}
-	} catch {
-		// No manifest, or unreadable: the conventional layouts below still apply.
-	}
+	const manifest = packageManifest(project, realPackageDir);
 	const root = manifest?.exports;
 	if (root && typeof root === "object") {
 		const dot = (root as Record<string, unknown>)["."] ?? root;
@@ -449,7 +501,7 @@ function packageEntryBases(project: Project, realPackageDir: string): string[] {
 			add(dot);
 		} else if (dot && typeof dot === "object") {
 			const conditions = dot as Record<string, unknown>;
-			for (const condition of ["source", "development", "import", "default"]) {
+			for (const condition of EXPORT_CONDITIONS) {
 				add(conditions[condition]);
 			}
 		}
@@ -461,6 +513,94 @@ function packageEntryBases(project: Project, realPackageDir: string): string[] {
 	bases.push(path.posix.join(realPackageDir, "index"));
 	cache.entries.set(realPackageDir, bases);
 	return bases;
+}
+
+/** Reads one `exports` value — a string, or a conditions object — into `into`. */
+function collectExportTargets(
+	entry: unknown,
+	matchedStar: string | null,
+	into: string[],
+): void {
+	const add = (value: unknown): void => {
+		if (typeof value !== "string" || value === "") {
+			return;
+		}
+		const substituted = applySubstitution(toPosix(value), matchedStar);
+		if (substituted !== null) {
+			into.push(substituted);
+		}
+	};
+	if (typeof entry === "string") {
+		add(entry);
+		return;
+	}
+	if (!entry || typeof entry !== "object") {
+		return;
+	}
+	const conditions = entry as Record<string, unknown>;
+	for (const condition of EXPORT_CONDITIONS) {
+		add(conditions[condition]);
+	}
+}
+
+/**
+ * Path bases a package's `exports` table maps one subpath to.
+ *
+ * A design system that publishes `"./Button": "./src/Button.tsx"` is imported
+ * as `@acme/ui/Button`, and `<package>/Button` — the only thing a
+ * package-root-relative guess can produce — is not a file. Consulting the table
+ * is the difference between expanding a first-party component and reporting the
+ * repository's own design system as an external dependency.
+ *
+ * Exact keys win outright; otherwise the longest matching `*` pattern does,
+ * which is Node's own rule (and the one {@link pathsTargets} already applies to
+ * the tsconfig table).
+ */
+function exportedSubpathBases(
+	project: Project,
+	realPackageDir: string,
+	subpath: string,
+): string[] {
+	const root = packageManifest(project, realPackageDir)?.exports;
+	if (!root || typeof root !== "object") {
+		return [];
+	}
+	const table = root as Record<string, unknown>;
+	const key = `./${subpath}`;
+	const targets: string[] = [];
+	if (Object.hasOwn(table, key)) {
+		collectExportTargets(table[key], null, targets);
+	} else {
+		let bestEntry: unknown;
+		let bestStar: string | null = null;
+		let bestPrefixLength = -1;
+		for (const [pattern, entry] of Object.entries(table)) {
+			// A table whose keys are conditions rather than subpaths exposes none.
+			if (!pattern.startsWith("./")) {
+				continue;
+			}
+			const parsed = parsePathsPattern(pattern);
+			if (!parsed || parsed.exact) {
+				continue;
+			}
+			const { prefix, suffix } = parsed;
+			if (
+				!key.startsWith(prefix) ||
+				!key.endsWith(suffix) ||
+				key.length < prefix.length + suffix.length ||
+				prefix.length <= bestPrefixLength
+			) {
+				continue;
+			}
+			bestPrefixLength = prefix.length;
+			bestStar = key.slice(prefix.length, key.length - suffix.length);
+			bestEntry = entry;
+		}
+		if (bestEntry !== undefined) {
+			collectExportTargets(bestEntry, bestStar, targets);
+		}
+	}
+	return targets.map((target) => path.posix.join(realPackageDir, target));
 }
 
 /**
@@ -544,21 +684,34 @@ function probeUncached(
  * `node_modules/…`, which `isAnalysable` drops from `sourceFiles()` — the ids
  * would reach the tree and never reach the inventory, and coverage would call
  * every selector for them dead.
+ *
+ * A subpath goes through the same candidate list and the same build-output gate
+ * as the package root. It used to be joined onto the package directory and
+ * loaded unconditionally, which both missed every subpath the package declares
+ * through `exports` and let `@acme/ui/dist/Button` parse compiled output that
+ * `sourceFiles()` then excludes — a node in the tree whose file is in no
+ * inventory, which is the exact disagreement between tree and coverage this
+ * function exists to prevent.
  */
 function loadWorkspacePackage(
 	project: Project,
 	realPackageDir: string,
 	subpath: string,
 ): WorkspaceProbe {
-	if (subpath !== "") {
-		const found = loadFromBase(
-			project,
-			path.posix.join(realPackageDir, subpath),
-		);
-		return found ? { kind: "file", file: found } : NONE;
-	}
+	const bases =
+		subpath === ""
+			? packageEntryBases(project, realPackageDir)
+			: [
+					...exportedSubpathBases(project, realPackageDir, subpath),
+					path.posix.join(realPackageDir, subpath),
+				];
 	let sawBuiltOutput = false;
-	for (const base of packageEntryBases(project, realPackageDir)) {
+	for (const base of bases) {
+		// An `exports` target is free to point anywhere; one that climbs out of
+		// its own package is not this package's source.
+		if (!base.startsWith(`${realPackageDir}/`)) {
+			continue;
+		}
 		if (isIgnoredPath(base.slice(realPackageDir.length))) {
 			sawBuiltOutput = true;
 			continue;
@@ -591,14 +744,23 @@ export function resolveModuleSpecifier(
 	if (isRelativeSpecifier(specifier)) {
 		return resolveRelativeModule(project, fromFile, specifier);
 	}
-	for (const base of mappedModuleBases(project, specifier)) {
+	for (const mapped of mappedModuleBases(project, specifier)) {
 		// Rejected *before* `loadFromBase`, not after: adding the file to the
 		// project first would parse a dependency into the AST only to throw the
 		// result away, which is exactly the boundary the engine promises to hold.
 		// The real-path test is what keeps a `paths` entry that already points at
 		// `node_modules/<workspace-pkg>` from being read as a dependency.
-		if (isInNodeModules(base) && !isWorkspaceLocal(project, base)) {
-			continue;
+		let base = mapped;
+		if (isInNodeModules(base)) {
+			// An alias aimed at a linked workspace package is admitted, but only
+			// under the package's real path. Loading it under the link spelling put
+			// the file in the project as `node_modules/…`, where `sourceFiles()`
+			// drops it: the ids reached the tree and never reached the inventory.
+			const real = linkedWorkspaceFile(project, base);
+			if (real === null) {
+				continue;
+			}
+			base = real;
 		}
 		const found = loadFromBase(project, base);
 		if (found && isWorkspaceLocal(project, found.getFilePath())) {
@@ -741,6 +903,22 @@ function resolveDefaultExport(
 			);
 			if (resolved?.resolved) {
 				return resolved;
+			}
+			if (!moduleSpecifier) {
+				// `import { Card } from "./Card"; export { Card as default };` — the
+				// barrel's default export is an *imported* binding, so the lookup
+				// above searched this file for a declaration that was never here.
+				// Left unresolved, every default import of the barrel stops the
+				// component walk at a boundary and turns a control reference dynamic.
+				const viaImport = resolveThroughImport(
+					project,
+					sourceFile,
+					specifier.getName(),
+					hops - 1,
+				);
+				if (viaImport?.resolved) {
+					return viaImport;
+				}
 			}
 		}
 	}

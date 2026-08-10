@@ -1,11 +1,17 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Project } from "ts-morph";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import { foldPath, toPosix } from "../../../analysis/util/paths";
 import { resolveIdentifier } from "../../../analysis/util/resolve";
-import { isWorkspaceLocal } from "../../../analysis/util/workspaceRoot";
+import {
+	isWorkspaceLocal,
+	linkedWorkspaceDirectory,
+	realDirectory,
+	registerWorkspaceRoot,
+} from "../../../analysis/util/workspaceRoot";
 import { Workspace } from "../../../analysis/workspace";
 
 /**
@@ -65,6 +71,21 @@ function link(root: string, from: string, to: string): void {
 	const linkPath = path.join(root, from);
 	fs.mkdirSync(path.dirname(linkPath), { recursive: true });
 	fs.symlinkSync(path.join(root, to), linkPath, "junction");
+}
+
+/**
+ * A second spelling of `root`: a link beside it that points at it.
+ *
+ * The only portable way to hand the workspace a root whose `realpath` is a
+ * different string — the mismatch macOS produces for free with `/var` versus
+ * `/private/var`, and Windows produces whenever a repository is reached through
+ * a junction or a `subst` drive.
+ */
+function aliasOf(root: string): string {
+	const alias = path.join(path.dirname(root), `${path.basename(root)}-alias`);
+	fs.symlinkSync(root, alias, "junction");
+	roots.push(alias);
+	return alias;
 }
 
 /** A monorepo whose `@acme/ui` package is linked into `node_modules`. */
@@ -130,15 +151,49 @@ describe.skipIf(!LINKS_WORK)("isWorkspaceLocal", () => {
 		// `os.tmpdir()` is `/var/…` on macOS and `/private/var/…` after realpath.
 		// Comparing an un-resolved root against a resolved file classifies every
 		// temp-dir fixture as outside the root.
+		//
+		// The root the workspace is given here is a *link* to the fixture, so the
+		// two spellings really do differ — `path.join(root, "..", basename(root))`
+		// normalises straight back to `root` and exercises nothing.
 		const root = scratch(MONOREPO);
 		link(root, "node_modules/@acme/ui", "packages/ui");
-		const linked = path.join(root, "node_modules", "@acme", "ui", "src");
-		const ws = Workspace.acquire({
-			projectRoot: path.join(root, "..", path.basename(root)),
-		});
+		const alias = aliasOf(root);
+		const ws = Workspace.acquire({ projectRoot: alias });
 
-		expect(isWorkspaceLocal(ws.project, `${toPosix(linked)}/index.tsx`)).toBe(
-			true,
+		// Spelled with the resolved root: what `realpath` answers with, and
+		// therefore what the classifier compares against the configured root.
+		expect(
+			isWorkspaceLocal(
+				ws.project,
+				`${toPosix(root)}/node_modules/@acme/ui/src/index.tsx`,
+			),
+		).toBe(true);
+		// And spelled with the un-resolved one, which is how the project's own
+		// files are named.
+		expect(
+			isWorkspaceLocal(
+				ws.project,
+				`${toPosix(alias)}/node_modules/@acme/ui/src/index.tsx`,
+			),
+		).toBe(true);
+	});
+
+	// npm writes `node_modules`, but nothing stops a path from reaching the
+	// engine spelled otherwise, and on NTFS or APFS that is the same directory.
+	it("reads a differently cased node_modules the way the filesystem does", () => {
+		const root = scratch({
+			...MONOREPO,
+			"node_modules/react/index.js": "module.exports = {};",
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+		const ws = Workspace.acquire({ projectRoot: root });
+		const spelled = `${toPosix(root)}/Node_Modules/react/index.js`;
+
+		// Case-folding filesystem: the installed dependency it really is. Case
+		// sensitive: a different path entirely, which never went through
+		// `node_modules` and is ordinary (missing) source.
+		expect(isWorkspaceLocal(ws.project, spelled)).toBe(
+			foldPath("A") !== foldPath("a"),
 		);
 	});
 
@@ -152,6 +207,45 @@ describe.skipIf(!LINKS_WORK)("isWorkspaceLocal", () => {
 		if (foldPath("A") === foldPath("a")) {
 			expect(isWorkspaceLocal(ws.project, inside.toUpperCase())).toBe(true);
 		}
+	});
+});
+
+/**
+ * A UNC root needs no share to test: what matters is the spelling
+ * `realpathSync.native` answers with, and mocking that is the only way to get
+ * `\\?\UNC\…` in front of the normalizer on a machine with no network volume.
+ */
+describe("extended-length Windows paths", () => {
+	const UNC_ROOT = "//server/share/repo";
+
+	/** What the native realpath hands back on a UNC volume. */
+	function extended(posixPath: string): string {
+		return posixPath.replace(/^\/\//, "\\\\?\\UNC\\").replace(/\//g, "\\");
+	}
+
+	it("normalizes a `\\\\?\\UNC\\` real path to its ordinary spelling", () => {
+		const project = new Project({ useInMemoryFileSystem: true });
+		vi.spyOn(fs.realpathSync, "native").mockImplementation(((
+			target: string,
+		) => {
+			const posix = toPosix(String(target));
+			return extended(
+				posix === `${UNC_ROOT}/node_modules/@acme/ui`
+					? `${UNC_ROOT}/packages/ui`
+					: posix,
+			);
+		}) as typeof fs.realpathSync.native);
+		registerWorkspaceRoot(project, UNC_ROOT);
+
+		// Stripping `\\?\` outright leaves `UNC/server/share/…`: a path under no
+		// root and no drive, so the linked package is loaded from nowhere and the
+		// whole workspace package is reported external.
+		expect(realDirectory(project, `${UNC_ROOT}/node_modules/@acme/ui`)).toBe(
+			`${UNC_ROOT}/packages/ui`,
+		);
+		expect(
+			linkedWorkspaceDirectory(project, `${UNC_ROOT}/node_modules/@acme/ui`),
+		).toBe(`${UNC_ROOT}/packages/ui`);
 	});
 });
 
@@ -239,6 +333,175 @@ describe.skipIf(!LINKS_WORK)(
 		});
 	},
 );
+
+describe.skipIf(!LINKS_WORK)("linked package subpaths", () => {
+	const TSCONFIG = {
+		compilerOptions: { jsx: "react-jsx", target: "ES2022" },
+		include: ["apps"],
+	};
+
+	function component(name: string): string {
+		return `export function ${name}() { return <b data-testid="${name}" />; }\n`;
+	}
+
+	function app(...imports: string[]): string {
+		return `${imports.join("\n")}\nexport default function App() { return <div />; }\n`;
+	}
+
+	function resolveFrom(root: string, name: string) {
+		const ws = Workspace.acquire({ projectRoot: root });
+		const entry = ws.project.getSourceFileOrThrow(
+			path.join(root, "apps", "web", "src", "App.tsx"),
+		);
+		return { ws, resolution: resolveIdentifier(ws.project, entry, name) };
+	}
+
+	// A `paths` alias aimed straight at `node_modules/<workspace-pkg>` is
+	// admitted — the link leads back into the repository — but loading it under
+	// the link spelling puts the file in the project as `node_modules/…`, which
+	// `sourceFiles()` drops. Its ids reach the tree and never the inventory.
+	it("loads a `paths` alias into a linked package under its real path", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: {
+					...TSCONFIG.compilerOptions,
+					baseUrl: ".",
+					paths: { "@acme/ui/*": ["node_modules/@acme/ui/src/*"] },
+				},
+				include: TSCONFIG.include,
+			}),
+			"packages/ui/package.json": JSON.stringify({ name: "@acme/ui" }),
+			"packages/ui/src/Button.tsx": component("Button"),
+			"apps/web/src/App.tsx": app('import { Button } from "@acme/ui/Button";'),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const { ws, resolution } = resolveFrom(root, "Button");
+		expect(resolution.resolved).toBe(true);
+		if (resolution.resolved) {
+			expect(ws.rel(resolution.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/Button.tsx",
+			);
+			expect(ws.analysable(resolution.sourceFile)).toBe(true);
+		}
+	});
+
+	// `<package>/Button` is not a file in a package that publishes its subpaths
+	// through `exports`, so the component was reported as an external dependency
+	// of the repository that owns it.
+	it("resolves a subpath the package declares through `exports`", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				exports: {
+					"./Button": {
+						source: "./src/Button.tsx",
+						default: "./dist/Button.js",
+					},
+					"./*": "./src/*.tsx",
+				},
+			}),
+			"packages/ui/src/Button.tsx": component("Button"),
+			"packages/ui/src/Card.tsx": component("Card"),
+			"apps/web/src/App.tsx": app(
+				'import { Button } from "@acme/ui/Button";',
+				'import { Card } from "@acme/ui/Card";',
+			),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const { ws, resolution } = resolveFrom(root, "Button");
+		expect(resolution.resolved).toBe(true);
+		if (resolution.resolved) {
+			expect(ws.rel(resolution.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/Button.tsx",
+			);
+		}
+		// And through the `./*` pattern, which is how most design systems say it.
+		const card = resolveFrom(root, "Card");
+		expect(card.resolution.resolved).toBe(true);
+		if (card.resolution.resolved) {
+			expect(card.ws.rel(card.resolution.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/Card.tsx",
+			);
+		}
+	});
+
+	// The subpath used to skip the build-output gate the package root goes
+	// through, so a node in the tree could come from a file `sourceFiles()`
+	// excludes — and coverage would then call every selector for it dead.
+	it("refuses a subpath that lands in the package's build output", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({ name: "@acme/ui" }),
+			"packages/ui/dist/Button.tsx": component("Button"),
+			"apps/web/src/App.tsx": app(
+				'import { Button } from "@acme/ui/dist/Button";',
+			),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const { ws, resolution } = resolveFrom(root, "Button");
+		expect(resolution.resolved).toBe(false);
+		if (!resolution.resolved && resolution.external) {
+			expect(resolution.module).toBe("@acme/ui/dist/Button (built output)");
+		}
+		expect(
+			ws.project
+				.getSourceFiles()
+				.map((file) => toPosix(file.getFilePath()))
+				.filter((file) => file.includes("/dist/")),
+		).toEqual([]);
+	});
+
+	// A probe outcome is a statement about the files as they were. Cached for the
+	// life of the process, the first "this package has no source" answer outlived
+	// every edit that made it false.
+	it("re-probes a linked package after the workspace revalidates", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				source: "src/index.tsx",
+			}),
+			"apps/web/src/App.tsx": app('import { Gapped } from "@acme/ui";'),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const entry = path.join(root, "apps", "web", "src", "App.tsx");
+		const first = resolveIdentifier(
+			ws.project,
+			ws.project.getSourceFileOrThrow(entry),
+			"Gapped",
+		);
+		expect(first.resolved).toBe(false);
+
+		fs.mkdirSync(path.join(root, "packages", "ui", "src"), { recursive: true });
+		fs.writeFileSync(
+			path.join(root, "packages", "ui", "src", "index.tsx"),
+			component("Gapped"),
+			"utf8",
+		);
+		// An edit in the analysed scope is what makes the sweep bump the epoch —
+		// the same thing an agent editing both halves of a monorepo does.
+		const when = new Date(Date.now() + 5000);
+		fs.utimesSync(entry, when, when);
+		ws.revalidate();
+
+		const second = resolveIdentifier(
+			ws.project,
+			ws.project.getSourceFileOrThrow(entry),
+			"Gapped",
+		);
+		expect(second.resolved).toBe(true);
+		if (second.resolved) {
+			expect(ws.rel(second.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/index.tsx",
+			);
+		}
+	});
+});
 
 describe("installed dependencies stay unread", () => {
 	it("never parses a real node_modules package", () => {

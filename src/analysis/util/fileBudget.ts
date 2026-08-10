@@ -23,6 +23,12 @@ const admissions = new WeakMap<Project, FileAdmission[]>();
  * `maxFiles` became the only cap enforced and the earlier workspace kept a
  * guarantee that had quietly stopped holding. With every owner's gate on the
  * chain, the strictest cap is the one that decides.
+ *
+ * Called only once its owner is fully built. A gate registered by a workspace
+ * whose construction then threw belongs to nothing: it stays on the chain for
+ * the life of the `Project`, and the next owner of that same project — one with
+ * a larger `maxFiles`, typically, since that is why the first one failed — has
+ * every on-demand addition refused by a cap nobody is enforcing any more.
  */
 export function registerFileAdmission(
 	project: Project,

@@ -20,6 +20,22 @@ import { foldPath, toPosix } from "./paths";
 
 const NODE_MODULES = "/node_modules/";
 
+/**
+ * The `node_modules` tests, folded exactly where {@link insideRoot} folds.
+ *
+ * A raw `includes` read `C:/Repo/Node_Modules/react/index.js` as first-party
+ * source on a filesystem that resolves it to the installed dependency it is,
+ * which is the one direction this predicate must never get wrong. Folding
+ * preserves length, so an index into the folded string indexes the original.
+ */
+function hasNodeModulesSegment(posixPath: string): boolean {
+	return foldPath(posixPath).includes(NODE_MODULES);
+}
+
+function lastNodeModulesIndex(posixPath: string): number {
+	return foldPath(posixPath).lastIndexOf(NODE_MODULES);
+}
+
 interface RootRecord {
 	/** Workspace root as configured, posix, case-folded. */
 	root: string;
@@ -44,11 +60,18 @@ const roots = new WeakMap<Project, RootRecord>();
  * one that reliably resolves directory junctions, and it canonicalises the
  * drive-letter case. It can answer with a `\\?\` extended-length prefix, which
  * is stripped here so the result compares against ordinary paths.
+ *
+ * The UNC form is stripped first and separately: `\\?\UNC\server\share` is the
+ * extended spelling of `\\server\share`, so dropping the prefix outright would
+ * leave `UNC\server\share` — a path that matches no root, is under no drive,
+ * and turns every linked package on a network root into an external boundary.
  */
 function realPathOf(input: string): string | null {
 	try {
 		const resolved = fs.realpathSync.native(input);
-		return toPosix(resolved.replace(/^\\\\\?\\/, ""));
+		return toPosix(
+			resolved.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/, ""),
+		);
 	} catch {
 		// ENOENT, EPERM, an in-memory filesystem: a classification predicate never
 		// throws, it falls back to the literal path.
@@ -96,6 +119,19 @@ export function realDirectory(
 	return resolved;
 }
 
+/**
+ * Forgets the cached directory real paths.
+ *
+ * A link is a fact about the filesystem, and the filesystem changes: a package
+ * relinked, removed or newly installed between two calls of a long-lived server
+ * would otherwise keep the classification the first call made. Called from the
+ * workspace's epoch bump, which is exactly the event that says the files are
+ * not what they were.
+ */
+export function clearRealPathCache(project: Project): void {
+	roots.get(project)?.realDirs.clear();
+}
+
 function insideRoot(record: RootRecord, posixPath: string): boolean {
 	const folded = foldPath(posixPath).replace(/\/+$/, "");
 	for (const base of [record.root, record.realRoot]) {
@@ -131,7 +167,7 @@ export function linkedWorkspaceDirectory(
 		return null;
 	}
 	const real = realDirectory(project, dirPath);
-	if (real === null || real.includes(NODE_MODULES)) {
+	if (real === null || hasNodeModulesSegment(real)) {
 		return null;
 	}
 	return insideRoot(record, real) ? real : null;
@@ -147,7 +183,7 @@ export function linkedWorkspaceDirectory(
 function packagePrefix(
 	posixPath: string,
 ): { packageDir: string; tail: string } | null {
-	const at = posixPath.lastIndexOf(NODE_MODULES);
+	const at = lastNodeModulesIndex(posixPath);
 	if (at < 0) {
 		return null;
 	}
@@ -185,6 +221,28 @@ export function realFilePath(
 }
 
 /**
+ * Real path of a file reached through a `node_modules` link that leads back
+ * into the workspace, or `null` when there is no such link to follow: an
+ * ordinary installed dependency, or no `node_modules` hop at all.
+ *
+ * The path a caller must load a linked package's file *by*. Loading it under
+ * the link spelling puts it in the project as `node_modules/…`, which
+ * `Workspace.sourceFiles()` drops — so its ids reach a tree and never reach the
+ * inventory, and coverage calls every selector for them dead.
+ */
+export function linkedWorkspaceFile(
+	project: Project,
+	filePath: string,
+): string | null {
+	const split = packagePrefix(toPosix(filePath));
+	if (!split) {
+		return null;
+	}
+	const real = linkedWorkspaceDirectory(project, split.packageDir);
+	return real === null ? null : `${real}${split.tail}`;
+}
+
+/**
  * Local ⇔ the path never went through `node_modules`, or the link it went
  * through lands back inside the (real) workspace root with no `node_modules`
  * segment left.
@@ -204,7 +262,7 @@ export function realFilePath(
  */
 export function isWorkspaceLocal(project: Project, filePath: string): boolean {
 	const posix = toPosix(filePath);
-	if (!posix.includes(NODE_MODULES)) {
+	if (!hasNodeModulesSegment(posix)) {
 		return true;
 	}
 	const record = roots.get(project);
@@ -215,7 +273,7 @@ export function isWorkspaceLocal(project: Project, filePath: string): boolean {
 		return false;
 	}
 	const real = realFilePath(project, posix);
-	if (real === null || real.includes(NODE_MODULES)) {
+	if (real === null || hasNodeModulesSegment(real)) {
 		return false;
 	}
 	return insideRoot(record, real);

@@ -1,12 +1,28 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MAX_CONFIG_CANDIDATES } from "../../analysis/config/configDiscovery";
 import { AnalysisLimitError } from "../../analysis/diagnostics";
+import { toPosix } from "../../analysis/util/paths";
 import { resolveRelativeModule } from "../../analysis/util/resolve";
 import { Workspace } from "../../analysis/workspace";
 import { makeWorkspace } from "./helpers/inMemory";
+
+/**
+ * The `fs` ts-morph reads through.
+ *
+ * Its own `require("fs")` object, not this file's ESM namespace: the namespace
+ * is frozen and cannot be spied on, while the CJS exports every dependency
+ * shares can be swapped for the length of one call. It is the only way to see
+ * *whether a file was parsed at all*, which is the whole difference between a
+ * cap checked before the parse and one checked after it.
+ */
+const readingFs = createRequire(path.join(process.cwd(), "package.json"))(
+	"node:fs",
+) as typeof fs;
 
 const roots: string[] = [];
 
@@ -28,6 +44,25 @@ function write(root: string, relativePath: string, contents: string): void {
 /** Workspace-relative posix paths of everything the workspace analyses. */
 function rels(ws: Workspace): string[] {
 	return ws.sourceFiles().map((file) => ws.rel(file.getFilePath()));
+}
+
+/** Absolute posix paths every `readFileSync` saw while `body` ran. */
+function recordingReads(body: () => void): string[] {
+	const reads: string[] = [];
+	const original = readingFs.readFileSync;
+	(readingFs as { readFileSync: unknown }).readFileSync = (
+		target: never,
+		options: never,
+	) => {
+		reads.push(toPosix(String(target)));
+		return original(target, options);
+	};
+	try {
+		body();
+	} finally {
+		(readingFs as { readFileSync: unknown }).readFileSync = original;
+	}
+	return reads;
 }
 
 /** mtimeMs has coarse resolution on some filesystems; stamp it explicitly. */
@@ -302,6 +337,47 @@ describe("Workspace config discovery caching", () => {
 		});
 	});
 
+	/**
+	 * Whether the candidate list is *complete* is part of what the tools report,
+	 * and a repository can cross that line without its first twenty candidates
+	 * changing at all. Comparing only the list left `candidatesTruncated` saying
+	 * "there are more" long after there were not.
+	 */
+	it("refreshes the truncation flag when only the tail changes", () => {
+		const files: Record<string, string> = {
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+				include: ["src"],
+			}),
+			"src/a.ts": "export const a = 1;",
+		};
+		// One past the cap, all outside the analysed scope so the mtime sweep can
+		// never see the deletion and clear the list wholesale.
+		const overflow = MAX_CONFIG_CANDIDATES + 1;
+		for (let index = 0; index < overflow; index += 1) {
+			const name = `configs/playwright.c${String(index).padStart(2, "0")}.config.ts`;
+			files[name] = "export default {};";
+		}
+		const root = scratch(files);
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		expect(ws.configDiscovery().candidates).toHaveLength(MAX_CONFIG_CANDIDATES);
+		expect(ws.configDiscovery().truncated).toBe(true);
+
+		// Ranking is lexicographic at equal depth, so the last name is the one the
+		// cap was dropping: the kept twenty are identical either way.
+		fs.rmSync(
+			path.join(
+				root,
+				`configs/playwright.c${String(overflow - 1).padStart(2, "0")}.config.ts`,
+			),
+		);
+		expect(ws.revalidate().removed, "outside the tsconfig's file set").toEqual(
+			[],
+		);
+
+		expect(ws.configDiscovery().truncated).toBeUndefined();
+	});
+
 	it("notices a config that was deleted outside the analysed scope", () => {
 		const root = scratch({
 			"tsconfig.json": JSON.stringify({
@@ -565,6 +641,57 @@ describe("Workspace maxFiles enforcement", () => {
 		});
 		expect(() => ws.playwright()).toThrow(AnalysisLimitError);
 		expect(parsed(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
+	/**
+	 * The pre-parse check exists to refuse an oversized source set *before* it is
+	 * read. Counting only the analysed subset let a tsconfig whose sources sit
+	 * outside the analysed root walk straight past it: every one of those files
+	 * was read and parsed, and the cap then rejected the project it had just paid
+	 * for. What the cap counts and what the pre-check counts have to be the same
+	 * set.
+	 */
+	const outsideRootTsConfig = () => {
+		const files: Record<string, string> = {
+			"app/tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+				include: ["src/**/*.ts", "../lib/**/*.ts"],
+			}),
+			"app/src/main.ts": "export const main = 1;",
+		};
+		for (let index = 0; index < 6; index += 1) {
+			files[`lib/f${index}.ts`] = `export const f${index} = ${index};\n`;
+		}
+		return scratch(files);
+	};
+
+	it("refuses an oversized tsconfig before parsing its sources", () => {
+		const root = outsideRootTsConfig();
+		const reads = recordingReads(() => {
+			expect(() =>
+				Workspace.acquire({
+					projectRoot: path.join(root, "app"),
+					maxFiles: 3,
+				}),
+			).toThrow(AnalysisLimitError);
+		});
+
+		expect(
+			reads.filter((file) => file.startsWith(`${toPosix(root)}/lib/`)),
+		).toEqual([]);
+	});
+
+	// The other half of the same rule: a narrowed project is built with
+	// `skipAddingFilesFromTsConfig`, so the tsconfig's set is never parsed and
+	// counting it here would refuse a scope that costs nothing.
+	it("still admits a narrowed scope inside an oversized tsconfig", () => {
+		const root = outsideRootTsConfig();
+		const ws = Workspace.acquire({
+			projectRoot: path.join(root, "app"),
+			include: ["src"],
+			maxFiles: 3,
+		});
+		expect(rels(ws)).toEqual(["src/main.ts"]);
 	});
 
 	/**
@@ -860,6 +987,70 @@ describe("Workspace include normalization", () => {
 		});
 		const ws = Workspace.acquire({ projectRoot: root, include: ["src/a.ts"] });
 		expect(rels(ws)).toEqual(["src/a.ts"]);
+	});
+});
+
+/**
+ * `--src-dir '!src/generated'` is documented as "everything except that
+ * directory". Every consumer downstream matches include patterns literally, so
+ * the `!` was read as the first character of a directory name: the pattern
+ * matched nothing, the include list was nonempty, and the analysed scope came
+ * out empty. Alongside a positive scope it was worse — the positive pattern
+ * matched, and the exclusion the caller wrote was simply not applied.
+ */
+describe("Workspace negated scope", () => {
+	const tree = {
+		"src/a.ts": "export const a = 1;",
+		"src/generated/b.ts": "export const b = 1;",
+		"other/c.ts": "export const c = 1;",
+	};
+
+	it("scans everything but the negated directory", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["!src/generated"],
+		});
+		expect(rels(ws)).toEqual(["other/c.ts", "src/a.ts"]);
+	});
+
+	// Beside a positive scope the negation looked like it worked: the scan globs
+	// go to ts-morph, which understands `!`. Everything downstream of the scan
+	// did not — a file the resolver pulled in was matched against the include
+	// list, where the positive pattern won and the exclusion was never read.
+	it("applies a negation alongside a positive scope", () => {
+		const root = scratch({
+			"src/a.ts": 'import { b } from "./generated/b";\nexport const a = b;',
+			"src/generated/b.ts": "export const b = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src", "!src/generated"],
+		});
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+
+		resolveRelativeModule(
+			ws.project,
+			ws.project.getSourceFileOrThrow("a.ts"),
+			"./generated/b",
+		);
+		expect(rels(ws), "an on-demand load is still out of scope").toEqual([
+			"src/a.ts",
+		]);
+	});
+
+	// A negated scope names nothing the analysis needs to find, so a directory
+	// that is not there is not a misconfiguration to report.
+	it("says nothing about a negated directory that is not there", () => {
+		const root = scratch(tree);
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src", "!src/nope"],
+		});
+		expect(ws.warnings.map((warning) => warning.code)).not.toContain(
+			"scope-dir-missing",
+		);
+		expect(rels(ws)).toEqual(["src/a.ts", "src/generated/b.ts"]);
 	});
 });
 

@@ -205,6 +205,28 @@ describe("resolveIdentifier", () => {
 		}
 	});
 
+	// `export { Card as default }` in a barrel names an *imported* binding, not a
+	// declaration in the barrel. Searching only the barrel left every default
+	// import of it unresolved, which stops a component walk at a boundary and
+	// turns a page-object control reference dynamic.
+	it("follows `export { X as default }` back through the barrel's import", () => {
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import Card from "./barrel";',
+				"src/barrel.ts":
+					'import { Card } from "./card";\nexport { Card as default };',
+				"src/card.tsx": "export function Card() { return null; }",
+			},
+			"src/a.ts",
+			"Card",
+		);
+		expect(result.resolved).toBe(true);
+		if (result.resolved) {
+			expect(result.name).toBe("Card");
+			expect(result.sourceFile.getBaseName()).toBe("card.tsx");
+		}
+	});
+
 	it("still rejects `export { default as Other }` as the default export", () => {
 		const result = resolveIn(
 			{

@@ -44,6 +44,7 @@ import {
 	toPosix,
 	toPosixRelative,
 } from "./util/paths";
+import { clearResolutionCaches } from "./util/resolve";
 import { registerWorkspaceRoot } from "./util/workspaceRoot";
 
 export const DEFAULT_TEST_ID_ATTRIBUTE = "data-testid";
@@ -206,17 +207,21 @@ export class Workspace {
 		this.inMemory = inMemory;
 		this.discovery = discovery;
 		this.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
-		// The resolver adds files straight to the `Project`; this is how they reach
-		// the same cap as everything else.
-		registerFileAdmission(project, (added) => {
-			this.admitResolvedFile(added);
-		});
-		// Same registry pattern: the resolver classifies files by real path, and it
-		// needs the analysed root to tell a linked workspace package apart from an
-		// installed dependency.
+		// The resolver classifies files by real path, and it needs the analysed
+		// root to tell a linked workspace package apart from an installed one.
 		registerWorkspaceRoot(project, this.root);
 		this.recordMtimes();
 		this.enforceMaxFiles();
+		// Last, and only once nothing above has thrown. The resolver adds files
+		// straight to the `Project`, and this is how they reach the same cap as
+		// everything else — but the gate chain is keyed by the `Project`, not by
+		// this workspace, so a gate registered before a failed construction would
+		// outlive its owner. The next caller to reuse that project, typically with
+		// the larger `maxFiles` the failure asked for, would then have every
+		// on-demand addition refused by a cap belonging to nobody.
+		registerFileAdmission(project, (added) => {
+			this.admitResolvedFile(added);
+		});
 	}
 
 	/** LRU of 2, keyed by root + tsconfig + include/exclude. */
@@ -612,6 +617,11 @@ export class Workspace {
 		this.epoch += 1;
 		this.fileList = null;
 		this.playwrightInfo = null;
+		// The resolver's probe caches are statements about files as they were:
+		// which package resolves to which entry, which link leads where, which
+		// `SourceFile` a specifier lands on. An epoch bump is the event that says
+		// they are no longer what they were.
+		clearResolutionCaches(this.project);
 	}
 
 	/**
@@ -760,6 +770,9 @@ export class Workspace {
 		}
 		const found = discoverPlaywrightConfigs(this.project, this.root);
 		if (
+			// Not just the list: whether the list is *complete* is part of what the
+			// tool metadata reports, and a change beyond the cap moves only that.
+			found.truncated === cached.truncated &&
 			found.candidates.length === cached.candidates.length &&
 			found.candidates.every(
 				(candidate, index) => candidate === cached.candidates[index],
@@ -958,10 +971,19 @@ function configDirOf(configFile: string | null): string | undefined {
  *
  * Silent when the config cannot be read: the constructor's `enforceMaxFiles()`
  * is still the authority, this only moves the rejection earlier for the common
- * case. It counts the analysed set rather than everything the cap counts, which
- * can only make it *less* eager to reject — the tsconfig's list says nothing
- * about what the resolver will pull in later, and a pre-check that over-counted
- * would refuse a repository the real count allows.
+ * case.
+ *
+ * It counts what the project is about to *parse*, which is what the cap
+ * counts — {@link countsAgainstCap}, not the analysed subset. Counting the
+ * analysed subset let an oversized tsconfig whose sources sit outside the
+ * analysed root through the pre-check entirely: every one of those files was
+ * read and parsed, and only then rejected, which is the whole cost this
+ * function exists to avoid.
+ *
+ * A narrowed scope is the one exception, and not a special case so much as the
+ * same rule: that project is built with `skipAddingFilesFromTsConfig`, so the
+ * tsconfig's file set is never parsed at all and only the part of it the scope
+ * selects can honestly be counted here.
  */
 function precheckMaxFiles(
 	root: string,
@@ -974,13 +996,17 @@ function precheckMaxFiles(
 	}
 	const include = options.include ?? [];
 	const exclude = options.exclude ?? [];
+	const narrowed = include.length > 0;
 	let count = 0;
 	for (const absolute of fileNames) {
-		if (
-			isAnalysable(absolute, toPosixRelative(root, absolute), include, exclude)
-		) {
-			count += 1;
+		const relative = toPosixRelative(root, absolute);
+		if (!countsAgainstCap(absolute, relative)) {
+			continue;
 		}
+		if (narrowed && !isAnalysable(absolute, relative, include, exclude)) {
+			continue;
+		}
+		count += 1;
 	}
 	const limit = options.maxFiles ?? DEFAULT_MAX_FILES;
 	if (count > limit) {
@@ -1086,6 +1112,15 @@ function normalizeScopePattern(
  * Normalizes the scoping options once, at the workspace boundary, so every
  * consumer (`addSourceFilesAtPaths`, `sourceFiles()`, `rescan()`) sees the
  * same globs — and reports back which of them name nothing on disk.
+ *
+ * A negated scope becomes an ordinary exclusion here, which is the only place
+ * it can. `--src-dir '!src/generated'` is documented as "scan everything except
+ * that directory", but every consumer downstream matches include patterns
+ * literally: the `!` was read as the first character of a directory name, so
+ * the pattern matched nothing, the include list was nonempty, and the analysed
+ * scope came out empty. Alongside a positive scope it was worse than useless —
+ * the positive pattern matched, and the exclusion the caller wrote was simply
+ * not applied.
  */
 function withNormalizedScope(options: WorkspaceOptions): {
 	options: WorkspaceOptions;
@@ -1096,25 +1131,31 @@ function withNormalizedScope(options: WorkspaceOptions): {
 	}
 	const root = normalizeRoot(options.projectRoot);
 	const missing: string[] = [];
-	const normalize = (patterns: string[] | undefined, collect: boolean) =>
-		patterns?.map((pattern) => {
+	const include: string[] = [];
+	const exclude: string[] = [];
+	const normalize = (
+		patterns: string[] | undefined,
+		collect: boolean,
+		positive: string[],
+	): void => {
+		for (const pattern of patterns ?? []) {
 			const result = normalizeScopePattern(root, pattern);
-			if (collect && result.missing !== undefined) {
-				missing.push(result.missing);
-			}
-			return result.pattern;
-		});
-	return {
-		options: {
-			...options,
-			include: normalize(options.include, true),
 			// An `exclude` naming a directory that is not there excludes exactly the
 			// nothing the caller wanted excluded. Only a missing *include* silently
 			// empties the analysed scope.
-			exclude: normalize(options.exclude, false),
-		},
-		missing,
+			if (collect && result.missing !== undefined) {
+				missing.push(result.missing);
+			}
+			if (result.pattern.startsWith("!")) {
+				exclude.push(result.pattern.slice(1));
+				continue;
+			}
+			positive.push(result.pattern);
+		}
 	};
+	normalize(options.include, true, include);
+	normalize(options.exclude, false, exclude);
+	return { options: { ...options, include, exclude }, missing };
 }
 
 function absoluteGlob(root: string, glob: string): string {
