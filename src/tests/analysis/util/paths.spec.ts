@@ -193,6 +193,20 @@ describe("matchesAnyGlob", () => {
 		["src/a.ts", "src/a.ts", true],
 		["src/a.ts", "srcXa.ts", false],
 
+		// An exact path that happens to contain glob magic still selects its own
+		// file: picomatch compares the pattern against an identical input before it
+		// compiles anything. ts-morph's adder globs through the same engine and was
+		// measured to agree, which is the only property that matters here — a
+		// literal only one of the two accepted would add files to the project that
+		// the scope predicate then dropped.
+		["src/[draft].ts", "src/[draft].ts", true],
+		["src/(a).ts", "src/(a).ts", true],
+		["src/{a,b}.ts", "src/{a,b}.ts", true],
+		["src/!(x).ts", "src/!(x).ts", true],
+		// It is a glob as well, though, and `--src-dir` documents globs: the
+		// character class still matches its one-character alternatives.
+		["src/[draft].ts", "src/d.ts", true],
+
 		// Paths are posix on every platform; a backslash is not a separator.
 		["src/*.ts", "src\\a.ts", false],
 	];

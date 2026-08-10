@@ -482,6 +482,77 @@ describe.skipIf(!LINKS_WORK)("linked package subpaths", () => {
 		}
 	});
 
+	/**
+	 * The two spellings a design system reaches for when it has nothing to say
+	 * about conditions at all.
+	 *
+	 * `resolve.exports` allows `default` in *every* call — `unsafe` only stops it
+	 * adding an implicit `import`/`require` and `node`/`browser` — so the
+	 * condition-less pass answers these, and the fan-out's job is to hold that
+	 * answer back until the conditional passes have had their turn rather than to
+	 * ask for it by name.
+	 */
+	it("resolves a subpath whose only target is the default", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				exports: {
+					"./Button": "./src/Button.tsx",
+					"./Card": { default: "./src/Card.tsx" },
+				},
+			}),
+			"packages/ui/src/Button.tsx": component("Button"),
+			"packages/ui/src/Card.tsx": component("Card"),
+			"apps/web/src/App.tsx": app(
+				'import { Button } from "@acme/ui/Button";',
+				'import { Card } from "@acme/ui/Card";',
+			),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		for (const name of ["Button", "Card"]) {
+			const { ws, resolution } = resolveFrom(root, name);
+			expect(resolution.resolved, name).toBe(true);
+			if (resolution.resolved) {
+				expect(ws.rel(resolution.sourceFile.getFilePath())).toBe(
+					`packages/ui/src/${name}.tsx`,
+				);
+			}
+		}
+	});
+
+	// And the ordering that holding it back buys: `default` names a build output
+	// this engine would happily read as source, so it has to stay behind the
+	// unbuilt file the `import` condition points at.
+	it("offers the import condition's source ahead of a default build output", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				exports: {
+					"./Button": {
+						import: "./src/Button.tsx",
+						default: "./lib/Button.js",
+					},
+				},
+			}),
+			"packages/ui/lib/Button.js":
+				"export function Button() { return null; }\n",
+			"packages/ui/src/Button.tsx": component("Button"),
+			"apps/web/src/App.tsx": app('import { Button } from "@acme/ui/Button";'),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const { ws, resolution } = resolveFrom(root, "Button");
+		expect(resolution.resolved).toBe(true);
+		if (resolution.resolved) {
+			expect(ws.rel(resolution.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/Button.tsx",
+			);
+		}
+	});
+
 	// A CommonJS-only package says `require`, and the condition set simply did
 	// not list it.
 	it("reads a `require` condition", () => {
