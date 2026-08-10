@@ -593,6 +593,54 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	// The breakdown existed only as prose, inside `fidelityReason` and the
+	// `tree-partial` warning. A caller that wants to branch on where the holes
+	// are had to parse an English sentence.
+	it("ships the unresolved breakdown as counts, agreeing with the prose", async () => {
+		await withProject(
+			"ppo-unresolved-stats-",
+			{
+				"src/Deep.tsx": [
+					"export function Shell() {",
+					'\treturn <div data-testid="ShellBox"><Middle /></div>;',
+					"}",
+					"",
+					"export function Middle() {",
+					'\treturn <section data-testid="MiddleBox" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const partial = await callTool(client, "get_testid_tree", {
+					component: "Shell",
+					followComponents: false,
+				});
+				const stats = (
+					partial.envelope.data as { stats: Record<string, unknown> }
+				).stats;
+				expect(stats.unresolved).toBe(1);
+				expect(stats.unresolvedByReason).toEqual({ "not-followed": 1 });
+				// One source of truth: the sentence is rendered from these counts.
+				expect(String(partial.envelope.meta?.fidelityReason)).toContain(
+					"not-followed ×1",
+				);
+
+				// A complete tree says so with a zero and no breakdown at all, rather
+				// than with an empty object nobody has to read.
+				const whole = await callTool(client, "get_testid_tree", {
+					component: "Shell",
+				});
+				const wholeStats = (
+					whole.envelope.data as { stats: Record<string, unknown> }
+				).stats;
+				expect(whole.envelope.meta?.fidelity).toBe("full");
+				expect(wholeStats.unresolved).toBe(0);
+				expect(wholeStats.unresolvedByReason).toBeUndefined();
+			},
+		);
+	}, 30_000);
+
 	// A typo'd `file` used to be discarded in silence: the entry matched nothing,
 	// the walk fell back to a flat inventory of the whole scan, and a real app
 	// answered `too_large` with advice to scope the call with `file` — which the
@@ -1469,6 +1517,91 @@ describe("MCP server over in-memory transport", () => {
 				});
 				expect(envelope.meta?.truncated).toBe(true);
 				expect(envelope.meta?.shown).toEqual({ matched: 1 });
+			},
+		);
+	}, 30_000);
+
+	// 981 unknownTestIds in the field, a `limit` of 200, and no way to reach the
+	// other 781: the bucket had no offset at all.
+	it("pages one coverage bucket to its end with offset", async () => {
+		const ids = [0, 1, 2, 3, 4, 5]
+			.map((index) => `\t\t\t<i data-testid="Id${index}" />`)
+			.join("\n");
+		await withProject(
+			"ppo-bucket-paging-",
+			{
+				"e2e/Home.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("Id0")',
+					"export class HomePage extends RootPageObject {",
+					'\t@Selector("Id0")',
+					"\taccessor First!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					"\treturn (",
+					"\t\t<div>",
+					ids,
+					"\t\t</div>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const page = async (offset: number) => {
+					const { envelope } = await callTool(client, "map_coverage", {
+						buckets: ["uncoveredTestIds"],
+						limit: 2,
+						offset,
+					});
+					return envelope;
+				};
+
+				const first = await page(0);
+				const data = first.data as {
+					summary: { uncoveredTestIds: number };
+					uncoveredTestIds: Array<{ id: string }>;
+				};
+				// The total ships whatever this page holds, so an agent knows how far
+				// it has to walk before it starts.
+				expect(data.summary.uncoveredTestIds).toBe(5);
+				expect(data.uncoveredTestIds).toHaveLength(2);
+				expect(first.meta?.shown).toEqual({ uncoveredTestIds: 2 });
+				expect(first.meta?.nextOffset).toEqual({ uncoveredTestIds: 2 });
+				expect(first.meta?.truncated).toBe(true);
+				expect(first.meta?.offset).toBeUndefined();
+
+				const second = await page(2);
+				expect(second.meta?.offset).toBe(2);
+				expect(second.meta?.nextOffset).toEqual({ uncoveredTestIds: 4 });
+
+				const last = await page(4);
+				const lastData = last.data as {
+					uncoveredTestIds: Array<{ id: string }>;
+				};
+				expect(lastData.uncoveredTestIds).toHaveLength(1);
+				// The final page must not invite another call.
+				expect(last.meta?.nextOffset).toBeUndefined();
+				expect(last.meta?.truncated).toBeUndefined();
+
+				// The point of the whole exercise: nothing is unreachable now.
+				const walked = [first, second, last].flatMap((envelope) =>
+					(
+						envelope.data as { uncoveredTestIds: Array<{ id: string }> }
+					).uncoveredTestIds.map((entry) => entry.id),
+				);
+				expect(walked.sort()).toEqual(["Id1", "Id2", "Id3", "Id4", "Id5"]);
+
+				const past = await page(99);
+				expect(
+					(past.data as { uncoveredTestIds: unknown[] }).uncoveredTestIds,
+				).toEqual([]);
+				expect(String(past.meta?.hint)).toContain("past the end");
 			},
 		);
 	}, 30_000);

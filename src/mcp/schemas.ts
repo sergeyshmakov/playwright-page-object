@@ -127,4 +127,12 @@ export const mapCoverageInput = z.object({
 			"Return only these lists. summary and scope always ship. Wins over includeUnused, which is then echoed in meta.ignored.",
 		),
 	limit: z.number().int().min(1).max(1000).default(200),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.default(0)
+		.describe(
+			'Index of the first entry to return, applied to every returned bucket. To page a long list, request it alone and walk it: buckets:["unknownTestIds"], then re-call with offset set to meta.nextOffset.unknownTestIds until that key stops coming back. Bucket totals are always in summary, whatever this call returns.',
+		),
 });

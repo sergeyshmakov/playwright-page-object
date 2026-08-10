@@ -17,6 +17,7 @@ import {
 	type PageObjectSummary,
 	type SelectorInfo,
 	type UiNode,
+	type UiUnresolvedReason,
 	type Workspace,
 } from "../analysis";
 import { ToolError } from "./errors";
@@ -669,12 +670,27 @@ function sameFile(rel: string, wanted: string): boolean {
 	return left === right || left.endsWith(`/${right}`);
 }
 
-/** Counts describing exactly the nodes shipped in `roots`. */
-function subtreeStats(roots: UiNode[]): Record<string, number> {
+/**
+ * Counts describing exactly the nodes shipped in `roots`.
+ *
+ * `unresolved` and `unresolvedByReason` repeat the engine's own tree counters
+ * deliberately rather than being copied from `tree.stats`: those are the two
+ * numbers a caller checks against the nodes actually in front of them, and a
+ * stat that describes a different set than the payload is worse than none.
+ * They agree with the engine here — the handler ships the engine's roots
+ * unchanged — and the walk was already visiting every node.
+ *
+ * Zero-count reasons are omitted, so the keys are exactly this tree's holes.
+ * `spread-props` is never one of them: it marks an unknown test-id *value* on a
+ * node whose children are all present, not a missing subtree.
+ */
+function subtreeStats(roots: UiNode[]): Record<string, unknown> {
 	let nodes = 0;
 	let testIds = 0;
 	let patterns = 0;
 	let dynamic = 0;
+	let unresolved = 0;
+	const byReason: Partial<Record<UiUnresolvedReason, number>> = {};
 	const visit = (node: UiNode): void => {
 		nodes += 1;
 		if (node.testId) {
@@ -685,6 +701,11 @@ function subtreeStats(roots: UiNode[]): Record<string, number> {
 				dynamic += 1;
 			}
 		}
+		const reason = node.unresolved?.reason;
+		if (reason && reason !== "spread-props") {
+			unresolved += 1;
+			byReason[reason] = (byReason[reason] ?? 0) + 1;
+		}
 		for (const child of node.children) {
 			visit(child);
 		}
@@ -692,7 +713,16 @@ function subtreeStats(roots: UiNode[]): Record<string, number> {
 	for (const root of roots) {
 		visit(root);
 	}
-	return { nodes, testIds, patterns, dynamic };
+	return {
+		nodes,
+		testIds,
+		patterns,
+		dynamic,
+		unresolved,
+		// An empty object would be noise on a complete tree; its absence and
+		// `unresolved: 0` say the same thing once.
+		...(unresolved > 0 ? { unresolvedByReason: byReason } : {}),
+	};
 }
 
 interface TreeGap {
@@ -908,17 +938,39 @@ export function handleMapCoverage(
 		summary: report.summary,
 		scope: report.scope,
 	};
+	// One `offset` across every returned bucket, rather than one per bucket: the
+	// way an agent actually pages is to ask for a single bucket and walk it
+	// (`buckets:["unknownTestIds"]`), and a map of offsets keyed by bucket is a
+	// second thing to get wrong for a case nobody drives. The totals are in
+	// `summary` for all six buckets whatever this call returned, so `meta` only
+	// has to say what is missing from *here*: how many came back, and where the
+	// next page starts.
+	const offset = args.offset;
 	const shown: Record<string, number> = {};
+	const nextOffset: Record<string, number> = {};
 	let truncated = false;
+	let requested = 0;
+	let returned = 0;
+	let largest = 0;
 	for (const bucket of BUCKET_ORDER) {
 		if (!buckets.has(bucket)) {
 			continue;
 		}
 		const list: unknown[] = report[bucket];
-		data[bucket] = list.slice(0, args.limit);
-		if (list.length > args.limit) {
+		const page = list.slice(offset, offset + args.limit);
+		data[bucket] = page;
+		requested += 1;
+		returned += page.length;
+		largest = Math.max(largest, list.length);
+		const end = offset + page.length;
+		if (end < list.length) {
 			truncated = true;
-			shown[bucket] = args.limit;
+			nextOffset[bucket] = end;
+		}
+		// Only when the page is not the whole bucket: on a complete list the count
+		// is the array's own length and saying it again is noise.
+		if (page.length !== list.length) {
+			shown[bucket] = page.length;
 		}
 	}
 
@@ -934,17 +986,43 @@ export function handleMapCoverage(
 			note,
 			assumeForwarded: options.assumeForwarded === true ? true : undefined,
 			ignored,
+			offset: offset > 0 ? offset : undefined,
 			shown: Object.keys(shown).length > 0 ? shown : undefined,
+			nextOffset: Object.keys(nextOffset).length > 0 ? nextOffset : undefined,
 			warnings: report.warnings,
 			truncated,
 			// A coverage score computed against the wrong attribute used to read as
 			// a healthy `1` (zero of zero ids covered) — the one number in this
 			// payload nobody double-checks. It gets the loudest treatment.
-			hint: environmentHint(report.warnings),
+			hint: withEnvironmentHint(
+				report.warnings,
+				pagingHint(offset, requested, returned, largest),
+			),
 		},
 		{
 			shrinkHint:
 				"Re-call with a lower `limit`, fewer `buckets`, or includeUnused:false.",
 		},
 	);
+}
+
+/**
+ * What to say about an empty page.
+ *
+ * An offset past the end returns `[]` for every bucket, which reads exactly
+ * like "there is nothing here" — the same confusion `list_page_objects` had,
+ * and the reason it reports the end of its list rather than an empty one.
+ */
+function pagingHint(
+	offset: number,
+	requested: number,
+	returned: number,
+	largest: number,
+): string | undefined {
+	if (offset === 0 || requested === 0 || returned > 0) {
+		return undefined;
+	}
+	return largest === 0
+		? `Every requested bucket is empty, so offset ${offset} returned nothing; the buckets themselves hold no entries.`
+		: `offset ${offset} is past the end of every requested bucket (the largest holds ${largest}); re-call with a smaller offset.`;
 }
