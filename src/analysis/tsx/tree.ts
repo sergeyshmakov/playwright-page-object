@@ -1043,11 +1043,21 @@ class TreeBuilder {
 			return this.walk(returns[0], definition, depth, nextPath, state);
 		}
 		// Several `return` statements: each is a mutually exclusive branch.
-		return returns.map((expression) => {
+		//
+		// The wrapper is a node in the payload like every other one, so it is
+		// charged before it is built. Mapping the returns straight into the result
+		// spent nothing at all, and a component with nine branches shipped nine
+		// nodes through a `maxNodes: 3` walk — the same overshoot the
+		// `node-budget-reached` marker had, one node shape further out.
+		const branches: UiNode[] = [];
+		for (const expression of returns) {
+			if (!this.spendNode()) {
+				break;
+			}
 			const position = definition.sourceFile.getLineAndColumnAtPos(
 				expression.getStart(),
 			);
-			return {
+			branches.push({
 				tag: "#branch",
 				nodeType: "branch" as const,
 				file: definition.file,
@@ -1062,8 +1072,9 @@ class TreeBuilder {
 					...state,
 					conditional: true,
 				}),
-			};
-		});
+			});
+		}
+		return branches;
 	}
 
 	private walk(

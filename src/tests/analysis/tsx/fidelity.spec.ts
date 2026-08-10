@@ -190,6 +190,33 @@ describe("tree fidelity", () => {
 		expect(tree.stats.unresolvedByReason["node-budget-reached"]).toBe(1);
 	});
 
+	// The same rule, one node shape further out. A component with several
+	// `return` statements is wrapped one `#branch` node per branch, and those
+	// were built straight into the returned array without asking the budget: a
+	// `maxNodes: 3` walk over nine branches shipped nine wrappers.
+	it("charges the branch wrappers of a multi-return component", () => {
+		const branches = Array.from(
+			{ length: 8 },
+			(_unused, index) =>
+				`  if (step === ${index}) return <div data-testid="S${index}" />;`,
+		).join("\n");
+		const { tree, nodes } = treeFor(
+			{
+				"src/App.tsx": [
+					"export default function App({ step }: { step: number }) {",
+					branches,
+					'  return <div data-testid="Last" />;',
+					"}",
+				].join("\n"),
+			},
+			{ maxNodes: 3 },
+		);
+
+		expect(nodes.length).toBeLessThanOrEqual(3);
+		expect(tree.stats.nodes).toBe(nodes.length);
+		expect(tree.truncated).toBe(true);
+	});
+
 	it("counts stats over exactly the nodes it emitted", () => {
 		const { tree, nodes } = treeFor({
 			"src/App.tsx": [
