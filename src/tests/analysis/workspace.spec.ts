@@ -354,6 +354,46 @@ describe("Workspace config discovery caching", () => {
 	});
 
 	/**
+	 * The server's instructions promise that a Playwright config edit is visible
+	 * to the next call, and a narrowed `--src-dir` is exactly where that promise
+	 * looks doubtful: the config is not in the analysed scope, so nothing the
+	 * scope predicate does can see it change.
+	 *
+	 * It holds because the mtime sweep walks the *project*, not the scope, and
+	 * reading a config adds it to the project. Locked here so a future sweep that
+	 * filters by scope — an obvious-looking optimisation — cannot silently start
+	 * serving a stale attribute for the lifetime of a session.
+	 */
+	it("sees an edit to a config outside a narrowed scope", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"playwright.config.ts":
+				'export default { use: { testIdAttribute: "data-first" } };',
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src"],
+			staleAfterMs: 0,
+		});
+		expect(ws.testIdAttribute().attribute).toBe("data-first");
+		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
+			"src/a.ts",
+		]);
+
+		write(
+			root,
+			"playwright.config.ts",
+			'export default { use: { testIdAttribute: "data-second" } };',
+		);
+		ws.revalidate();
+
+		expect(ws.testIdAttribute()).toEqual({
+			attribute: "data-second",
+			source: "playwright-config",
+		});
+	});
+
+	/**
 	 * The config usually lives outside the analysed scope — always, for a
 	 * tsconfig-backed or `--src-dir`-narrowed workspace. Such a file can never
 	 * appear in the rescan's `added` list, so hanging invalidation off that list

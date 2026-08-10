@@ -605,6 +605,37 @@ describe("buildCoverageReport — assuming forwarding", () => {
 		expect(warning?.severity).toBe("warning");
 	});
 
+	/**
+	 * A promoted id belongs to exactly one bucket.
+	 *
+	 * `UnknownTestId` means "coverage could not treat this as rendered", and the
+	 * whole point of the flag is that it now can. Leaving the occurrence under
+	 * `forwarding-unproven` as well would contradict that contract and count the
+	 * id twice in `summary.uiTestIds`, which is `matchable + unknown`.
+	 */
+	it("keeps a promoted prop id out of the unknown bucket", () => {
+		const result = buildCoverageReport(makeWorkspace(FILES), {
+			assumeForwarded: true,
+		});
+		expect(
+			result.unknownTestIds.filter(
+				(entry) => entry.reason === "forwarding-unproven",
+			),
+		).toEqual([]);
+		expect(result.summary.unknownTestIds).toBe(result.unknownTestIds.length);
+		expect(result.summary.uiTestIds).toBe(
+			result.summary.matchableUiTestIds + result.summary.unknownTestIds,
+		);
+	});
+
+	it("does report it as unproven when the flag is off", () => {
+		const result = buildCoverageReport(makeWorkspace(FILES));
+		expect(result.unknownTestIds.map((entry) => entry.reason)).toContain(
+			"forwarding-unproven",
+		);
+		expect(result.summary.matchableUiTestIds).toBe(0);
+	});
+
 	it("says nothing about assuming anything when the flag is off", () => {
 		const result = buildCoverageReport(makeWorkspace(FILES));
 		expect(result.summary.assumedForwardedTestIds).toBeUndefined();
