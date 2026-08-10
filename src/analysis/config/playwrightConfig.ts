@@ -52,7 +52,6 @@ const MAX_CONFIG_PROBES = 3;
  * without evaluating anything.
  */
 interface ConfigLayer {
-	object: ObjectLiteralExpression;
 	/**
 	 * The own property assignments this layer contributes, in source order.
 	 *
@@ -66,6 +65,25 @@ interface ConfigLayer {
 	sourceFile: SourceFile;
 	origin: "primary" | "merge-arg" | "spread" | "imported-base";
 	depth: 0 | 1;
+	/**
+	 * Whether this layer *replaces* the object-valued properties of the layers
+	 * below it, rather than merging key by key into them.
+	 *
+	 * Scalars do not care — the highest layer that writes `testDir` wins either
+	 * way — but `use` does. `{ ...base, use: { baseURL } }` is a plain spread, so
+	 * the literal's own `use` replaces the base's wholesale and
+	 * `base.use.testIdAttribute` never runs. `defineConfig(base, { use: {…} })`
+	 * is the opposite: Playwright merges the two with `{...result.use,
+	 * ...config.use}`, so the base's key survives unless the argument names it.
+	 * Reading both as a deep merge reported an attribute the suite does not use.
+	 */
+	useShallow: boolean;
+	/**
+	 * A spread the reader could not follow sits *above* this layer's properties
+	 * in the literal that produced it, so anything read here may be overridden by
+	 * something the analysis cannot see.
+	 */
+	occluded?: true;
 }
 
 interface LayerContext {
@@ -85,6 +103,10 @@ interface LayerRequest {
 	origin: ConfigLayer["origin"];
 	/** Suppresses `config-merge-unresolved`; spreads report through their own note. */
 	quiet: boolean;
+	/** Seeds {@link ConfigLayer.useShallow} for the first layer this produces. */
+	useShallow: boolean;
+	/** Seeds {@link ConfigLayer.occluded} for every layer this produces. */
+	occluded: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -97,12 +119,6 @@ function getProperty(
 ): PropertyAssignment | undefined {
 	const property = object.getProperty(name);
 	return property && Node.isPropertyAssignment(property) ? property : undefined;
-}
-
-function hasSpread(object: ObjectLiteralExpression): boolean {
-	return object
-		.getProperties()
-		.some((property) => Node.isSpreadAssignment(property));
 }
 
 function stringLiteralValue(node: Node | undefined): string | undefined {
@@ -249,30 +265,38 @@ function layersFromExpression(
 
 	if (Node.isCallExpression(node)) {
 		const args = node.getArguments();
-		if (isDefineConfigCall(node)) {
-			const [first] = args;
-			if (!first) {
-				if (!request.quiet) {
-					mergeUnresolved(ctx, node);
-				}
-				return [];
-			}
-			return layersFromExpression({ ...request, expression: first }, ctx);
-		}
-		// An unknown call is assumed to be a merge helper — `merge(base, over)`,
-		// `defu(over, base)` cannot be told apart statically, so the arguments are
-		// read left to right as lowest to highest. Guessing wrong swaps two layers
-		// that usually agree; guessing nothing loses the config entirely.
 		if (args.length === 0) {
 			if (!request.quiet) {
 				mergeUnresolved(ctx, node);
 			}
 			return [];
 		}
+		// `defineConfig(config)` is the shape almost every repository writes, and
+		// one argument is the config itself: no merge, no layer boundary.
+		if (args.length === 1 && isDefineConfigCall(node)) {
+			return layersFromExpression({ ...request, expression: args[0] }, ctx);
+		}
+		// Every other call is read as a merge, arguments left to right as lowest to
+		// highest. That is literally what Playwright's own `defineConfig(base,
+		// overrides)` does (`{...result, ...config, use: {...result.use,
+		// ...config.use}}` in `playwright/lib/common/index.js`), and `merge(base,
+		// over)` / `defu(over, base)` cannot be told apart statically anyway.
+		// Reading only the first argument dropped every override a repository
+		// wrote in the second one.
 		const origin: ConfigLayer["origin"] =
 			request.origin === "primary" ? "merge-arg" : request.origin;
-		return args.flatMap((argument) =>
-			layersFromExpression({ ...request, expression: argument, origin }, ctx),
+		return args.flatMap((argument, index) =>
+			layersFromExpression(
+				{
+					...request,
+					expression: argument,
+					origin,
+					// A merged argument overrides `use` one key at a time; only a
+					// spread replaces the whole object.
+					useShallow: index === 0 ? request.useShallow : false,
+				},
+				ctx,
+			),
 		);
 	}
 
@@ -311,9 +335,15 @@ function objectLayers(
 ): ConfigLayer[] {
 	const layers: ConfigLayer[] = [];
 	let own: PropertyAssignment[] = [];
+	let groups = 0;
+	// Only the first group a literal produces inherits how the literal itself
+	// merges into what is below it. Everything after that is composed *by* a
+	// spread, which replaces object-valued keys wholesale.
+	const nextShallow = (): boolean => (groups === 0 ? request.useShallow : true);
 	const flush = (): void => {
 		if (own.length > 0) {
-			layers.push(layerOf(object, own, request));
+			layers.push(layerOf(own, request, nextShallow()));
+			groups += 1;
 			own = [];
 		}
 	};
@@ -325,6 +355,7 @@ function objectLayers(
 		if (!Node.isSpreadAssignment(property)) {
 			continue;
 		}
+		flush();
 		const resolved = layersFromExpression(
 			{
 				expression: property.getExpression(),
@@ -332,36 +363,45 @@ function objectLayers(
 				depth: request.depth,
 				origin: "spread",
 				quiet: true,
+				useShallow: nextShallow(),
+				occluded: request.occluded,
 			},
 			ctx,
 		);
 		if (resolved.length === 0) {
-			// Nothing to order this layer against, so the properties around the hole
-			// stay in one layer; `unfollowableSpread` is what reports the gap.
 			ctx.unfollowableSpread = true;
+			// The properties written *before* an unfollowable spread may be
+			// overridden by it, and nothing here can say whether they are. They stay
+			// in the stack — the value is still the best guess — but they are marked,
+			// so a read that lands on one answers "unresolved" instead of answering
+			// confidently with a value JavaScript may well discard.
+			for (const layer of layers) {
+				layer.occluded = true;
+			}
 			continue;
 		}
-		flush();
 		layers.push(...resolved);
+		groups += 1;
 	}
 	flush();
 	if (layers.length === 0) {
-		layers.push(layerOf(object, [], request));
+		layers.push(layerOf([], request, request.useShallow));
 	}
 	return layers;
 }
 
 function layerOf(
-	object: ObjectLiteralExpression,
 	properties: PropertyAssignment[],
 	request: LayerRequest,
+	useShallow: boolean,
 ): ConfigLayer {
 	return {
-		object,
 		properties,
 		sourceFile: request.sourceFile,
 		origin: request.origin,
 		depth: request.depth,
+		useShallow,
+		...(request.occluded ? { occluded: true as const } : {}),
 	};
 }
 
@@ -417,6 +457,8 @@ function importedLayers(
 			depth: 1,
 			origin: "imported-base",
 			quiet: request.quiet,
+			useShallow: request.useShallow,
+			occluded: request.occluded,
 		},
 		ctx,
 	);
@@ -438,6 +480,8 @@ function layersOf(sourceFile: SourceFile, ctx: LayerContext): ConfigLayer[] {
 				depth: 0,
 				origin: "primary",
 				quiet: false,
+				useShallow: false,
+				occluded: false,
 			},
 			ctx,
 		);
@@ -454,7 +498,13 @@ function layersOf(sourceFile: SourceFile, ctx: LayerContext): ConfigLayer[] {
 
 type ScalarRead =
 	| { state: "found"; value: string; layer: ConfigLayer; node: Node }
-	| { state: "unresolved"; layer: ConfigLayer; node: Node }
+	| {
+			state: "unresolved";
+			layer: ConfigLayer;
+			node: Node;
+			/** `"occluded"`: a literal value that an unfollowable spread may replace. */
+			reason?: "occluded";
+	  }
 	| { state: "absent" };
 
 /**
@@ -478,10 +528,21 @@ function readLayered(
 		}
 		const initializer = property.getInitializer();
 		const value = stringLiteralValue(initializer);
-		if (value !== undefined) {
-			return { state: "found", value, layer, node: initializer ?? property };
+		if (value === undefined) {
+			return { state: "unresolved", layer, node: initializer ?? property };
 		}
-		return { state: "unresolved", layer, node: initializer ?? property };
+		if (layer.occluded) {
+			// A literal, read, and still not an answer: an unfollowable spread is
+			// written above it, and in JavaScript that spread wins. Reporting the
+			// value would be a coin flip presented as a fact.
+			return {
+				state: "unresolved",
+				layer,
+				node: initializer ?? property,
+				reason: "occluded",
+			};
+		}
+		return { state: "found", value, layer, node: initializer ?? property };
 	}
 	return { state: "absent" };
 }
@@ -507,18 +568,70 @@ function layerProperty(
 	return undefined;
 }
 
-function useObject(layer: ConfigLayer): ObjectLiteralExpression | undefined {
-	const initializer = layerProperty(layer, "use")?.getInitializer();
-	return initializer && Node.isObjectLiteralExpression(initializer)
-		? initializer
-		: undefined;
-}
-
-function pickTestIdAttribute(
-	layer: ConfigLayer,
-): PropertyAssignment | undefined {
-	const use = useObject(layer);
-	return use ? getProperty(use, "testIdAttribute") : undefined;
+/**
+ * Reads `use.testIdAttribute` across the stack, layering the nested object too.
+ *
+ * `use` is a config object in its own right: it can spread another one, be an
+ * imported constant, or be assembled by a helper. Looking the key up directly on
+ * the literal reported `"data-leaf"` for
+ * `use: { testIdAttribute: "data-leaf", ...baseUse }`, where JavaScript gives
+ * the trailing spread the last word — so the nested object goes through the same
+ * {@link objectLayers} splitting the top level does, and the same
+ * highest-layer-wins walk reads it.
+ *
+ * The other half is what an *absent* key means. A `use` reached through a spread
+ * replaces the `use` of everything below it, key or no key, so the walk stops
+ * there; one reached as a merge argument only overrides the keys it names, so
+ * the walk continues. {@link ConfigLayer.useShallow} is which of the two applies.
+ */
+function readTestIdAttribute(
+	layers: ConfigLayer[],
+	ctx: LayerContext,
+): ScalarRead {
+	for (let index = layers.length - 1; index >= 0; index -= 1) {
+		const layer = layers[index];
+		const property = layerProperty(layer, "use");
+		if (!property) {
+			continue;
+		}
+		const initializer = property.getInitializer();
+		const nested = initializer
+			? layersFromExpression(
+					{
+						expression: initializer,
+						sourceFile: layer.sourceFile,
+						depth: layer.depth,
+						origin: layer.origin,
+						// The gap inside `use` is reported by the attribute's own notes,
+						// not as one more unreadable merge argument.
+						quiet: true,
+						useShallow: false,
+						occluded: layer.occluded === true,
+					},
+					ctx,
+				)
+			: [];
+		if (nested.length === 0) {
+			// `use` is written as something that cannot be opened — a call, an
+			// element access. That says the config sets `use`; it does not say what
+			// is in it, and the layers below it are no longer the answer either.
+			return { state: "unresolved", layer, node: initializer ?? property };
+		}
+		const read = readLayered(nested, (candidate) =>
+			layerProperty(candidate, "testIdAttribute"),
+		);
+		if (read.state !== "absent") {
+			return read;
+		}
+		// This layer writes `use` without the key. Skip everything its own object
+		// replaces; resume at the first layer it merely merges into.
+		let below = index;
+		while (below > 0 && layers[below].useShallow) {
+			below -= 1;
+		}
+		index = below;
+	}
+	return { state: "absent" };
 }
 
 function originOf(layer: ConfigLayer): TestIdAttributeOrigin {
@@ -733,7 +846,9 @@ function readChosenConfig(
 		notes.push(
 			warn(
 				"testdir-unresolved",
-				"`testDir` is not a string literal and cannot be resolved without executing the config; tsconfig discovery falls back to the project root.",
+				testDirRead.reason === "occluded"
+					? "`testDir` is written above a spread the analysis could not follow, which would override it; tsconfig discovery falls back to the project root."
+					: "`testDir` is not a string literal and cannot be resolved without executing the config; tsconfig discovery falls back to the project root.",
 				workspace.loc(testDirRead.node),
 			),
 		);
@@ -741,7 +856,7 @@ function readChosenConfig(
 
 	/* ---- use.testIdAttribute -------------------------------------------- */
 
-	const attributeRead = readLayered(layers, pickTestIdAttribute);
+	const attributeRead = readTestIdAttribute(layers, ctx);
 	let testIdAttribute: string | undefined;
 	let testIdAttributeFrom: TestIdAttributeOrigin | undefined;
 	let attributeUnresolved = false;
@@ -767,17 +882,13 @@ function readChosenConfig(
 		notes.push(
 			warn(
 				"testid-attribute-unresolved",
-				"`use.testIdAttribute` is not a string literal and cannot be resolved without executing the config.",
+				attributeRead.reason === "occluded"
+					? "`use.testIdAttribute` is written above a spread the analysis could not follow; JavaScript would let that spread override it, so the value it names is not reported. Set the attribute explicitly with --attribute if it is the one your tests run with."
+					: "`use.testIdAttribute` is not a string literal and cannot be resolved without executing the config.",
 				workspace.loc(attributeRead.node),
 			),
 		);
-	} else if (
-		ctx.unfollowableSpread ||
-		layers.some((layer) => {
-			const use = useObject(layer);
-			return use ? hasSpread(use) : false;
-		})
-	) {
+	} else if (ctx.unfollowableSpread) {
 		notes.push(
 			info(
 				"testid-attribute-maybe-spread",
@@ -904,7 +1015,7 @@ function probeSiblings(
 			unfollowableSpread: false,
 			steps: MAX_LAYER_STEPS,
 		};
-		const read = readLayered(layersOf(sourceFile, ctx), pickTestIdAttribute);
+		const read = readTestIdAttribute(layersOf(sourceFile, ctx), ctx);
 		if (read.state !== "found") {
 			continue;
 		}

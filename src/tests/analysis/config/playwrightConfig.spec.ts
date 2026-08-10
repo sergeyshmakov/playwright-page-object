@@ -674,6 +674,107 @@ describe("spread position", () => {
 });
 
 /**
+ * `defineConfig(base, overrides)` is a supported Playwright form: its own
+ * implementation folds the arguments left to right, deep-merging `use`. Reading
+ * only the first argument silently dropped every override written in the second.
+ */
+describe("defineConfig with several arguments", () => {
+	it("lets a later argument override an earlier one", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts": [
+				'import { defineConfig } from "@playwright/test";',
+				"const base = {",
+				'  testDir: "./base-specs",',
+				'  use: { testIdAttribute: "data-base" },',
+				"};",
+				"export default defineConfig(base, {",
+				'  testDir: "./leaf-specs",',
+				'  use: { testIdAttribute: "data-leaf" },',
+				"});",
+			].join("\n"),
+		});
+		const info = readPlaywrightConfig(ws);
+		expect(info.testDir).toBe("leaf-specs");
+		expect(info.testIdAttribute).toBe("data-leaf");
+	});
+
+	// Playwright merges the arguments' `use` objects key by key
+	// (`{...result.use, ...config.use}`), so a second argument that writes other
+	// `use` keys leaves the first argument's attribute in place.
+	it("deep-merges `use` across arguments the way Playwright does", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts": [
+				'import { defineConfig } from "@playwright/test";',
+				'const base = { use: { testIdAttribute: "data-base" } };',
+				'export default defineConfig(base, { use: { baseURL: "http://x" } });',
+			].join("\n"),
+		});
+		expect(readPlaywrightConfig(ws).testIdAttribute).toBe("data-base");
+	});
+});
+
+/**
+ * The nested `use` object is a config object too.
+ *
+ * It can spread another one, and JavaScript resolves that spread exactly where
+ * it is written — so the same layer splitting the top-level literal gets is the
+ * only way to read it. A direct property lookup answered `"data-leaf"` for
+ * `use: { testIdAttribute: "data-leaf", ...baseUse }`, confidently, and wrongly.
+ */
+describe("spreads inside the use object", () => {
+	it("gives a trailing spread inside `use` the last word", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts": [
+				'const baseUse = { testIdAttribute: "data-shared" };',
+				'export default { use: { testIdAttribute: "data-leaf", ...baseUse } };',
+			].join("\n"),
+		});
+		expect(readPlaywrightConfig(ws).testIdAttribute).toBe("data-shared");
+	});
+
+	it("still lets the literal win when the spread comes first", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts": [
+				'const baseUse = { testIdAttribute: "data-shared" };',
+				'export default { use: { ...baseUse, testIdAttribute: "data-leaf" } };',
+			].join("\n"),
+		});
+		expect(readPlaywrightConfig(ws).testIdAttribute).toBe("data-leaf");
+	});
+
+	it("refuses to answer when a spread above the key cannot be followed", () => {
+		const ws = workspaceWithConfig({
+			"playwright.config.ts": [
+				'import { defineConfig, devices } from "@playwright/test";',
+				"export default defineConfig({",
+				'  use: { testIdAttribute: "data-leaf", ...devices["Desktop Chrome"] },',
+				"});",
+			].join("\n"),
+		});
+		const info = readPlaywrightConfig(ws);
+		expect(info.testIdAttribute).toBeUndefined();
+		const note = info.notes.find(
+			(diagnostic) => diagnostic.code === "testid-attribute-unresolved",
+		);
+		expect(note?.message).toContain("could not follow");
+	});
+
+	// A plain spread copies keys one level deep, so a `use` written next to it
+	// replaces the spread's `use` entirely rather than merging into it.
+	it("lets an own `use` replace the one a spread contributed", () => {
+		const ws = workspaceWithConfig({
+			"playwright/base.ts":
+				'export default { use: { testIdAttribute: "data-base" } };',
+			"playwright.config.ts": [
+				'import base from "./playwright/base";',
+				'export default { ...base, use: { baseURL: "http://x" } };',
+			].join("\n"),
+		});
+		expect(readPlaywrightConfig(ws).testIdAttribute).toBeUndefined();
+	});
+});
+
+/**
  * Sibling configs: reported, never applied.
  *
  * Discovery ranks every `playwright*.config.*` in the repository, and two of
