@@ -498,7 +498,8 @@ interface TreeShape {
 	nodes: number;
 	slots: number;
 	unresolved: number;
-	unresolvedByReason: Record<string, number>;
+	/** Keyed by reason, zero entries absent — the wire shape, built directly. */
+	unresolvedByReason: Partial<Record<UiUnresolvedReason, number>>;
 }
 
 /**

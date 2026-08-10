@@ -132,7 +132,18 @@ export type DynamicReason =
 	 * The selector's literal appears inside a test id the source builds at
 	 * runtime, so the element probably exists but the value cannot be read.
 	 */
-	| "dynamic-testid-expression";
+	| "dynamic-testid-expression"
+	/**
+	 * This run had no rendered and no prop-written test id to compare against,
+	 * so no selector could be judged either way.
+	 *
+	 * "Dead" is a claim about a set of ids the application renders; with an empty
+	 * set the claim is vacuous, and a report that called 1454 working selectors
+	 * dead because the attribute was misread is the most alarming thing this tool
+	 * can print. The remedy is in the `no-matchable-testids` warning: fix the
+	 * attribute or the scope and run again.
+	 */
+	| "no-ui-evidence";
 
 export interface DynamicValue {
 	kind: "dynamic";
@@ -572,10 +583,22 @@ export interface TestIdTree {
 		externalComponentTags: number;
 		/** Nodes emitted into `roots`. */
 		nodes: number;
-		/** Nodes with a structural `unresolved` reason (`spread-props` excluded). */
+		/**
+		 * Nodes in `roots` carrying a structural `unresolved` reason — a subtree
+		 * the walk could not produce. `spread-props` is excluded: it marks an
+		 * unknown *value* on a node whose children are all present.
+		 */
 		unresolved: number;
-		/** Breakdown of `unresolved` by reason code. */
-		unresolvedByReason: Record<string, number>;
+		/**
+		 * `unresolved` broken down by reason, counted over the same emitted nodes.
+		 * Reasons that did not occur are omitted rather than reported as `0`, so
+		 * the keys are exactly the holes this tree has.
+		 *
+		 * This is the machine-readable form of what `fidelityReason` says in
+		 * prose; the prose is rendered from these counts, so the two cannot
+		 * disagree.
+		 */
+		unresolvedByReason: Partial<Record<UiUnresolvedReason, number>>;
 		/** Nodes carrying `placement` — content whose DOM position is unproven. */
 		slots: number;
 	};
