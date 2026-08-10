@@ -241,12 +241,28 @@ function placementLabel(placement: NonNullable<UiNode["placement"]>): string {
 	return placement.kind === "slot" ? "slot" : `prop ${placement.name}`;
 }
 
+/** How one test-id value reads in an outline: a pattern as its prefix + `*`. */
+function idLabel(value: UiNode["testId"]): string {
+	if (!value) {
+		return "-";
+	}
+	return value.kind === "pattern"
+		? `${value.prefix ?? ""}*`
+		: (value.value ?? value.raw);
+}
+
 function renderUiNode(node: UiNode, indent: string, lines: string[]): void {
 	const flags: string[] = [];
 	if (node.testId?.kind === "pattern") {
 		flags.push(`dynamic ${node.testId.raw}`);
 	} else if (node.testId?.kind === "dynamic") {
 		flags.push(`dynamic ${node.testId.raw}`);
+	}
+	// Every branch of a static choice, because the outline is the format an agent
+	// actually reads: printing only the first one says `data-testid={big ? "Main"
+	// : "Alt"}` renders `Main`, and a selector for `Alt` then looks invented.
+	if (node.testIdAlternatives && node.testIdAlternatives.length > 0) {
+		flags.push(`or ${node.testIdAlternatives.map(idLabel).join(", ")}`);
 	}
 	if (node.placement) {
 		flags.push(placementLabel(node.placement));
@@ -273,10 +289,7 @@ function renderUiNode(node: UiNode, indent: string, lines: string[]): void {
 		flags.push(`see ${node.expandedAt.file}:${node.expandedAt.line}`);
 	}
 
-	const id =
-		node.testId?.kind === "pattern"
-			? `${node.testId.prefix ?? ""}*`
-			: (node.testId?.value ?? (node.testId ? node.testId.raw : "-"));
+	const id = idLabel(node.testId);
 	const location = `${node.file}:${node.loc.line}`;
 	const flagText = flags.length > 0 ? ` (${flags.join(", ")})` : "";
 	lines.push(`${indent}${id}  ${node.tag}  ${location}${flagText}`);

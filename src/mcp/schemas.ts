@@ -124,7 +124,7 @@ export const mapCoverageInput = z.object({
 		.array(z.enum(COVERAGE_BUCKETS))
 		.optional()
 		.describe(
-			"Return only these lists. summary and scope always ship. Wins over includeUnused, which is then echoed in meta.ignored.",
+			"Return only these lists. summary and scope always ship, so [] returns just those two. Wins over includeUnused, which is then echoed in meta.ignored.",
 		),
 	limit: z.number().int().min(1).max(1000).default(200),
 	offset: z

@@ -60,7 +60,9 @@ export {
 } from "./tsx/attributeCensus";
 export {
 	buildTestIdTree,
+	type EntryPathMatch,
 	entryFileCandidates,
+	matchEntryPath,
 	type TestIdTreeOptions,
 } from "./tsx/tree";
 export type * from "./types";

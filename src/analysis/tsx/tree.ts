@@ -16,7 +16,7 @@ import type {
 	UiUnresolvedReason,
 } from "../types";
 import { Budget } from "../util/budget";
-import { keyFold, matchesAnyGlob, toPosix } from "../util/paths";
+import { keyFold, matchesAnyGlob, normalizeRelPath } from "../util/paths";
 import { resolveExportedName } from "../util/resolve";
 import { isWorkspaceLocal } from "../util/workspaceRoot";
 import { isJsxFile, type Workspace } from "../workspace";
@@ -250,8 +250,14 @@ export function entryFileCandidates(
 	return selectFiles(ws, options).map((file) => ws.rel(file.getFilePath()));
 }
 
+/** What {@link matchEntryPath} made of an `entry` against the scanned files. */
+export type EntryPathMatch =
+	| { kind: "exact" | "suffix"; file: string }
+	| { kind: "ambiguous"; candidates: string[] }
+	| { kind: "none" };
+
 /**
- * The scanned file an `entry` names.
+ * The scanned path an `entry` names, out of {@link entryFileCandidates}.
  *
  * Exactness wins, always. A suffix is a convenience for `Nested.tsx` standing in
  * for `src/deep/Nested.tsx`, and letting it compete with the exact path in one
@@ -259,7 +265,36 @@ export function entryFileCandidates(
  * holding both `src/App.tsx` and `packages/ui/src/App.tsx` rooted the tree at
  * the package when the documented, fully-spelled path named the app. A suffix
  * that fits several files names none of them, and saying so beats picking one.
+ *
+ * Exported because a caller that validates a user-supplied path before calling
+ * has to reach the same verdict this walk does. A second implementation of
+ * "which scanned file is this?" outside the engine rewrote the request before
+ * the rule below ever saw it, which put the monorepo bug back one layer up.
  */
+export function matchEntryPath(
+	candidates: readonly string[],
+	entry: string,
+): EntryPathMatch {
+	const wanted = keyFold(normalizeRelPath(entry));
+	const suffix: string[] = [];
+	for (const rel of candidates) {
+		const folded = keyFold(rel);
+		if (folded === wanted) {
+			return { kind: "exact", file: rel };
+		}
+		if (folded.endsWith(`/${wanted}`)) {
+			suffix.push(rel);
+		}
+	}
+	if (suffix.length === 1) {
+		return { kind: "suffix", file: suffix[0] };
+	}
+	if (suffix.length > 1) {
+		return { kind: "ambiguous", candidates: [...suffix].sort() };
+	}
+	return { kind: "none" };
+}
+
 function matchEntryFile(
 	ws: Workspace,
 	files: SourceFile[],
@@ -268,27 +303,16 @@ function matchEntryFile(
 	| { kind: "exact" | "suffix"; file: SourceFile }
 	| { kind: "ambiguous"; candidates: string[] }
 	| { kind: "none" } {
-	const wanted = keyFold(toPosix(entry));
-	const suffix: SourceFile[] = [];
+	const byRel = new Map<string, SourceFile>();
 	for (const file of files) {
-		const rel = keyFold(ws.rel(file.getFilePath()));
-		if (rel === wanted) {
-			return { kind: "exact", file };
-		}
-		if (rel.endsWith(`/${wanted}`)) {
-			suffix.push(file);
-		}
+		byRel.set(ws.rel(file.getFilePath()), file);
 	}
-	if (suffix.length === 1) {
-		return { kind: "suffix", file: suffix[0] };
+	const matched = matchEntryPath([...byRel.keys()], entry);
+	if (matched.kind === "ambiguous" || matched.kind === "none") {
+		return matched;
 	}
-	if (suffix.length > 1) {
-		return {
-			kind: "ambiguous",
-			candidates: suffix.map((file) => ws.rel(file.getFilePath())).sort(),
-		};
-	}
-	return { kind: "none" };
+	const file = byRel.get(matched.file);
+	return file ? { kind: matched.kind, file } : { kind: "none" };
 }
 
 function findEntryComponent(

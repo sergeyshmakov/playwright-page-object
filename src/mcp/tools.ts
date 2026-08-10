@@ -10,6 +10,7 @@ import {
 	discoverPageObjects,
 	entryFileCandidates,
 	isCatchAllPattern,
+	matchEntryPath,
 	nearestFiles,
 	nearestIds,
 	nearestNames,
@@ -371,6 +372,13 @@ function lookupHint(
  * failure whose advice was to scope the call with `file`, which the caller had
  * already done. So the same resolve-then-refuse the other two tools apply to
  * their `file` argument happens here, against the very set the engine searches.
+ *
+ * Through {@link matchEntryPath}, which is the engine's own rule rather than a
+ * copy of it: exact path first, a trailing segment only when it fits one file.
+ * A `.find()` over the same candidates accepted whichever suffix match sorted
+ * first, so `src/App.tsx` could be answered with `packages/ui/src/App.tsx` — and
+ * because this wrapper rewrites the request, the engine's corrected resolver
+ * never saw the path the caller actually wrote.
  */
 function resolveEntryFile(
 	workspace: Workspace,
@@ -378,10 +386,18 @@ function resolveEntryFile(
 ): { file: string; note?: string } {
 	const resolved = relativizeFile(workspace, file);
 	const candidates = entryFileCandidates(workspace);
-	const match = candidates.find((candidate) =>
-		sameFile(candidate, resolved.file),
-	);
-	if (!match) {
+	const match = matchEntryPath(candidates, resolved.file);
+	if (match.kind === "ambiguous") {
+		throw new ToolError(
+			"ambiguous_component",
+			`"${file}" names only a trailing path segment, and ${match.candidates.length} scanned files end with it.`,
+			{
+				candidates: match.candidates,
+				hint: "Re-call with `file` set to one of the candidates, spelled relative to the project root.",
+			},
+		);
+	}
+	if (match.kind === "none") {
 		throw new ToolError(
 			"file_not_found",
 			`No scanned .tsx/.jsx source matches "${file}".`,
@@ -393,7 +409,7 @@ function resolveEntryFile(
 	}
 	// The scanned spelling, not the caller's: it is what `component` is filtered
 	// against below, and what the engine will match without a suffix search.
-	return { file: match, note: resolved.note };
+	return { file: match.file, note: resolved.note };
 }
 
 /**
@@ -827,10 +843,15 @@ function selectedBuckets(
 	requested: CoverageBucket[] | undefined,
 	includeUnused: boolean,
 ): { buckets: Set<CoverageBucket>; ignored?: string[] } {
-	if (requested && requested.length > 0) {
+	if (requested !== undefined) {
 		// Two ways to say the same thing, so one of them has to win, and the
 		// explicit list is the one the caller wrote on purpose. Saying which was
 		// dropped costs one meta field and saves a debugging session.
+		//
+		// An empty array is a list too: `buckets: []` asks for summary and scope
+		// and nothing else, which is the cheapest possible coverage call. Reading
+		// it as "no preference" returned all six lists — the opposite of what the
+		// schema promises, at the maximum response size.
 		return { buckets: new Set(requested), ignored: ["includeUnused"] };
 	}
 	const buckets = new Set(BUCKET_ORDER);

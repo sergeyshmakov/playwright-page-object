@@ -505,6 +505,41 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	// The tree carries every branch of a static choice, and outline is the format
+	// an agent actually reads. Printing only the first branch there said
+	// `data-testid={big ? "Main" : "Alt"}` renders `Main`, so a correct selector
+	// for `Alt` read as invented — the same disagreement between the tree and the
+	// flat inventory that `testIdAlternatives` exists to close.
+	it("shows every branch of a static choice in outline format", async () => {
+		await withProject(
+			"ppo-outline-alternatives-",
+			{
+				"src/App.tsx": [
+					"export function App({ big }: { big: boolean }) {",
+					'\treturn <div data-testid={big ? "Main" : "Alt"} />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const outline = await callTool(client, "get_testid_tree", {
+					component: "App",
+					format: "outline",
+				});
+				const text = String(outline.envelope.data);
+				expect(text).toContain("Main");
+				expect(text).toContain("Alt");
+
+				const json = await callTool(client, "get_testid_tree", {
+					component: "App",
+				});
+				expect(JSON.stringify(json.envelope.data)).toContain(
+					"testIdAlternatives",
+				);
+			},
+		);
+	}, 30_000);
+
 	it("says the walk was depth-limited rather than implying the tree is whole", async () => {
 		const files = {
 			"src/Deep.tsx": [
@@ -701,6 +736,50 @@ describe("MCP server over in-memory transport", () => {
 				expect(String(absolute.envelope.meta?.note)).toContain(
 					"src/components/GuestItem/GuestItemInfo.tsx",
 				);
+			},
+		);
+	}, 30_000);
+
+	// A suffix match is a convenience for a bare basename, never a competitor to
+	// the fully spelled path. This wrapper resolves `file` before the engine sees
+	// it, so its first-match search handed a monorepo's `src/App.tsx` request to
+	// whichever candidate sorted first — the package copy.
+	it("prefers the exact get_testid_tree file over an earlier suffix match", async () => {
+		await withProject(
+			"ppo-entry-exact-",
+			{
+				"packages/ui/src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="PackageRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="AppRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const exact = await callTool(client, "get_testid_tree", {
+					file: "src/App.tsx",
+				});
+				expect(exact.isError).toBe(false);
+				const serialized = JSON.stringify(exact.envelope.data);
+				expect(serialized).toContain("AppRoot");
+				expect(serialized).not.toContain("PackageRoot");
+
+				// A trailing segment that fits both names neither of them.
+				const bare = await callTool(client, "get_testid_tree", {
+					file: "App.tsx",
+				});
+				expect(bare.isError).toBe(true);
+				expect(bare.envelope.error?.code).toBe("ambiguous_component");
+				expect(bare.envelope.error?.candidates).toEqual([
+					"packages/ui/src/App.tsx",
+					"src/App.tsx",
+				]);
 			},
 		);
 	}, 30_000);
@@ -1482,6 +1561,13 @@ describe("MCP server over in-memory transport", () => {
 				expect(summary.uncoveredTestIds).toBe(1);
 				expect(summary.matchableUiTestIds).toBe(3);
 				expect(envelope.meta?.ignored).toEqual(["includeUnused"]);
+
+				// An empty list is a list: the cheapest coverage call there is, and
+				// the one that used to return all six buckets instead of none.
+				const none = await callTool(client, "map_coverage", { buckets: [] });
+				const bare = none.envelope.data as Record<string, unknown>;
+				expect(Object.keys(bare).sort()).toEqual(["scope", "summary"]);
+				expect(none.envelope.meta?.ignored).toEqual(["includeUnused"]);
 			},
 		);
 	}, 30_000);
