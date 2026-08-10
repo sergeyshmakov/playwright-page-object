@@ -12,8 +12,10 @@ import type {
 	PageObjectTree,
 } from "../types";
 import { Budget } from "../util/budget";
+import { isDefaultExported } from "../util/exports";
 import { docSummary } from "../util/jsdoc";
 import { keyFold, normalizeRelPath, splitDefKey, toPosix } from "../util/paths";
+import { lineAt } from "../util/position";
 import { renderConstructor } from "../util/signature";
 import type { Workspace } from "../workspace";
 import {
@@ -124,7 +126,7 @@ function resolveTarget(
 		}
 		if (inFile.length > 1) {
 			const preferred =
-				inFile.find((entry) => entry.declaration.isDefaultExport()) ??
+				inFile.find((entry) => isDefaultExported(entry.declaration)) ??
 				inFile.find((entry) =>
 					entry.classification.hostKind.startsWith("root"),
 				);
@@ -201,6 +203,25 @@ function suggestionsFor(discovery: DiscoveryResult, name: string): string[] {
 }
 
 /**
+ * Cache identity for one page-object tree: the target plus every option that
+ * changes what gets built. `format` is in it because it decides whether the
+ * `inline` view is materialised at all; `includeMethods` is not, because that
+ * is the MCP handler trimming a finished tree.
+ */
+function treeKey(target: string, options: TreeOptions): string {
+	return `po-tree::${JSON.stringify({
+		target,
+		maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
+		maxNodes: options.maxNodes ?? DEFAULT_MAX_NODES,
+		includeInherited: options.includeInherited ?? null,
+		signatureMode: options.signatureMode ?? "syntactic",
+		format: options.format ?? "refs",
+		include: options.include ?? null,
+		exclude: options.exclude ?? null,
+	})}`;
+}
+
+/**
  * Builds the definition graph for one page object.
  *
  * The shape is a flat `defs` map plus `$ref`-style string pointers. That makes
@@ -208,11 +229,26 @@ function suggestionsFor(discovery: DiscoveryResult, name: string): string[] {
  * into the map *before* its members are walked, so a back-edge naturally
  * becomes a reference to an already-present key and recursion terminates
  * without a visited set. Sharing a control between three parents is free.
+ *
+ * Memoized per epoch, and the result is a wire shape, so callers must read it
+ * without writing to it — a handler that trims the returned tree in place would
+ * hand the trimmed version to the next caller who asked for the whole thing.
+ * A target that resolves to nothing throws, and a throw is never cached.
  */
 export function buildPageObjectTree(
 	ws: Workspace,
 	target: string,
 	options: TreeOptions = {},
+): PageObjectTree {
+	return ws.memo(treeKey(target, options), [], () =>
+		computePageObjectTree(ws, target, options),
+	);
+}
+
+function computePageObjectTree(
+	ws: Workspace,
+	target: string,
+	options: TreeOptions,
 ): PageObjectTree {
 	const startedAt = Date.now();
 	const discovery = discoverInternal(ws, {
@@ -404,9 +440,10 @@ export function toNode(
 	options: TreeOptions,
 ): PageObjectNode {
 	const fixtures = discovery.fixtures.byClass.get(entry.foldedKey) ?? [];
-	const line = entry.declaration
-		.getSourceFile()
-		.getLineAndColumnAtPos(entry.declaration.getStart()).line;
+	const line = lineAt(
+		entry.declaration.getSourceFile(),
+		entry.declaration.getStart(),
+	);
 
 	const node: PageObjectNode = {
 		id: entry.key,

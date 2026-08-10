@@ -13,7 +13,9 @@ import type {
 	TestIdValue,
 	UiUnresolvedReason,
 } from "../types";
+import { hasDefaultKeyword, isDefaultExported } from "../util/exports";
 import { defKey } from "../util/paths";
+import { lineAndColumnAt } from "../util/position";
 import {
 	isRelativeSpecifier,
 	type RefResolution,
@@ -256,7 +258,7 @@ function declaredNameOf(declaration: Node): string | null {
 	}
 	if (
 		isDefaultExportExpression(declaration) ||
-		(Node.isFunctionDeclaration(declaration) && declaration.isDefaultExport())
+		(Node.isFunctionDeclaration(declaration) && hasDefaultKeyword(declaration))
 	) {
 		return fallbackComponentName(declaration.getSourceFile());
 	}
@@ -264,12 +266,17 @@ function declaredNameOf(declaration: Node): string | null {
 }
 
 function exportKindOf(node: Node, name: string): "default" | "named" {
-	if (Node.isFunctionDeclaration(node) && node.isDefaultExport()) {
+	if (Node.isFunctionDeclaration(node) && hasDefaultKeyword(node)) {
 		return "default";
 	}
 	if (isDefaultExportExpression(node)) {
 		return "default";
 	}
+	// `export default <Identifier>` and `export { X as default }`, both read off
+	// the source. The old tail of this function re-asked the same question of the
+	// file's variable declaration through `isDefaultExport()`, whose keyword check
+	// can never fire on a `VariableDeclaration` — so every named component paid for
+	// a type checker to be told what the loop above had already established.
 	const sourceFile = node.getSourceFile();
 	for (const assignment of sourceFile.getExportAssignments()) {
 		const expression = assignment.getExpression();
@@ -277,11 +284,7 @@ function exportKindOf(node: Node, name: string): "default" | "named" {
 			return "default";
 		}
 	}
-	const variable = sourceFile.getVariableDeclaration(name);
-	if (variable?.isDefaultExport()) {
-		return "default";
-	}
-	return "named";
+	return isDefaultExported(node) ? "default" : "named";
 }
 
 /**
@@ -309,7 +312,7 @@ export function buildDefinition(
 	// `import CartItemComponent from "./CartItem"` still reports `CartItem`.
 	const declaredName = declaredNameOf(declaration) ?? name;
 	const exportKind = exportKindOf(declaration, declaredName);
-	const position = sourceFile.getLineAndColumnAtPos(declaration.getStart());
+	const position = lineAndColumnAt(sourceFile, declaration.getStart());
 	return {
 		id: defKey(file, exportKind === "default" ? "default" : declaredName),
 		name: declaredName,
@@ -447,6 +450,9 @@ export interface ExternalModuleEvidence {
 
 const MAX_EXTERNAL_MODULES = 10;
 
+/** Workspace memo slot holding the shared "outside the workspace" answers. */
+const CENSUS_CACHE_KEY = "external-module-census";
+
 /** Separator that cannot occur in a path or in a module specifier. */
 const CACHE_FIELD = "\u0000";
 
@@ -476,11 +482,25 @@ export class ExternalModuleCensus {
 	 * monorepo where one package links `@acme/ui` to its own sources and another
 	 * has an installed copy, one specifier has two answers and whichever file was
 	 * scanned first decided for every other.
+	 *
+	 * Held on the workspace rather than on the census. A census is built per tree,
+	 * and a session builds several — the scan-wide one, the entry-scoped one, the
+	 * one coverage asks for — each of which was re-resolving every bare specifier
+	 * in the repository from scratch. The answers are a property of the files, not
+	 * of the tree being built, so they belong to the epoch: `Workspace.memo`
+	 * hands the same map to every census until something invalidates it, and hands
+	 * out a fresh one the moment anything does.
 	 */
-	private readonly outside = new Map<string, boolean>();
+	private readonly outside: Map<string, boolean>;
 	private tagCount = 0;
 
-	constructor(private readonly ws: Workspace) {}
+	constructor(private readonly ws: Workspace) {
+		this.outside = ws.memo(
+			CENSUS_CACHE_KEY,
+			[],
+			() => new Map<string, boolean>(),
+		);
+	}
 
 	add(sourceFile: SourceFile, elements: ScannedElement[]): void {
 		let bindings: Map<string, string> | undefined;

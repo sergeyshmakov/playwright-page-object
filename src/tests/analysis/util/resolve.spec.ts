@@ -1,11 +1,17 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Node } from "ts-morph";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { toPosix } from "../../../analysis/util/paths";
 import {
 	isInNodeModules,
 	resolveClassRef,
 	resolveIdentifier,
+	resolveRelativeModule,
 	resolvesToCallable,
 } from "../../../analysis/util/resolve";
+import { Workspace } from "../../../analysis/workspace";
 import {
 	MEMORY_ROOT_POSIX,
 	makeWorkspace,
@@ -597,6 +603,85 @@ describe("resolveIdentifier through baseUrl", () => {
 		if (!result.resolved && result.external) {
 			expect(result.module).toBe("playwright-page-object");
 		}
+	});
+});
+
+describe("relative module resolution freshness", () => {
+	const roots: string[] = [];
+
+	afterEach(() => {
+		Workspace.reset();
+		for (const root of roots.splice(0)) {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	function scratch(files: Record<string, string>): string {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-resolve-"));
+		roots.push(root);
+		for (const [relativePath, contents] of Object.entries(files)) {
+			const absolute = path.join(root, relativePath);
+			fs.mkdirSync(path.dirname(absolute), { recursive: true });
+			fs.writeFileSync(absolute, contents, "utf8");
+		}
+		return root;
+	}
+
+	/**
+	 * A module base that resolved to nothing must be re-probed, not remembered.
+	 *
+	 * This is why {@link loadFromBase} carries no cache. Nothing bumps the epoch
+	 * when a file appears *outside* the scan globs — the re-glob does not see it
+	 * and the mtime sweep only walks files already in the project — so a
+	 * remembered "no such module" would outlive its evidence for the whole
+	 * session, and the import would stay unresolved until a restart.
+	 */
+	it("picks up a module created outside the scan globs, with no epoch bump", () => {
+		const root = scratch({
+			"src/a.ts": [
+				'import { Widget } from "../lib/widget";',
+				"const x = Widget;",
+			].join("\n"),
+			"lib/.keep": "",
+		});
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
+		const sourceFile = ws.project.getSourceFileOrThrow(
+			toPosix(path.join(root, "src/a.ts")),
+		);
+		expect(
+			resolveRelativeModule(ws.project, sourceFile, "../lib/widget"),
+		).toBeUndefined();
+
+		fs.writeFileSync(
+			path.join(root, "lib/widget.ts"),
+			"export class Widget {}",
+			"utf8",
+		);
+
+		const resolved = resolveRelativeModule(
+			ws.project,
+			sourceFile,
+			"../lib/widget",
+		);
+		expect(resolved?.getBaseName()).toBe("widget.ts");
+	});
+
+	it("hands back the same file object for a repeated hit", () => {
+		const root = scratch({
+			"src/a.ts": [
+				'import { Widget } from "./widget";',
+				"const x = Widget;",
+			].join("\n"),
+			"src/widget.ts": "export class Widget {}",
+		});
+		const ws = Workspace.acquire({ projectRoot: root });
+		const sourceFile = ws.project.getSourceFileOrThrow(
+			toPosix(path.join(root, "src/a.ts")),
+		);
+		const first = resolveRelativeModule(ws.project, sourceFile, "./widget");
+		const second = resolveRelativeModule(ws.project, sourceFile, "./widget");
+		expect(first).toBeDefined();
+		expect(second).toBe(first);
 	});
 });
 

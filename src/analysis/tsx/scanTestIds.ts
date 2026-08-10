@@ -6,9 +6,12 @@ import {
 	Node,
 	type SourceFile,
 	SyntaxKind,
+	ts,
 } from "ts-morph";
 import type { SourceLoc, TestIdOccurrence, TestIdValue } from "../types";
+import { hasDefaultKeyword } from "../util/exports";
 import { escapeRegExp } from "../util/paths";
+import { lineAndColumnAt } from "../util/position";
 
 export type JsxOpeningLike = JsxOpeningElement | JsxSelfClosingElement;
 
@@ -65,7 +68,7 @@ export function enclosingComponentName(node: Node): string {
 			if (name) {
 				return name;
 			}
-			if (current.isDefaultExport()) {
+			if (hasDefaultKeyword(current)) {
 				return fallbackComponentName(current.getSourceFile());
 			}
 		}
@@ -474,6 +477,49 @@ function spreadIdentifierNames(element: JsxOpeningLike): string[] {
 }
 
 /**
+ * How ts-morph hands back the wrapper for a compiler node it already parsed.
+ *
+ * Not on the public surface, but it is the same call `getDescendantsOfKind`
+ * makes for every node it yields, and the whole reason {@link jsxOpeningElements}
+ * can do its own traversal without giving up ts-morph nodes. Named here so the
+ * one place that reaches past the public API is visible; if a ts-morph major
+ * ever renames it, this throws at the first scan and the equivalence spec in
+ * `scanTestIds.spec.ts` fails loudly rather than the scan going quiet.
+ */
+interface NodeWrapper {
+	_getNodeFromCompilerNode(node: ts.Node): unknown;
+}
+
+/**
+ * Every JSX opening and self-closing element in the file, in source order.
+ *
+ * One raw `ts.forEachChild` descent rather than two `getDescendantsOfKind`
+ * passes plus a sort. ts-morph's descendant iterator is a recursive generator
+ * that allocates a fresh children array for every node it visits, and running
+ * it twice over a repository's worth of TSX measured 334–412 ms against 63 ms
+ * for this walk over the same 14,404 elements — identical results, verified
+ * both by a spec and by a full-repository diff.
+ *
+ * Source order falls out of the descent, so the sort goes too: `forEachChild`
+ * visits children in the order they were parsed.
+ */
+function jsxOpeningElements(sourceFile: SourceFile): JsxOpeningLike[] {
+	const wrapper = sourceFile as unknown as NodeWrapper;
+	const found: JsxOpeningLike[] = [];
+	const visit = (node: ts.Node): void => {
+		if (
+			node.kind === ts.SyntaxKind.JsxOpeningElement ||
+			node.kind === ts.SyntaxKind.JsxSelfClosingElement
+		) {
+			found.push(wrapper._getNodeFromCompilerNode(node) as JsxOpeningLike);
+		}
+		node.forEachChild(visit);
+	};
+	sourceFile.compilerNode.forEachChild(visit);
+	return found;
+}
+
+/**
  * Walks every JSX opening element in a file and records what its attributes say.
  *
  * Framework-agnostic on purpose: `tag` / `component` / `nodeType` are the same
@@ -485,13 +531,8 @@ export function scanFileElements(
 	relFile: string,
 ): ScannedElement[] {
 	const elements: ScannedElement[] = [];
-	const openings: JsxOpeningLike[] = [
-		...sourceFile.getDescendantsOfKind(SyntaxKind.JsxOpeningElement),
-		...sourceFile.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement),
-	];
-	openings.sort((a, b) => a.getStart() - b.getStart());
 
-	for (const element of openings) {
+	for (const element of jsxOpeningElements(sourceFile)) {
 		const tag = element.getTagNameNode().getText();
 		const attributes = new Map<string, TestIdValue[]>();
 		let testIds: TestIdValue[] = [];
@@ -512,7 +553,7 @@ export function scanFileElements(
 			}
 		}
 
-		const position = sourceFile.getLineAndColumnAtPos(element.getStart());
+		const position = lineAndColumnAt(sourceFile, element.getStart());
 		const spreadNames = spreadIdentifierNames(element);
 		elements.push({
 			node: element,

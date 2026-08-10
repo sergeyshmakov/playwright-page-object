@@ -8,8 +8,10 @@ import type {
 	PageObjectSummary,
 	SelectorInfo,
 } from "../types";
+import { isDefaultExported, isExported } from "../util/exports";
 import { docSummary } from "../util/jsdoc";
 import { defKey, keyFold, matchesAnyGlob, toPosix } from "../util/paths";
+import { lineAt } from "../util/position";
 import type { Workspace } from "../workspace";
 import { type FixtureMap, readFixtureMaps } from "./fixtures";
 import {
@@ -435,8 +437,8 @@ function toSummary(
 		scope: entry.classification.scope,
 		rootSelector: entry.rootSelector,
 		extendsChain: entry.classification.heritage.chain,
-		isExported: entry.declaration.isExported(),
-		isDefaultExport: entry.declaration.isDefaultExport(),
+		isExported: isExported(entry.declaration),
+		isDefaultExport: isDefaultExported(entry.declaration),
 		fixtures,
 		counts: {
 			members: entry.members.length,
@@ -454,9 +456,10 @@ function toSummary(
 }
 
 function locLine(entry: DiscoveredClass): number {
-	return entry.declaration
-		.getSourceFile()
-		.getLineAndColumnAtPos(entry.declaration.getStart()).line;
+	return lineAt(
+		entry.declaration.getSourceFile(),
+		entry.declaration.getStart(),
+	);
 }
 
 /**
