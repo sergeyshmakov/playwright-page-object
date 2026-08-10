@@ -166,7 +166,9 @@ Narrowing the scope usually means fewer files are parsed, and so a lower count a
 
 ### Limiting the scan with `--max-files`
 
-The cap governs files **parsed**, not files analyzed: every source the project holds, less declaration files and ignored directories such as `node_modules` and build output. Your include and exclude patterns are not applied to it. `--src-dir` says which files are analyzed, and the resolver still parses what analyzed code imports — an alias target or a `.js` module outside the scope is parsed, retained, and counted. Counting only the narrowed scope let a project sitting on the cap pull in unlimited siblings for free.
+The cap governs files **parsed**, not files analyzed: every source the project holds, less declaration files and ignored directories such as `node_modules` and build output. `--src-dir` says which files are analyzed, and the resolver still parses what analyzed code imports — an alias target or a `.js` module outside the scope is parsed, retained, and counted. Counting only the narrowed scope let a project sitting on the cap pull in unlimited siblings for free.
+
+A negated `--src-dir` prunes the scan itself, so an excluded directory is never parsed and never counted: `--src-dir src --src-dir '!src/generated'` costs nothing for the generated tree. The one exception is a project whose file set comes from a `tsconfig.json` with no `--src-dir` beside it — there the tsconfig decides what is parsed, and the exclusion shapes the answers only.
 
 It is checked before parsing when a tsconfig enumerates the file set, so an oversized repository is refused before its sources are read. It is enforced again on the per-call rescan and on files the resolver pulls in mid-analysis; an addition that would break the cap is rolled back. Exceeding it returns `max_files_exceeded` with a hint to raise the cap or narrow the scan.
 

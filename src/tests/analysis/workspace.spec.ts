@@ -228,6 +228,97 @@ describe("Workspace scope diagnostics", () => {
 		);
 	});
 
+	/**
+	 * An exclusion the scan does not carry is only a filter, and a filter runs
+	 * after the parse it was meant to save. `--src-dir src --src-dir
+	 * '!src/generated'` still read, parsed and retained every generated file, so
+	 * a large one exhausted `--max-files` for a scope it was excluded from.
+	 */
+	it("never parses a directory a negated scope excluded", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"src/generated/x.ts": "export const x = 1;",
+			"src/generated/y.ts": "export const y = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src", "!src/generated"],
+			// One in-scope file and a cap of one: the excluded pair can only fit if
+			// it was never parsed.
+			maxFiles: 1,
+		});
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+		expect(
+			ws.project.getSourceFiles().map((file) => ws.rel(file.getFilePath())),
+		).toEqual(["src/a.ts"]);
+	});
+
+	// The same, written the way the flag documents it: an exclusion on its own,
+	// with no positive scope beside it. That takes the repository-wide scan
+	// branch rather than the narrowed one, so it is a second place to forget.
+	it("prunes an excluded directory from the repository-wide scan", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"src/generated/x.ts": "export const x = 1;",
+			"src/generated/y.ts": "export const y = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			exclude: ["src/generated"],
+			maxFiles: 1,
+		});
+		expect(
+			ws.project.getSourceFiles().map((file) => ws.rel(file.getFilePath())),
+		).toEqual(["src/a.ts"]);
+	});
+
+	// Same rule on the re-glob: a file created inside an excluded directory must
+	// not be parsed the moment the sweep notices it either.
+	it("keeps an excluded directory out of the rescan", () => {
+		const root = scratch({
+			"src/a.ts": "export const a = 1;",
+			"src/generated/x.ts": "export const x = 1;",
+		});
+		const options = {
+			projectRoot: root,
+			include: ["src", "!src/generated"],
+			staleAfterMs: 0,
+		};
+		const ws = Workspace.acquire(options);
+		write(root, "src/generated/y.ts", "export const y = 1;");
+		write(root, "src/b.ts", "export const b = 1;");
+		ws.revalidate();
+
+		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
+		expect(
+			ws.project
+				.getSourceFiles()
+				.map((file) => ws.rel(file.getFilePath()))
+				.filter((file) => file.startsWith("src/generated/")),
+		).toEqual([]);
+	});
+
+	/**
+	 * `[draft]` is a character class, so an exact path can be a glob without its
+	 * author meaning one. Both engines that read the pattern — the scope
+	 * predicate here and ts-morph's file adder — match an identical string before
+	 * they compile anything, so the named file is selected either way. The
+	 * failure this guards is one of them changing its mind: an adder that skipped
+	 * the file, or a predicate that dropped what the adder brought in, is the
+	 * silently-empty scope the shared engine exists to prevent.
+	 */
+	it("selects an exact scope path that contains glob metacharacters", () => {
+		const root = scratch({
+			"src/[draft].ts": "export const draft = 1;",
+			"src/other.ts": "export const other = 1;",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src/[draft].ts"],
+		});
+		expect(rels(ws)).toEqual(["src/[draft].ts"]);
+	});
+
 	it("says nothing about an excluded directory that is not there", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
 		const ws = Workspace.acquire({ projectRoot: root, exclude: ["generated"] });

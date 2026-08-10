@@ -366,6 +366,7 @@ export class Workspace {
 				project.addSourceFilesAtPaths([
 					...defaultIncludeGlobs(root),
 					...defaultExcludeGlobs(root),
+					...scopeExcludeGlobs(root, options.exclude),
 				]);
 			}
 			warnings.push(
@@ -380,6 +381,7 @@ export class Workspace {
 			project.addSourceFilesAtPaths([
 				...options.include.map((glob) => absoluteGlob(root, glob)),
 				...defaultExcludeGlobs(root),
+				...scopeExcludeGlobs(root, options.exclude),
 			]);
 		}
 
@@ -748,6 +750,7 @@ export class Workspace {
 		return this.project.addSourceFilesAtPaths([
 			...globs,
 			...defaultExcludeGlobs(this.root),
+			...scopeExcludeGlobs(this.root, this.options.exclude),
 		]);
 	}
 
@@ -1155,6 +1158,29 @@ function withNormalizedScope(options: WorkspaceOptions): {
 	normalize(options.include, true, include);
 	normalize(options.exclude, false, exclude);
 	return { options: { ...options, include, exclude }, missing };
+}
+
+/**
+ * The caller's `exclude` scope, spelled as negated globs for the file adder.
+ *
+ * `exclude` used to be honoured only by the scope predicate — that is, after
+ * every excluded file had already been globbed, read and parsed. Parsing is the
+ * cost `maxFiles` governs (it counts what the project holds, not what the
+ * answers show), so `--src-dir src --src-dir '!src/generated'` could still be
+ * refused with `max_files_exceeded` over a directory it had just been told to
+ * ignore. These are the very patterns `sourceFiles()` filters with, normalized
+ * once in {@link withNormalizedScope}, so the glob and the predicate cannot
+ * disagree about what is out of scope.
+ *
+ * Only the glob-driven scans can carry them. A tsconfig-backed project with no
+ * `include` takes its file set from the tsconfig itself, which is the file set
+ * TypeScript would compile; narrowing that is `exclude`'s job downstream.
+ */
+function scopeExcludeGlobs(
+	root: string,
+	exclude: readonly string[] | undefined,
+): string[] {
+	return (exclude ?? []).map((glob) => absoluteGlob(root, `!${glob}`));
 }
 
 function absoluteGlob(root: string, glob: string): string {
