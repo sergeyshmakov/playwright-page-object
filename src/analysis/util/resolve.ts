@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { exports as resolveExports } from "resolve.exports";
 import {
 	type CompilerOptions,
 	type ModuleDeclaration,
@@ -437,16 +438,29 @@ function splitPackageSpecifier(
 }
 
 /**
- * Conditions read out of an `exports` entry, most source-like first. A monorepo
- * points `source` (or `development`) at the unbuilt file precisely so tooling
- * like this can find it.
+ * Condition sets an `exports` entry is read under, most source-seeking first.
+ *
+ * A monorepo points `source` (or `development`) at the unbuilt file precisely so
+ * tooling like this can find it, and finding it is the whole reason the engine
+ * reads the table at all: a linked workspace package must expand to its `.tsx`,
+ * not to the `dist/` it publishes.
+ *
+ * `resolve.exports` answers with one winner per call, and between two conditions
+ * that are both allowed the *package's* key order decides — Node's rule, and the
+ * wrong tie-break for this engine. One call per set, concatenated, restores the
+ * preference: a `source` target is offered ahead of an `import` one however the
+ * manifest happens to order them.
+ *
+ * The later sets keep `source` and `development` alongside so that a source
+ * target nested *inside* a branch (`{"import": {"source": …, "default": …}}`)
+ * still wins within that branch.
  */
-const EXPORT_CONDITIONS = [
-	"source",
-	"development",
-	"import",
-	"default",
-] as const;
+const EXPORT_CONDITION_PASSES: readonly (readonly string[])[] = [
+	["source"],
+	["development"],
+	["source", "development", "import"],
+	["source", "development", "require"],
+];
 
 /** The package's parsed `package.json`, read at most once per package. */
 function packageManifest(
@@ -494,17 +508,12 @@ function packageEntryBases(project: Project, realPackageDir: string): string[] {
 		}
 	};
 	const manifest = packageManifest(project, realPackageDir);
-	const root = manifest?.exports;
-	if (root && typeof root === "object") {
-		const dot = (root as Record<string, unknown>)["."] ?? root;
-		if (typeof dot === "string") {
-			add(dot);
-		} else if (dot && typeof dot === "object") {
-			const conditions = dot as Record<string, unknown>;
-			for (const condition of EXPORT_CONDITIONS) {
-				add(conditions[condition]);
-			}
-		}
+	// A `null` root entry is not honoured the way a blocked *subpath* is: the
+	// classic fields and the conventional layouts below are the whole point of
+	// the root probe, and refusing source the engine can plainly see because the
+	// package declines to publish its own entry point helps nobody.
+	for (const target of exportedTargets(manifest, ".").targets) {
+		add(target);
 	}
 	for (const field of PACKAGE_SOURCE_FIELDS) {
 		add(manifest?.[field]);
@@ -515,32 +524,130 @@ function packageEntryBases(project: Project, realPackageDir: string): string[] {
 	return bases;
 }
 
-/** Reads one `exports` value — a string, or a conditions object — into `into`. */
-function collectExportTargets(
-	entry: unknown,
-	matchedStar: string | null,
-	into: string[],
-): void {
-	const add = (value: unknown): void => {
-		if (typeof value !== "string" || value === "") {
-			return;
+/**
+ * A `null` target — the package saying "this subpath is not importable" —
+ * spelled as something `resolve.exports` will hand straight back.
+ *
+ * The library reports a blocked entry and an undeclared one through the same
+ * error, and the difference decides the answer here: an undeclared subpath
+ * still falls back to a plain join, because a package consumed through classic
+ * node resolution never had its `exports` table read at all, while a blocked one
+ * has to be refused. Masking the nulls before the lookup leaves the library
+ * doing all of the matching — patterns, nesting, arrays — and still tells the
+ * two outcomes apart.
+ */
+const BLOCKED_TARGET = `./${CACHE_FIELD}blocked`;
+
+/** Every `null` in an `exports` tree, rewritten to {@link BLOCKED_TARGET}. */
+function maskBlockedTargets(value: unknown): unknown {
+	if (value === null) {
+		return BLOCKED_TARGET;
+	}
+	if (Array.isArray(value)) {
+		return value.map(maskBlockedTargets);
+	}
+	if (typeof value === "object") {
+		const masked: Record<string, unknown> = {};
+		for (const [key, entry] of Object.entries(value)) {
+			masked[key] = maskBlockedTargets(entry);
 		}
-		const substituted = applySubstitution(toPosix(value), matchedStar);
-		if (substituted !== null) {
-			into.push(substituted);
+		return masked;
+	}
+	return value;
+}
+
+/**
+ * The manifest as `resolve.exports` should see it, built once per package.
+ *
+ * Keyed by the parsed manifest itself, which the probe cache already holds one
+ * of per package directory, so the mask is paid once however many subpaths the
+ * repository imports from that package.
+ */
+const exportsViews = new WeakMap<object, Record<string, unknown>>();
+
+function resolverView(
+	manifest: Record<string, unknown>,
+): Record<string, unknown> {
+	const cached = exportsViews.get(manifest);
+	if (cached) {
+		return cached;
+	}
+	const view = { ...manifest, exports: maskBlockedTargets(manifest.exports) };
+	exportsViews.set(manifest, view);
+	return view;
+}
+
+interface ExportLookup {
+	/** Package-relative targets the table offers, most source-like first. */
+	targets: string[];
+	/** The table names this entry and maps it to `null`. */
+	blocked: boolean;
+}
+
+/**
+ * Every target a package's `exports` table offers for one entry.
+ *
+ * `resolve.exports` owns the matching — exact keys, the longest `*` pattern,
+ * trailing-slash folders, nested condition objects, fallback arrays and `null`
+ * — which is a good deal more of Node's algorithm than this engine has any
+ * business re-implementing. What is left here is the fan-out: the library
+ * answers one condition set at a time, and the engine wants every source-like
+ * answer, ordered.
+ */
+function exportedTargets(
+	manifest: Record<string, unknown> | null,
+	entry: string,
+): ExportLookup {
+	if (!manifest?.exports) {
+		return { targets: [], blocked: false };
+	}
+	const pkg = resolverView(manifest);
+	let sawBlocked = false;
+	const pass = (conditions: readonly string[]): string[] => {
+		let resolved: readonly string[];
+		try {
+			resolved = resolveExports(pkg, entry, { unsafe: true, conditions }) ?? [];
+		} catch {
+			// The entry is out of this condition set's reach. Another set may
+			// still reach it, and none reaching it is an ordinary "not declared".
+			return [];
+		}
+		const kept: string[] = [];
+		for (const target of resolved) {
+			if (target === BLOCKED_TARGET) {
+				sawBlocked = true;
+			} else if (target !== "") {
+				kept.push(toPosix(target));
+			}
+		}
+		return kept;
+	};
+	// `default` cannot be switched off — the library allows it in every call — so
+	// what it answers on its own is subtracted from the conditional passes and
+	// appended last. Otherwise a package whose `default` points at a build output
+	// this engine does not recognise as one (`./lib/index.js`) would be tried
+	// ahead of the source the `import` condition names.
+	const fallback = pass([]);
+	const fromFallback = new Set(fallback);
+	const targets: string[] = [];
+	const seen = new Set<string>();
+	const push = (target: string): void => {
+		if (!seen.has(target)) {
+			seen.add(target);
+			targets.push(target);
 		}
 	};
-	if (typeof entry === "string") {
-		add(entry);
-		return;
+	for (const conditions of EXPORT_CONDITION_PASSES) {
+		for (const target of pass(conditions)) {
+			if (!fromFallback.has(target)) {
+				push(target);
+			}
+		}
 	}
-	if (!entry || typeof entry !== "object") {
-		return;
+	for (const target of fallback) {
+		push(target);
 	}
-	const conditions = entry as Record<string, unknown>;
-	for (const condition of EXPORT_CONDITIONS) {
-		add(conditions[condition]);
-	}
+	return { targets, blocked: sawBlocked && targets.length === 0 };
 }
 
 /**
@@ -551,56 +658,18 @@ function collectExportTargets(
  * package-root-relative guess can produce — is not a file. Consulting the table
  * is the difference between expanding a first-party component and reporting the
  * repository's own design system as an external dependency.
- *
- * Exact keys win outright; otherwise the longest matching `*` pattern does,
- * which is Node's own rule (and the one {@link pathsTargets} already applies to
- * the tsconfig table).
  */
 function exportedSubpathBases(
 	project: Project,
 	realPackageDir: string,
 	subpath: string,
-): string[] {
-	const root = packageManifest(project, realPackageDir)?.exports;
-	if (!root || typeof root !== "object") {
-		return [];
-	}
-	const table = root as Record<string, unknown>;
-	const key = `./${subpath}`;
-	const targets: string[] = [];
-	if (Object.hasOwn(table, key)) {
-		collectExportTargets(table[key], null, targets);
-	} else {
-		let bestEntry: unknown;
-		let bestStar: string | null = null;
-		let bestPrefixLength = -1;
-		for (const [pattern, entry] of Object.entries(table)) {
-			// A table whose keys are conditions rather than subpaths exposes none.
-			if (!pattern.startsWith("./")) {
-				continue;
-			}
-			const parsed = parsePathsPattern(pattern);
-			if (!parsed || parsed.exact) {
-				continue;
-			}
-			const { prefix, suffix } = parsed;
-			if (
-				!key.startsWith(prefix) ||
-				!key.endsWith(suffix) ||
-				key.length < prefix.length + suffix.length ||
-				prefix.length <= bestPrefixLength
-			) {
-				continue;
-			}
-			bestPrefixLength = prefix.length;
-			bestStar = key.slice(prefix.length, key.length - suffix.length);
-			bestEntry = entry;
-		}
-		if (bestEntry !== undefined) {
-			collectExportTargets(bestEntry, bestStar, targets);
-		}
-	}
-	return targets.map((target) => path.posix.join(realPackageDir, target));
+): { bases: string[]; blocked: boolean } {
+	const manifest = packageManifest(project, realPackageDir);
+	const { targets, blocked } = exportedTargets(manifest, `./${subpath}`);
+	return {
+		blocked,
+		bases: targets.map((target) => path.posix.join(realPackageDir, target)),
+	};
 }
 
 /**
@@ -698,13 +767,20 @@ function loadWorkspacePackage(
 	realPackageDir: string,
 	subpath: string,
 ): WorkspaceProbe {
-	const bases =
-		subpath === ""
-			? packageEntryBases(project, realPackageDir)
-			: [
-					...exportedSubpathBases(project, realPackageDir, subpath),
-					path.posix.join(realPackageDir, subpath),
-				];
+	let bases: string[];
+	if (subpath === "") {
+		bases = packageEntryBases(project, realPackageDir);
+	} else {
+		const declared = exportedSubpathBases(project, realPackageDir, subpath);
+		// `"./internal/*": null` is the package refusing the subpath outright, and
+		// that is worth honouring. An entry the table simply does not name is not:
+		// a package consumed through classic node resolution never had its
+		// `exports` read, and the plain join is how those deep imports resolve.
+		if (declared.blocked) {
+			return NONE;
+		}
+		bases = [...declared.bases, path.posix.join(realPackageDir, subpath)];
+	}
 	let sawBuiltOutput = false;
 	for (const base of bases) {
 		// An `exports` target is free to point anywhere; one that climbs out of

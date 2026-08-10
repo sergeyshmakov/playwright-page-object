@@ -428,6 +428,114 @@ describe.skipIf(!LINKS_WORK)("linked package subpaths", () => {
 		}
 	});
 
+	// `{"import": {"types": …, "default": …}}` is how nearly every published
+	// package spells its entry today, and a reader that only understood a string
+	// value saw nothing there at all. The source sits at a name no conventional
+	// layout would guess, so the table is the only way to reach it.
+	it("reads a target nested under a condition object", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				exports: {
+					".": {
+						import: { types: "./dist/index.d.ts", default: "./src/entry.tsx" },
+					},
+				},
+			}),
+			"packages/ui/src/entry.tsx": component("Gapped"),
+			"apps/web/src/App.tsx": app('import { Gapped } from "@acme/ui";'),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const { ws, resolution } = resolveFrom(root, "Gapped");
+		expect(resolution.resolved).toBe(true);
+		if (resolution.resolved) {
+			expect(ws.rel(resolution.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/entry.tsx",
+			);
+		}
+	});
+
+	// A fallback array is a list of candidates, and the engine already tries a
+	// list of candidates. The two just never met.
+	it("tries every target of a fallback array", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				exports: {
+					"./Button": ["./src/legacy/Button.tsx", "./src/Button.tsx"],
+				},
+			}),
+			"packages/ui/src/Button.tsx": component("Button"),
+			"apps/web/src/App.tsx": app('import { Button } from "@acme/ui/Button";'),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const { ws, resolution } = resolveFrom(root, "Button");
+		expect(resolution.resolved).toBe(true);
+		if (resolution.resolved) {
+			expect(ws.rel(resolution.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/Button.tsx",
+			);
+		}
+	});
+
+	// A CommonJS-only package says `require`, and the condition set simply did
+	// not list it.
+	it("reads a `require` condition", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				exports: { "./Button": { require: "./src/Button.tsx" } },
+			}),
+			"packages/ui/src/Button.tsx": component("Button"),
+			"apps/web/src/App.tsx": app('import { Button } from "@acme/ui/Button";'),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const { resolution } = resolveFrom(root, "Button");
+		expect(resolution.resolved).toBe(true);
+	});
+
+	// `null` is the one thing in an `exports` table that means "no". The file is
+	// right there and the plain join would have found it, which is exactly why
+	// the table has to be believed.
+	it("refuses a subpath the package blocks with `null`", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify(TSCONFIG),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				exports: { "./internal/*": null, "./*": "./src/*.tsx" },
+			}),
+			"packages/ui/internal/Secret.tsx": component("Secret"),
+			"packages/ui/src/Card.tsx": component("Card"),
+			"apps/web/src/App.tsx": app(
+				'import { Secret } from "@acme/ui/internal/Secret";',
+				'import { Card } from "@acme/ui/Card";',
+			),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const { resolution } = resolveFrom(root, "Secret");
+		expect(resolution.resolved).toBe(false);
+		if (!resolution.resolved && resolution.external) {
+			// Blocked, not built: the package publishes nothing here at all.
+			expect(resolution.module).toBe("@acme/ui/internal/Secret");
+		}
+		// And the sibling pattern the same table declares still resolves, so this
+		// is a refusal of one subpath rather than of the package.
+		const card = resolveFrom(root, "Card");
+		expect(card.resolution.resolved).toBe(true);
+		if (card.resolution.resolved) {
+			expect(card.ws.rel(card.resolution.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/Card.tsx",
+			);
+		}
+	});
+
 	// The subpath used to skip the build-output gate the package root goes
 	// through, so a node in the tree could come from a file `sourceFiles()`
 	// excludes — and coverage would then call every selector for it dead.
