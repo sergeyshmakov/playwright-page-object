@@ -71,10 +71,10 @@ Responses are capped at a serialized length of 40,000. An oversized payload is r
 
 | Code | Raised by | What to do |
 | --- | --- | --- |
-| `invalid_input` | `get_page_object_tree`; invalid `file` values in `map_coverage` | For `get_page_object_tree`, provide `class` or `file`. For either tool, use a project-relative file or an absolute file inside the project root |
+| `invalid_input` | `get_page_object_tree`; invalid `file` values in `get_testid_tree` and `map_coverage` | For `get_page_object_tree`, provide `class` or `file`. For all three, pass a project-relative path, or an absolute one inside the project root. An absolute path outside the root, and the root itself, are rejected here rather than reported as missing |
 | `class_not_found` | `get_page_object_tree`, `map_coverage` | Read `suggestions` (nearest names by edit distance), or call `list_page_objects` |
 | `ambiguous_class` | `get_page_object_tree`, `map_coverage` | Several classes share the name. `candidates` holds `path.ts#ClassName` keys; re-call with `file` set to one of them |
-| `ambiguous_component` | `get_testid_tree` | Several files declare that component name. Re-call with `component` and `file` together |
+| `ambiguous_component` | `get_testid_tree` | Several files declare that component name, or `file` named only a trailing segment that fits more than one scanned file. `candidates` lists them; re-call with the full project-relative `file` |
 | `incomplete_tree` | `get_testid_tree` | The named component could not be rooted. `candidates` lists the other components in that file; or pass `testId` to look the id up across the whole scan |
 | `file_not_found` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | The path or component name selects nothing. Use `suggestions` / `candidates`, or drop the argument to widen the search |
 | `too_large` | all | Apply the `hint`; it names the knobs that tool has |
@@ -231,8 +231,8 @@ The tool has two modes. A tree call uses `file`, `component`, `depth`, `followCo
 
 | Name | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `file` | string | optional | Component file to root a tree at. Invalid or unscanned paths fail with `file_not_found` and may include suggestions |
-| `component` | string | optional | Component name. Combine with `file` when two files declare the same name |
+| `file` | string | optional | Component file to root a tree at. The full project-relative path always wins; a bare file name is accepted only when exactly one scanned file ends with it. An unscanned path fails with `file_not_found` and suggestions; the project root itself, or an absolute path outside it, fails with `invalid_input` |
+| `component` | string | optional | Component name. The tree is rooted at that component's own declaration, so it answers even when nothing in the scan renders it. Combine with `file` when two files declare the same name |
 | `testId` | string | optional | Look up where a known ID is declared across the flat inventory instead of walking a tree |
 | `depth` | integer 1 to 10 | `4` | |
 | `followComponents` | boolean | `true` | Inline the subtrees of child components imported from other files |
@@ -253,12 +253,15 @@ Here, "rendered" means the scanner traced a test ID to a host JSX element. The t
 | `"partial"` | At least one subtree is missing or its placement is unproven. `roots` is real but has holes, and `meta.fidelityReason` counts them |
 | `"flat"` | No entry component could be rooted. `roots` is empty and only `inventory` is meaningful |
 
+A traversal gap is a successful response, not an error: the tool returns the part of the tree it could build and describes the hole. So read `meta.fidelity` and `meta.truncated` before treating `roots` as the whole picture — only `"full"` with no `truncated` flag makes absence from the tree evidence that an ID is not rendered. The one gap that does fail is a `component` the walk could not root at all, which returns `incomplete_tree`.
+
 The flat inventory is complete in all three states, so a `testId` lookup answers correctly whatever the walk did.
 
 ### Node flags
 
 | Flag | Meaning |
 | --- | --- |
+| `testIdAlternatives` | The attribute is a static choice, such as `data-testid={big ? "Main" : "Alt"}`, and exactly one of them renders. `testId` carries the first branch and this carries the rest, so a selector for either is real |
 | `conditional` | Rendered inside a conditional |
 | `repeated` | Rendered inside a `.map(...)` callback |
 | `placement: {"kind":"slot"}` | Passed to the parent component as children. Where, or whether, the parent renders it is not proven |

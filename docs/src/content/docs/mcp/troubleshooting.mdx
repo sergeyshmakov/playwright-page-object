@@ -96,13 +96,15 @@ If the command prints help instead of starting, the `mcp` subcommand is missing 
 
 ## How do I resolve `ambiguous_component` or `incomplete_tree`?
 
-Both come from `get_testid_tree` addressing a component by name.
+Both come from `get_testid_tree` addressing a tree by name.
 
-`ambiguous_component` means several files declare that name. `candidates` lists them; re-call with `component` and `file` together.
+`ambiguous_component` means several files declare that component name — or that `file` gave only a trailing segment, such as `App.tsx`, that fits more than one scanned file. `candidates` lists them either way. Re-call with `component` and `file` together, or with the full project-relative `file`. The full path always beats a partial one, so `src/App.tsx` is never answered with `packages/ui/src/App.tsx`.
 
 `incomplete_tree` means the named component could not be rooted at all. `candidates` lists the other components declared in that file. Two ways forward: request one of those instead, or pass `testId` to look a specific id up across the whole scan. The lookup answers from the flat inventory, which is complete whatever the walk managed to do.
 
-`file_not_found` from the same tool means no component with that name exists in the scanned sources, or none exists in the `file` you named. Drop `file` to search everywhere, or drop both to start from the auto-detected app entry.
+It is the only error a gap in the walk produces. A tree that is merely missing subtrees comes back successfully, with `meta.fidelity: "partial"`.
+
+`file_not_found` from the same tool means no component with that name exists in the scanned sources, or none exists in the `file` you named. Drop `file` to search everywhere, or drop both to start from the auto-detected app entry. A `file` naming the project root itself, or an absolute path outside it, is `invalid_input` instead.
 
 ## What does `fidelity: "partial"` mean?
 
