@@ -261,6 +261,13 @@ export function buildPageObjectTree(
 	 * so stopping at it is not a truncation and saying so invents a hole the
 	 * caller then pays depth to go and look for. The check errs towards reporting
 	 * the cut: an edge that *might* resolve counts as expandable.
+	 *
+	 * A definition already in `defs` is not one of them. `defs` is a flat map and
+	 * members point into it by `$ref`, so a class whose only edges lead to
+	 * definitions the payload already carries is fully readable from where the
+	 * walk stopped — expanding it would add nothing. Without that, every self- or
+	 * mutually recursive page object reported a depth truncation at the boundary
+	 * and sent the caller back for a depth that cannot produce another node.
 	 */
 	const wouldExpand = (entry: DiscoveredClass): boolean => {
 		for (const member of entry.members) {
@@ -271,7 +278,11 @@ export function buildPageObjectTree(
 					}
 					continue;
 				}
-				if (discovery.classes.has(keyFold(edge.ref))) {
+				// Keyed off the discovered class rather than off `edge.ref`, because a
+				// case-insensitive filesystem lets the two spellings differ and `defs`
+				// is keyed by the canonical one.
+				const child = discovery.classes.get(keyFold(edge.ref));
+				if (child && !defs[child.key]) {
 					return true;
 				}
 			}

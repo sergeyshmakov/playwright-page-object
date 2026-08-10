@@ -117,6 +117,59 @@ describe("buildPageObjectTree — structure", () => {
 		expect(Object.keys(tree.defs).sort()).toEqual(["e2e/A.ts#A", "e2e/B.ts#B"]);
 		expect(tree.truncated).toBeUndefined();
 	});
+
+	// The cycle's far end is already in `defs` and members point at it by `$ref`,
+	// so the boundary hides nothing: another level of depth cannot produce a node
+	// the payload does not already carry.
+	it("does not call a self-recursive class truncated at the depth limit", () => {
+		const tree = buildPageObjectTree(
+			makeWorkspace({
+				"e2e/Node.ts": [
+					PRELUDE,
+					'@RootSelector("Node")',
+					"export class Tree extends RootPageObject {",
+					'  @Selector("child")',
+					"  accessor Child = new Tree();",
+					"}",
+				].join("\n"),
+			}),
+			"Tree",
+			{ maxDepth: 1 },
+		);
+		expect(tree.truncated).toBeUndefined();
+		expect(tree.defs["e2e/Node.ts#Tree"].expanded).toBe(true);
+		expect(tree.warnings.map((diag) => diag.code)).not.toContain(
+			"depth-limit-reached",
+		);
+	});
+
+	it("does not call a mutual cycle truncated at the depth limit", () => {
+		const tree = buildPageObjectTree(
+			makeWorkspace({
+				"e2e/A.ts": [
+					PRELUDE,
+					'import { B } from "./B";',
+					'@RootSelector("A")',
+					"export class A extends RootPageObject {",
+					'  @Selector("b")',
+					"  accessor Child = new B();",
+					"}",
+				].join("\n"),
+				"e2e/B.ts": [
+					PRELUDE,
+					'import { A } from "./A";',
+					"export class B extends PageObject {",
+					'  @Selector("a")',
+					"  accessor Back = new A();",
+					"}",
+				].join("\n"),
+			}),
+			"A",
+			{ maxDepth: 2 },
+		);
+		expect(tree.truncated).toBeUndefined();
+		expect(tree.defs["e2e/B.ts#B"].expanded).toBe(true);
+	});
 });
 
 describe("buildPageObjectTree — budgets", () => {
