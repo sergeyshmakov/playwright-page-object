@@ -51,7 +51,7 @@ describe.skipIf(!existsSync(distCli))("MCP server over spawned stdio", () => {
 
 		try {
 			const { tools } = await client.listTools();
-			expect(tools).toHaveLength(4);
+			expect(tools).toHaveLength(5);
 
 			const result = (await client.callTool({
 				name: "get_page_object_tree",

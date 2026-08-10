@@ -146,6 +146,37 @@ export const mapCoverageInput = z.object({
 		.min(0)
 		.default(0)
 		.describe(
-			'Index of the first entry to return, applied to every returned bucket. To page a long list, request it alone and walk it: buckets:["unknownTestIds"], then re-call with offset set to meta.nextOffset.unknownTestIds until that key stops coming back. Bucket totals are always in summary, whatever this call returns.',
+			'Index of the first entry to return, applied to every returned bucket. To page a long list, prefer query_coverage with meta.coverageId; buckets:["unknownTestIds"] + offset works too but is not checked against the snapshot the first page came from. Bucket totals are always in summary, whatever this call returns.',
+		),
+});
+
+export const queryCoverageInput = z.object({
+	coverageId: z
+		.string()
+		.min(1)
+		.describe(
+			"Opaque handle from a previous map_coverage call (meta.coverageId). Carries that call's class / file / attribute / includeRawLocators scope, so none of them is restated here.",
+		),
+	bucket: z
+		.enum(COVERAGE_BUCKETS)
+		.describe(
+			"The single list to page. One bucket at a time is what pages cleanly: offset then means one thing.",
+		),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.default(0)
+		.describe(
+			"Index of the first entry to return. Pass meta.nextOffset from the previous page; when that key is absent the list is exhausted.",
+		),
+	limit: z
+		.number()
+		.int()
+		.min(1)
+		.max(1000)
+		.default(50)
+		.describe(
+			"Entries to return. A page that would still exceed the response cap is cut further and meta.truncatedBuckets says so.",
 		),
 });

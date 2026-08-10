@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ToolError } from "../../mcp/errors";
-import { fail, MAX_RESPONSE_BYTES, ok } from "../../mcp/respond";
+import {
+	envelopeBytes,
+	fail,
+	fitBuckets,
+	MAX_RESPONSE_BYTES,
+	ok,
+} from "../../mcp/respond";
 
 /**
  * The envelope's two failure modes, both of which used to hand a caller advice
@@ -56,6 +62,74 @@ describe("ok", () => {
 		const envelope = parse(ok(oversized()));
 		expect(envelope.error?.code).toBe("too_large");
 		expect(envelope.error?.hint).toContain("depth");
+	});
+});
+
+describe("envelopeBytes", () => {
+	// The auto-degrade fit sizes a response against the cap, so it has to measure
+	// exactly what `ok` will write - including `compactMeta` dropping keys.
+	it("measures what ok actually puts on the wire", () => {
+		const data = { a: [1, 2, 3] };
+		const meta = { total: 3, truncated: false, empty: [] as string[] };
+		const wire = ok(data, meta).content[0].text;
+		expect(envelopeBytes(data, meta)).toBe(wire.length);
+		expect(wire).not.toContain("truncated");
+	});
+});
+
+describe("fitBuckets", () => {
+	const slice = (name: string, entries: unknown[]) => ({ name, entries });
+	/** Serialized cost of one entry, plus the comma that joins it. */
+	const cost = (entry: unknown) => JSON.stringify(entry).length + 1;
+
+	it("keeps everything when the budget is generous", () => {
+		const fit = fitBuckets(10_000, [
+			slice("a", ["one", "two"]),
+			slice("b", ["three"]),
+		]);
+		expect([...fit]).toEqual([
+			["a", 2],
+			["b", 1],
+		]);
+	});
+
+	it("keeps nothing at all when the reserve has eaten the budget", () => {
+		// This is how the genuine `too_large` is reached: nothing is kept, and the
+		// envelope helper then refuses the (still oversized) summary-only payload.
+		const fit = fitBuckets(-50, [slice("a", ["one"]), slice("b", ["two"])]);
+		expect([...fit.values()]).toEqual([0, 0]);
+	});
+
+	/**
+	 * A single greedy pass in bucket order gives the first list everything and
+	 * the last list nothing, which is the wrong answer for a report whose most
+	 * useful bucket ships last.
+	 */
+	it("splits the budget rather than letting the first bucket take it all", () => {
+		const many = Array.from({ length: 50 }, (_, i) => `first-${i}`);
+		const few = ["second-0", "second-1"];
+		const budget = cost(many[0]) * 10 + cost(few[0]) * 2;
+
+		const fit = fitBuckets(budget, [slice("a", many), slice("b", few)]);
+		expect(fit.get("b"), "the second list is not starved").toBe(2);
+		expect(fit.get("a")).toBeGreaterThan(0);
+		expect(fit.get("a")).toBeLessThan(many.length);
+	});
+
+	it("hands what one bucket did not spend to the one that was cut", () => {
+		const many = Array.from({ length: 40 }, (_, i) => `long-entry-${i}`);
+		const budget = cost(many[0]) * 20 + cost("tiny") * 2;
+
+		const shared = fitBuckets(budget, [slice("a", many), slice("b", ["tiny"])]);
+		// b needs one entry out of its half; the other half goes back to a, which
+		// therefore keeps more than the ten its own share would have paid for.
+		expect(shared.get("b")).toBe(1);
+		expect(shared.get("a")).toBeGreaterThan(10);
+	});
+
+	it("never keeps an entry it cannot pay for", () => {
+		const entries = ["x".repeat(500)];
+		expect(fitBuckets(100, [slice("a", entries)]).get("a")).toBe(0);
 	});
 });
 

@@ -6,6 +6,9 @@ export type ToolErrorCode =
 	| "incomplete_tree"
 	| "file_not_found"
 	| "parse_error"
+	// Recoverable by construction: the model re-calls the creation tool and
+	// gets a fresh handle. See `src/mcp/handles.ts`.
+	| "expired_handle"
 	| "too_large"
 	| "max_files_exceeded"
 	| "internal_error";

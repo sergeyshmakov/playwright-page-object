@@ -23,15 +23,29 @@ import {
 	type Workspace,
 } from "../analysis";
 import { ToolError } from "./errors";
+import {
+	type CoverageHandles,
+	HANDLE_LIFETIME_TEXT,
+	handleFailureMessage,
+} from "./handles";
 import type { McpServerOptions } from "./options";
 import { renderPageObjectOutline, renderTestIdOutline } from "./outline";
-import { MAX_ERROR_LIST, ok } from "./respond";
+import {
+	envelopeBytes,
+	fitBuckets,
+	MAX_ERROR_LIST,
+	MAX_RESPONSE_BYTES,
+	ok,
+	type TextResult,
+	type ToolMeta,
+} from "./respond";
 import {
 	COVERAGE_BUCKETS,
 	type getPageObjectTreeInput,
 	type getTestIdTreeInput,
 	type listPageObjectsInput,
 	type mapCoverageInput,
+	type queryCoverageInput,
 } from "./schemas";
 
 /**
@@ -875,10 +889,181 @@ function selectedBuckets(
 	return { buckets };
 }
 
+/** One list this call means to return: its page, and the size it was cut from. */
+interface BucketSlice {
+	name: CoverageBucket;
+	total: number;
+	page: unknown[];
+}
+
+/** What actually shipped, once the byte budget has had its say. */
+interface CoveragePaging {
+	shown: Record<string, number>;
+	nextOffset: Record<string, number>;
+	/** Buckets the size cap cut below the page `limit` had already selected. */
+	truncatedBuckets: CoverageBucket[];
+	/** Entries remain past what shipped, whether cut by `limit` or by bytes. */
+	truncated: boolean;
+	/** Entries shipped across every returned bucket. */
+	returned: number;
+	/** The size cap cut something: `truncatedBuckets` is non-empty. */
+	degraded: boolean;
+}
+
+/**
+ * The coverage envelope, shrunk to fit rather than refused.
+ *
+ * An oversized report used to come back as a `too_large` error carrying advice.
+ * That is the one answer an agent cannot use: it has spent a call, learned
+ * nothing about the repository, and has to guess which knob to turn. So
+ * `summary` and `scope` always ship — they are the totals every capped list is
+ * read against — and each requested bucket ships as much of its page as the
+ * remaining bytes allow, with `meta.truncatedBuckets` naming what was cut and
+ * `meta.nextOffset` saying where to resume.
+ *
+ * Fitting is measured, never estimated, and never quadratic (see
+ * {@link fitBuckets}). The reserve is measured first, with the meta at its
+ * widest — every bucket named as truncated, every `nextOffset` at its largest
+ * possible value, the longest hint — because `compactMeta` only ever removes
+ * keys, so the real meta cannot exceed the one measured here.
+ *
+ * If even that reserve is over the cap, nothing is kept, `ok` refuses the
+ * result, and the caller gets the genuine `too_large` with this tool's own
+ * shrink advice. That case falls out of the arithmetic rather than needing its
+ * own branch.
+ */
+function coverageResult(input: {
+	base: Record<string, unknown>;
+	slices: BucketSlice[];
+	offset: number;
+	buildMeta: (paging: CoveragePaging) => ToolMeta;
+	shrinkHint: string;
+}): TextResult {
+	const { base, slices, offset, buildMeta, shrinkHint } = input;
+
+	const pagingFor = (kept: number[]): CoveragePaging => {
+		const shown: Record<string, number> = {};
+		const nextOffset: Record<string, number> = {};
+		const truncatedBuckets: CoverageBucket[] = [];
+		let truncated = false;
+		let returned = 0;
+		slices.forEach((slice, index) => {
+			const count = kept[index];
+			const end = offset + count;
+			returned += count;
+			if (end < slice.total) {
+				truncated = true;
+				// Only when it is forward progress. A bucket whose first entry does
+				// not fit keeps `end === offset`, and echoing that back as the next
+				// page is an invitation to loop on the same call forever; the hint
+				// says what to do instead.
+				if (end > offset) {
+					nextOffset[slice.name] = end;
+				}
+			}
+			// Only when the page is not the whole bucket: on a complete list the
+			// count is the array's own length and saying it again is noise.
+			if (count !== slice.total) {
+				shown[slice.name] = count;
+			}
+			if (count < slice.page.length) {
+				truncatedBuckets.push(slice.name);
+			}
+		});
+		return {
+			shown,
+			nextOffset,
+			truncatedBuckets,
+			truncated,
+			returned,
+			degraded: truncatedBuckets.length > 0,
+		};
+	};
+
+	const dataFor = (kept: number[]): Record<string, unknown> => {
+		const data: Record<string, unknown> = { ...base };
+		slices.forEach((slice, index) => {
+			data[slice.name] =
+				kept[index] === slice.page.length
+					? slice.page
+					: slice.page.slice(0, kept[index]);
+		});
+		return data;
+	};
+
+	// The ordinary answer, measured once. Everything that already fits takes this
+	// path and is byte-identical to what it was before auto-degrade existed.
+	const whole = slices.map((slice) => slice.page.length);
+	const wholeData = dataFor(whole);
+	const wholeMeta = buildMeta(pagingFor(whole));
+	if (envelopeBytes(wholeData, wholeMeta) <= MAX_RESPONSE_BYTES) {
+		return ok(wholeData, wholeMeta, { shrinkHint });
+	}
+
+	const widestMeta = buildMeta({
+		shown: Object.fromEntries(
+			slices.map((slice) => [slice.name, slice.page.length]),
+		),
+		nextOffset: Object.fromEntries(
+			slices.map((slice) => [slice.name, offset + slice.page.length]),
+		),
+		truncatedBuckets: slices.map((slice) => slice.name),
+		truncated: true,
+		returned: 0,
+		degraded: true,
+	});
+	const reserve = envelopeBytes(dataFor(slices.map(() => 0)), widestMeta);
+	const fit = fitBuckets(
+		MAX_RESPONSE_BYTES - reserve,
+		slices.map((slice) => ({ name: slice.name, entries: slice.page })),
+	);
+	const kept = slices.map((slice) => fit.get(slice.name) ?? 0);
+	return ok(dataFor(kept), buildMeta(pagingFor(kept)), { shrinkHint });
+}
+
+/**
+ * What to say when the size cap cut the page down.
+ *
+ * Names the lists that lost entries and the exact next call, because the value
+ * of degrading over erroring is only realised if the caller knows how to
+ * continue. A bucket that lost *everything* is the one case `nextOffset` cannot
+ * express, so it gets its own sentence.
+ */
+function degradeHint(
+	paging: CoveragePaging,
+	slices: BucketSlice[],
+	coverageId: string | undefined,
+): string | undefined {
+	if (!paging.degraded) {
+		return undefined;
+	}
+	const starved = slices
+		.filter(
+			(slice) =>
+				slice.page.length > 0 && (paging.shown[slice.name] ?? -1) === 0,
+		)
+		.map((slice) => slice.name);
+	const cut = paging.truncatedBuckets;
+	// The worked example resumes a bucket that actually has a next page; a
+	// starved one has no offset to name and gets its own sentence instead.
+	const resumable = cut.find((name) => paging.nextOffset[name] !== undefined);
+	const resume =
+		coverageId && resumable
+			? `query_coverage {"coverageId":"${coverageId}","bucket":"${resumable}","offset":${paging.nextOffset[resumable]}}`
+			: "a lower `limit`, then `offset`";
+	const starvation =
+		starved.length > 0
+			? ` ${starved.join(", ")} held no entry small enough for the bytes left over; request that bucket on its own so it gets the whole budget.`
+			: "";
+	return `This page would have exceeded the ${MAX_RESPONSE_BYTES}-byte response cap, so ${cut.join(", ")} ${cut.length > 1 ? "were" : "was"} cut to fit instead of the call failing - summary still reports every bucket's real size. Continue with ${resume}.${starvation}`;
+}
+
 export function handleMapCoverage(
 	workspace: Workspace,
 	args: z.infer<typeof mapCoverageInput>,
-	options: Pick<McpServerOptions, "assumeForwarded"> = {},
+	options: Pick<McpServerOptions, "assumeForwarded"> & {
+		handles?: CoverageHandles;
+	} = {},
 ) {
 	let poInclude: string[] | undefined;
 	let alsoIncluded: string[] | undefined;
@@ -984,81 +1169,153 @@ export function handleMapCoverage(
 		args.buckets as CoverageBucket[] | undefined,
 		args.includeUnused,
 	);
-	// `summary` and `scope` always ship: they are the totals every capped list is
-	// read against, and a bucket selection that hid them would turn a shorter
-	// response into an unreadable one.
-	const data: Record<string, unknown> = {
-		summary: report.summary,
-		scope: report.scope,
-	};
 	// One `offset` across every returned bucket, rather than one per bucket: the
 	// way an agent actually pages is to ask for a single bucket and walk it
-	// (`buckets:["unknownTestIds"]`), and a map of offsets keyed by bucket is a
-	// second thing to get wrong for a case nobody drives. The totals are in
-	// `summary` for all six buckets whatever this call returned, so `meta` only
-	// has to say what is missing from *here*: how many came back, and where the
-	// next page starts.
+	// (`query_coverage`, or `buckets:["unknownTestIds"]`), and a map of offsets
+	// keyed by bucket is a second thing to get wrong for a case nobody drives.
+	// The totals are in `summary` for all six buckets whatever this call
+	// returned, so `meta` only has to say what is missing from *here*: how many
+	// came back, and where the next page starts.
 	const offset = args.offset;
-	const shown: Record<string, number> = {};
-	const nextOffset: Record<string, number> = {};
-	let truncated = false;
-	let requested = 0;
-	let returned = 0;
+	const slices: BucketSlice[] = [];
 	let largest = 0;
 	for (const bucket of BUCKET_ORDER) {
 		if (!buckets.has(bucket)) {
 			continue;
 		}
 		const list: unknown[] = report[bucket];
-		const page = list.slice(offset, offset + args.limit);
-		data[bucket] = page;
-		requested += 1;
-		returned += page.length;
 		largest = Math.max(largest, list.length);
-		const end = offset + page.length;
-		if (end < list.length) {
-			truncated = true;
-			nextOffset[bucket] = end;
-		}
-		// Only when the page is not the whole bucket: on a complete list the count
-		// is the array's own length and saying it again is noise.
-		if (page.length !== list.length) {
-			shown[bucket] = page.length;
-		}
+		slices.push({
+			name: bucket,
+			total: list.length,
+			page: list.slice(offset, offset + args.limit),
+		});
 	}
 
-	return ok(
-		data,
-		{
+	const attributeSource = args.attribute
+		? "param"
+		: workspace.testIdAttribute().source;
+	// Minted on every call, including `buckets: []` — summary-first then page the
+	// one bucket that matters is the workflow this is for, and the summary-only
+	// call is where that walk starts.
+	const coverageId = options.handles?.create(workspace, {
+		report,
+		attributeSource,
+		assumeForwarded: options.assumeForwarded === true ? true : undefined,
+		alsoIncluded,
+		note,
+	});
+
+	return coverageResult({
+		// `summary` and `scope` always ship: they are the totals every capped list
+		// is read against, and a bucket selection that hid them would turn a
+		// shorter response into an unreadable one.
+		base: { summary: report.summary, scope: report.scope },
+		slices,
+		offset,
+		shrinkHint: coverageShrinkHint(
+			args.buckets as CoverageBucket[] | undefined,
+			args.limit,
+			coverageId,
+		),
+		buildMeta: (paging) => ({
 			attribute: report.attribute,
-			attributeSource: args.attribute
-				? "param"
-				: workspace.testIdAttribute().source,
+			attributeSource,
 			playwrightConfig: configFileOf(workspace),
+			// In `meta`, next to `offset` / `shown` / `nextOffset`: the handle is a
+			// paging cursor, and every other paging field already lives here. An
+			// agent reading `meta.nextOffset` needs the id it belongs to in the same
+			// place, not one level away in the report body.
+			coverageId,
 			alsoIncluded,
 			note,
 			assumeForwarded: options.assumeForwarded === true ? true : undefined,
 			ignored,
 			offset: offset > 0 ? offset : undefined,
-			shown: Object.keys(shown).length > 0 ? shown : undefined,
-			nextOffset: Object.keys(nextOffset).length > 0 ? nextOffset : undefined,
+			shown: Object.keys(paging.shown).length > 0 ? paging.shown : undefined,
+			nextOffset:
+				Object.keys(paging.nextOffset).length > 0
+					? paging.nextOffset
+					: undefined,
+			truncatedBuckets: paging.truncatedBuckets,
 			warnings: report.warnings,
-			truncated,
+			truncated: paging.truncated,
 			// A coverage score computed against the wrong attribute used to read as
 			// a healthy `1` (zero of zero ids covered) — the one number in this
 			// payload nobody double-checks. It gets the loudest treatment.
 			hint: withEnvironmentHint(
 				report.warnings,
-				pagingHint(offset, requested, returned, largest),
+				degradeHint(paging, slices, coverageId) ??
+					pagingHint(offset, slices.length, paging.returned, largest),
 			),
-		},
-		{
-			shrinkHint: coverageShrinkHint(
-				args.buckets as CoverageBucket[] | undefined,
-				args.limit,
+		}),
+	});
+}
+
+/**
+ * Pages one bucket of a report a previous `map_coverage` call already built.
+ *
+ * The handle is what makes the walk checkable. `map_coverage` with
+ * `{buckets:["x"], offset:N}` returns the same entries just as cheaply — the
+ * report is memoized per epoch — but it re-derives the report each time, so an
+ * edit between two pages silently renumbers the list underneath the offsets and
+ * the response says nothing. Here the same edit invalidates the handle and the
+ * caller is told, which is the difference between a paging walk that can be
+ * trusted and one that merely usually works.
+ */
+export function handleQueryCoverage(
+	workspace: Workspace,
+	args: z.infer<typeof queryCoverageInput>,
+	handles: CoverageHandles,
+) {
+	const lookup = handles.resolve(args.coverageId, workspace);
+	if (!lookup.ok) {
+		throw new ToolError("expired_handle", handleFailureMessage(lookup.reason), {
+			hint: `Re-call map_coverage with the arguments that produced this id (its scope is not recoverable from the id itself) and use the new meta.coverageId. ${HANDLE_LIFETIME_TEXT}`,
+		});
+	}
+	const { report, attributeSource, assumeForwarded, alsoIncluded, note } =
+		lookup.snapshot;
+
+	const list: unknown[] = report[args.bucket];
+	const slice: BucketSlice = {
+		name: args.bucket,
+		total: list.length,
+		page: list.slice(args.offset, args.offset + args.limit),
+	};
+
+	return coverageResult({
+		base: { summary: report.summary, scope: report.scope },
+		slices: [slice],
+		offset: args.offset,
+		shrinkHint: `Re-call with a lower \`limit\` (this call used ${args.limit}), then page the rest with \`offset\`. map_coverage with buckets: [] returns the totals alone.`,
+		buildMeta: (paging) => ({
+			attribute: report.attribute,
+			attributeSource,
+			playwrightConfig: configFileOf(workspace),
+			// Echoed so a page is a complete instruction for the next one: the id
+			// stays valid for as long as the sources do not change.
+			coverageId: args.coverageId,
+			bucket: args.bucket,
+			alsoIncluded,
+			note,
+			assumeForwarded,
+			offset: args.offset > 0 ? args.offset : undefined,
+			// One bucket, so one number rather than the record `map_coverage`
+			// returns: `meta.nextOffset` copies straight into the next call's
+			// `offset`, which is what makes the walk hard to get wrong.
+			shown: paging.shown[args.bucket],
+			nextOffset: paging.nextOffset[args.bucket],
+			truncatedBuckets: paging.truncatedBuckets,
+			warnings: report.warnings,
+			truncated: paging.truncated,
+			hint: withEnvironmentHint(
+				report.warnings,
+				degradeHint(paging, [slice], args.coverageId) ??
+					pagingHint(args.offset, 1, paging.returned, list.length),
 			),
-		},
-	);
+		}),
+	});
 }
 
 /**
@@ -1073,18 +1330,25 @@ export function handleMapCoverage(
 export function coverageShrinkHint(
 	buckets: CoverageBucket[] | undefined,
 	limit: number,
+	coverageId?: string,
 ): string {
 	const lowerLimit = `a lower \`limit\` (this call used ${limit})`;
+	// Only reachable when even `summary` + `scope` overflow, since a bucket page
+	// is now trimmed to fit rather than refused - but that is exactly the call
+	// where naming a handle nobody can spend would be noise.
+	const handle = coverageId
+		? ` Or page one bucket at a time with query_coverage {"coverageId":"${coverageId}", ...}.`
+		: "";
 
 	if (buckets === undefined) {
-		return `Re-call with ${lowerLimit}, \`buckets\` naming only the lists you need, or includeUnused:false. \`buckets: []\` returns summary and scope alone, which always fits.`;
+		return `Re-call with ${lowerLimit}, \`buckets\` naming only the lists you need, or includeUnused:false. \`buckets: []\` returns summary and scope alone, which always fits.${handle}`;
 	}
 	if (buckets.length > 1) {
-		return `Re-call with ${lowerLimit}, or fewer \`buckets\` - one at a time pages cleanly through \`offset\`. (\`includeUnused\` is ignored while \`buckets\` is set.)`;
+		return `Re-call with ${lowerLimit}, or fewer \`buckets\` - one at a time pages cleanly through \`offset\`. (\`includeUnused\` is ignored while \`buckets\` is set.)${handle}`;
 	}
 	// One bucket already, so the only lever left is the page size. Naming
 	// `buckets` again here is what produced the loop.
-	return `Re-call with ${lowerLimit}, then page the rest with \`offset\`. \`buckets: []\` returns summary and scope alone if you only need the totals.`;
+	return `Re-call with ${lowerLimit}, then page the rest with \`offset\`. \`buckets: []\` returns summary and scope alone if you only need the totals.${handle}`;
 }
 
 /**

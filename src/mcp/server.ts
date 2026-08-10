@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Workspace as AnalysisWorkspace, type Workspace } from "../analysis";
+import { CoverageHandles, HANDLE_LIFETIME_TEXT } from "./handles";
 import type { McpServerOptions } from "./options";
 import { safeHandler } from "./respond";
 import {
@@ -9,12 +10,14 @@ import {
 	getTestIdTreeInput,
 	listPageObjectsInput,
 	mapCoverageInput,
+	queryCoverageInput,
 } from "./schemas";
 import {
 	handleGetPageObjectTree,
 	handleGetTestIdTree,
 	handleListPageObjects,
 	handleMapCoverage,
+	handleQueryCoverage,
 } from "./tools";
 
 const READ_ONLY = {
@@ -32,9 +35,9 @@ const READ_ONLY = {
  * client's own 500k hard limit. It is an unknown key to every other client and
  * is ignored, so it costs nothing to send.
  *
- * Only the two tools that legitimately answer big get it: a whole-repository
- * coverage report and a deep selector graph. The list and tree tools page, and
- * a large answer from them means the caller should narrow instead.
+ * Only the tools that legitimately answer big get it: the two coverage tools
+ * and a deep selector graph. The list and test-id tree tools page or narrow,
+ * and a large answer from them means the caller should do that instead.
  */
 const LARGE_RESULT = {
 	"anthropic/maxResultSizeChars": 400_000,
@@ -44,7 +47,11 @@ const INSTRUCTIONS = `Static-analysis tools for playwright-page-object test suit
 
 Results reflect the files on disk at the moment of the call - edits (including Playwright config changes) are visible to the next call. A restart is only needed to change the server's own flags, such as --src-dir scope or --attribute.
 
-Typical flow: list_page_objects first (never glob for page objects), get_page_object_tree before writing or editing a test, get_testid_tree before writing any selector (never invent a test id), map_coverage when a locator times out or after renaming test ids.`;
+Typical flow: list_page_objects first (never glob for page objects), get_page_object_tree before writing or editing a test, get_testid_tree before writing any selector (never invent a test id), map_coverage when a locator times out or after renaming test ids.
+
+Reading a coverage report: call map_coverage summary-first with buckets: [] to get the totals and the scope for a few hundred bytes, then page the one list that matters with query_coverage, passing meta.coverageId and one bucket. Copy meta.nextOffset into the next call's offset and stop when that key stops coming back; summary reports every bucket's real size throughout, so a capped page always says how much it is hiding. ${HANDLE_LIFETIME_TEXT}
+
+No response is ever refused for being long. When a page would exceed the size cap it is trimmed instead: summary and scope always ship, meta.truncatedBuckets names the lists that were cut, and meta.nextOffset says where to resume. An empty bucket in such a response means "cut here", not "nothing found" - read summary.`;
 
 const LIST_DESCRIPTION = `Lists every Playwright page-object class in this repository that uses playwright-page-object decorators (@RootSelector, @Selector, @ListSelector, @SelectorBy*), with its file path, host kind (rootPageObject / rootPlain / pageFallback / fragment / nestedPageObject / externalControl), root selector, fixture bindings, and member/method counts. Call this FIRST - before grepping or globbing for page objects - whenever you need to know what page objects already exist, whether one already covers the screen you are about to test, or the exact class name to pass to get_page_object_tree. Returns a compact JSON array. It does not include member details; use get_page_object_tree for those. meta.total always reports the unpaged count; page a large index with limit + offset, following meta.nextOffset.`;
 
@@ -52,7 +59,9 @@ const TREE_DESCRIPTION = `Returns the full selector tree of one page-object clas
 
 const TESTID_DESCRIPTION = `Returns the tree of test-id attributes rendered by the app's components (JSX/TSX), in nesting order, including ids built from template literals (reported as patterns like CartItem_* with the source expression) and, when followComponents is true, ids contributed by child components imported from other files. The attribute name comes from the Playwright config (use.testIdAttribute), defaulting to data-testid. Use it before writing any selector so you reference ids that actually exist and nest them correctly, when a locator resolves to zero elements, and when deciding between @Selector and @ListSelector for a repeated row. Address by "file", by "component" name, or by both when two files declare the same component name; or pass "testId" to find where a known id is rendered. Ids rendered inside a conditional are flagged conditional; ids inside .map() are flagged repeated. One-hop prop forwarding is resolved; anything deeper is marked unresolved rather than guessed.`;
 
-const COVERAGE_DESCRIPTION = `Cross-references the selectors declared by page-object classes against the test ids actually rendered in the app source and returns: matched (with match confidence), uncoveredTestIds (rendered ids no page object references - gaps you could fill, each with a ready-to-paste decorator suggestion), deadSelectors (selectors whose test id is rendered nowhere - broken or stale locators, with nearest-id typo suggestions), nonTestIdSelectors (role/text/label selectors - reported for awareness, NEVER counted as dead since they cannot be checked statically), and unknown buckets for dynamic values and for ids passed to components that never provably forward them to the DOM. Use it after refactoring a component or renaming test ids, before adding accessors to an existing page object, and when a test times out on a locator - it tells you whether the id disappeared from the UI. Omit class and file to scan the whole project. summary.coverage is null rather than 1 when nothing was matchable, and scope reports what the two sides were drawn from - read the warnings before acting on a number. Request only the lists you need with buckets.`;
+const COVERAGE_DESCRIPTION = `Cross-references the selectors declared by page-object classes against the test ids actually rendered in the app source and returns: matched (with match confidence), uncoveredTestIds (rendered ids no page object references - gaps you could fill, each with a ready-to-paste decorator suggestion), deadSelectors (selectors whose test id is rendered nowhere - broken or stale locators, with nearest-id typo suggestions), nonTestIdSelectors (role/text/label selectors - reported for awareness, NEVER counted as dead since they cannot be checked statically), and unknown buckets for dynamic values and for ids passed to components that never provably forward them to the DOM. Use it after refactoring a component or renaming test ids, before adding accessors to an existing page object, and when a test times out on a locator - it tells you whether the id disappeared from the UI. Omit class and file to scan the whole project. summary.coverage is null rather than 1 when nothing was matchable, and scope reports what the two sides were drawn from - read the warnings before acting on a number. Request only the lists you need with buckets; buckets: [] returns summary and scope alone, which is the cheapest way to see the shape of the answer before asking for a list. Every response carries meta.coverageId, an opaque handle to this exact report that query_coverage pages one bucket at a time without restating class / file / attribute. ${HANDLE_LIFETIME_TEXT} A page too large for the response cap is trimmed rather than refused: meta.truncatedBuckets names what was cut and meta.nextOffset says where to resume.`;
+
+const QUERY_DESCRIPTION = `Pages one bucket of a coverage report that map_coverage already built, addressed by the opaque meta.coverageId that call returned. Takes coverageId, one bucket name, offset and limit, and returns that bucket's page alongside the same summary and scope map_coverage ships, so a capped page still reports every bucket's real size. Use it to walk a long list to its end - copy meta.nextOffset into the next call's offset and stop when that key stops coming back - and to avoid restating the class / file / attribute / includeRawLocators scope of the original call, which the handle carries. It also holds the report still: the same id answers from the same snapshot every time, and if the sources change underneath it the call fails with expired_handle instead of quietly renumbering the list your offsets point into. ${HANDLE_LIFETIME_TEXT}`;
 
 function readVersion(): string {
 	try {
@@ -89,6 +98,10 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		{ name: "playwright-page-object", version: readVersion() },
 		{ instructions: INSTRUCTIONS },
 	);
+
+	// One store per server, so a handle cannot outlive the process that issued it
+	// or reach a workspace it was not built against.
+	const handles = new CoverageHandles();
 
 	server.registerTool(
 		"list_page_objects",
@@ -136,8 +149,21 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		safeHandler((args) =>
 			handleMapCoverage(getWorkspace(), args, {
 				assumeForwarded: options.assumeForwarded,
+				handles,
 			}),
 		),
+	);
+
+	server.registerTool(
+		"query_coverage",
+		{
+			title: "Page a coverage report",
+			description: QUERY_DESCRIPTION,
+			inputSchema: queryCoverageInput,
+			annotations: READ_ONLY,
+			_meta: LARGE_RESULT,
+		},
+		safeHandler((args) => handleQueryCoverage(getWorkspace(), args, handles)),
 	);
 
 	return server;

@@ -17,7 +17,7 @@ import { logger } from "./logger";
  * 200 KB is roughly 50k tokens — deliberately larger than what a client will
  * accept whole, because the client is the right place to decide that. Claude
  * Code allows 25k tokens by default, raises a tool's own ceiling to the
- * `anthropic/maxResultSizeChars` annotation (see `MAX_RESULT_SIZE_CHARS` in
+ * `anthropic/maxResultSizeChars` annotation (see `LARGE_RESULT` in
  * server.ts) up to 500k, and spills anything past that to disk with a file
  * reference. The earlier 40 KB was stricter than every client we target and
  * was rejecting answers all of them would have taken: on a 4,924-file repo it
@@ -100,6 +100,84 @@ export function ok(
 			{ hint: options.shrinkHint ?? GENERIC_SHRINK_HINT },
 		),
 	);
+}
+
+/**
+ * Bytes {@link ok} would put on the wire for this payload.
+ *
+ * The same serialization `ok` performs, so a caller sizing a response against
+ * the cap and the cap itself cannot disagree about what counts — `compactMeta`
+ * removing an empty array is worth a few hundred bytes on a coverage report.
+ */
+export function envelopeBytes(data: unknown, meta?: ToolMeta): number {
+	const cleanedMeta = compactMeta(meta);
+	const payload: Record<string, unknown> = { ok: true, data };
+	if (cleanedMeta) {
+		payload.meta = cleanedMeta;
+	}
+	return JSON.stringify(payload).length;
+}
+
+/** One list a response would like to ship, and the entries it holds. */
+export interface BucketSlice {
+	name: string;
+	entries: unknown[];
+}
+
+/** How many entries of each slice fit, keyed by slice name. */
+export type BucketFit = Map<string, number>;
+
+/**
+ * Spends a byte budget across several lists.
+ *
+ * The fit is measured, not estimated, but it is measured *once per entry*:
+ * every entry is serialized a single time up front and the algorithm then works
+ * on integers. Re-serializing the whole payload after each candidate entry
+ * would be quadratic on the lists this exists for (a 981-entry bucket on a
+ * 4,924-file repository), and estimating from an average entry size is wrong in
+ * the direction that matters — one long `raw` expression and the response
+ * overshoots the cap it was trying to respect.
+ *
+ * Two passes, because a single greedy walk in bucket order starves the last
+ * bucket: an equal share each, then whatever nobody spent is offered to the
+ * lists that were cut, in order. Every entry costs its serialized length plus
+ * one byte for the comma that joins it.
+ */
+export function fitBuckets(budget: number, slices: BucketSlice[]): BucketFit {
+	const fit: BucketFit = new Map();
+	if (slices.length === 0) {
+		return fit;
+	}
+	const sizes = slices.map((slice) =>
+		slice.entries.map((entry) => JSON.stringify(entry).length + 1),
+	);
+	const share = Math.floor(Math.max(budget, 0) / slices.length);
+	const kept = slices.map(() => 0);
+	// The rounding remainder joins the shared pot rather than being lost.
+	let spare = Math.max(budget, 0) - share * slices.length;
+
+	slices.forEach((_, index) => {
+		let spent = 0;
+		const own = sizes[index];
+		while (kept[index] < own.length && spent + own[kept[index]] <= share) {
+			spent += own[kept[index]];
+			kept[index] += 1;
+		}
+		spare += share - spent;
+	});
+
+	slices.forEach((_, index) => {
+		const own = sizes[index];
+		while (kept[index] < own.length && own[kept[index]] <= spare) {
+			spare -= own[kept[index]];
+			kept[index] += 1;
+		}
+	});
+
+	slices.forEach((slice, index) => {
+		fit.set(slice.name, kept[index]);
+	});
+	return fit;
 }
 
 /** A list of things to pick from stops being one somewhere around a dozen. */
