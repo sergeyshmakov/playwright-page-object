@@ -38,6 +38,7 @@ import { registerFileAdmission } from "./util/fileBudget";
 import {
 	foldPath,
 	isDeclarationFile,
+	isGlobPattern,
 	isIgnoredPath,
 	isOutsideRoot,
 	matchesAnyGlob,
@@ -1014,8 +1015,6 @@ function precheckMaxFiles(
 	}
 }
 
-/** Characters that make a pattern a glob rather than a plain path. */
-const GLOB_MAGIC = /[*?[\]{}]/;
 /**
  * Extensions the scanner can actually select a single file with. A trailing
  * `.config` or `.partials` is *not* one of them: those are directory names.
@@ -1091,7 +1090,7 @@ function normalizeScopePattern(
 	let missing: string | undefined;
 	if (body === "" || body === ".") {
 		normalized = DIRECTORY_EXPANSION;
-	} else if (GLOB_MAGIC.test(body)) {
+	} else if (isGlobPattern(body)) {
 		normalized = body;
 	} else {
 		const stat = statScope(root, body);

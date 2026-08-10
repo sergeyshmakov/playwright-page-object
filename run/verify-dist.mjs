@@ -45,21 +45,47 @@ if (cli !== undefined && !cli.startsWith("#!")) {
 	);
 }
 
-// The library entry must stay free of the CLI/MCP dependency graph so
-// decorator-only consumers never load it. dist/cli.js reaches the MCP
-// module only through the external self-reference, so it must not inline
-// the SDK or ts-morph either.
-const forbidden = ["ts-morph", "@modelcontextprotocol", "zod"];
-for (const artifact of ["dist/index.js", "dist/index.mjs", "dist/cli.js"]) {
+// Everything the analysis engine drags in. The library entry must stay free of
+// it so decorator-only consumers never load it, and dist/cli.js reaches the MCP
+// module only through the external self-reference, so it must not name any of
+// this either - not the SDK, not ts-morph, and not the glob and exports-map
+// readers the engine resolves paths with.
+const analysisGraph = [
+	"ts-morph",
+	"@modelcontextprotocol",
+	"zod",
+	"picomatch",
+	"resolve.exports",
+];
+
+// `commander` is the CLI's own argument parser, required directly by
+// dist/cli.js - which is what its entry in `dependencies` is for. It has no
+// business in the library entry.
+const forbidden = new Map([
+	["dist/index.js", [...analysisGraph, "commander"]],
+	["dist/index.mjs", [...analysisGraph, "commander"]],
+	["dist/cli.js", analysisGraph],
+]);
+
+for (const [artifact, dependencies] of forbidden) {
 	const source = contents.get(artifact);
 	if (source === undefined) {
 		continue;
 	}
-	for (const dependency of forbidden) {
+	for (const dependency of dependencies) {
 		if (source.includes(dependency)) {
 			errors.push(`${artifact} references "${dependency}"`);
 		}
 	}
+}
+
+// And commander must stay an external require rather than being bundled in:
+// `--version` and `--help` are meant to answer without loading a parser copy,
+// and an inlined one would also silently pin a second version of it.
+if (cli !== undefined && !/require\(["']commander["']\)/.test(cli)) {
+	errors.push(
+		'dist/cli.js does not require "commander" externally - the parser was inlined',
+	);
 }
 
 if (errors.length > 0) {

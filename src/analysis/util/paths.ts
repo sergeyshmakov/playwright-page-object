@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import picomatch from "picomatch";
 
 /** Converts any OS path to posix separators, collapsing `\\` runs. */
 export function toPosix(input: string): string {
@@ -160,62 +161,91 @@ export function isDeclarationFile(filePath: string): boolean {
 	return /\.d\.[cm]?ts$/.test(filePath);
 }
 
-/**
- * Minimal glob matcher (`*`, `**`, `?`, `{a,b}`) over posix paths. The engine
- * only ever matches its own include/exclude options with it, so a full
- * `picomatch` dependency would not pay for itself.
- */
-export function globToRegExp(glob: string): RegExp {
-	let out = "";
-	let index = 0;
-	const pattern = toPosix(glob);
-	while (index < pattern.length) {
-		const char = pattern[index];
-		if (char === "*") {
-			if (pattern[index + 1] === "*") {
-				// `**/` consumes any number of directories, including none.
-				if (pattern[index + 2] === "/") {
-					out += "(?:.*/)?";
-					index += 3;
-					continue;
-				}
-				out += ".*";
-				index += 2;
-				continue;
-			}
-			out += "[^/]*";
-			index += 1;
-			continue;
-		}
-		if (char === "?") {
-			out += "[^/]";
-			index += 1;
-			continue;
-		}
-		if (char === "{") {
-			const end = pattern.indexOf("}", index);
-			if (end > index) {
-				const options = pattern.slice(index + 1, end).split(",");
-				out += `(?:${options.map(escapeRegExp).join("|")})`;
-				index = end + 1;
-				continue;
-			}
-		}
-		out += escapeRegExp(char);
-		index += 1;
-	}
-	return new RegExp(`^${out}$`);
-}
-
 export function escapeRegExp(input: string): string {
 	return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function matchesAnyGlob(relPosix: string, globs: string[]): boolean {
-	for (const glob of globs) {
-		if (globToRegExp(glob).test(relPosix)) {
-			return true;
-		}
+/**
+ * How the engine reads a glob — picomatch, with no room for a second opinion.
+ *
+ * There used to be a hand-rolled matcher here on the grounds that the engine
+ * only matched its own include/exclude options with it. `--src-dir` ended that:
+ * a caller's pattern now reaches *two* engines, this one and ts-morph's
+ * `addSourceFilesAtPaths`, which globs with picomatch through tinyglobby. Every
+ * shape the hand-rolled matcher read differently — a star inside a brace, a
+ * nested brace, a character class, an extglob, a trailing `**` over the
+ * directory itself — selected files into the project that the scope predicate
+ * then rejected, and the analysis came out silently empty.
+ *
+ * `dot: true` is not a detail: picomatch hides dotfiles by default and the
+ * hand-rolled matcher had no such rule, so without it the recursive source glob
+ * would stop seeing `src/.storybook/a.ts` — components the engine has to read.
+ *
+ * `nonegate: true` keeps a leading `!` literal. Negation is resolved exactly one
+ * layer up, in `withNormalizedScope`, which rewrites a negated scope into an
+ * `exclude` entry; letting picomatch also interpret it would both double-handle
+ * the patterns that go through there and give the option bags that do not
+ * (`DiscoverOptions.include` and friends) an incoherent any-of semantics, where
+ * `["a/**", "!a/b/**"]` matches everything under `a/b` through the first
+ * pattern anyway.
+ *
+ * `windows: false` pins the separator rules. Left unset, picomatch reads the
+ * host's `path.sep`, so a Windows dev box would accept `src\a.ts` where CI on
+ * Linux would not. Every path handed to {@link matchesAnyGlob} is
+ * posix-separated already.
+ */
+const GLOB_OPTIONS = { dot: true, nonegate: true, windows: false };
+
+/**
+ * Compiled matchers, keyed by the pattern list they were built from.
+ *
+ * Every call site matches *every* scanned file against the same include or
+ * exclude array, so the compile is paid once per scope rather than once per
+ * pattern per file. The cache is dropped wholesale once it grows past the
+ * handful of distinct scopes a session really uses — a long-lived MCP server
+ * must not accumulate a matcher per workspace it has ever been asked about.
+ */
+const MATCHER_CACHE_LIMIT = 64;
+const matcherCache = new Map<string, (input: string) => boolean>();
+
+function globMatcher(globs: readonly string[]): (input: string) => boolean {
+	const patterns = globs.map(toPosix);
+	const key = JSON.stringify(patterns);
+	const cached = matcherCache.get(key);
+	if (cached) {
+		return cached;
 	}
-	return false;
+	const matcher = picomatch(patterns, GLOB_OPTIONS);
+	if (matcherCache.size >= MATCHER_CACHE_LIMIT) {
+		matcherCache.clear();
+	}
+	matcherCache.set(key, matcher);
+	return matcher;
+}
+
+/**
+ * True when a workspace-relative posix path matches any of `globs`.
+ *
+ * Patterns are normalised to posix first: a caller may perfectly well spell one
+ * `src\**\*.ts`, and under {@link GLOB_OPTIONS} a backslash would otherwise be
+ * read as an escape rather than a separator.
+ */
+export function matchesAnyGlob(relPosix: string, globs: string[]): boolean {
+	if (globs.length === 0) {
+		return false;
+	}
+	return globMatcher(globs)(relPosix);
+}
+
+/**
+ * True when a pattern is a glob rather than a plain path.
+ *
+ * Asked of picomatch rather than of a hand-written magic-character set, because
+ * the verdict has to agree with the matcher that will read the pattern next: a
+ * set of `[*?[\]{}]` called `src/@(foo|bar)` and `+(a|b).ts` plain paths, so the
+ * scope normalizer expanded them as if they were directories and produced a
+ * pattern that matched nothing at all.
+ */
+export function isGlobPattern(pattern: string): boolean {
+	return picomatch.scan(toPosix(pattern)).isGlob;
 }

@@ -268,6 +268,56 @@ describe("Workspace scope diagnostics", () => {
 });
 
 /**
+ * One pattern, one engine.
+ *
+ * A scope pattern is read twice: once by ts-morph's `addSourceFilesAtPaths`,
+ * which globs with picomatch through tinyglobby, and once by the scope
+ * predicate that decides what `sourceFiles()` hands out. While the second was
+ * hand-rolled the two disagreed about braces, character classes and extglobs —
+ * the files were added to the project and then dropped from every answer, so
+ * the analysis came back empty with nothing to say about why.
+ */
+describe("Workspace scope globs", () => {
+	it("analyses the files a brace pattern selects", () => {
+		const root = scratch({
+			"src/a/b.tsx": "export const B = () => null;\n",
+			"src/a/c.ts": "export const c = 1;\n",
+			"src/a/d.md": "not source\n",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["**/{*.ts,*.tsx}"],
+		});
+		expect(rels(ws).sort()).toEqual(["src/a/b.tsx", "src/a/c.ts"]);
+	});
+
+	it("analyses the files an extglob selects", () => {
+		const root = scratch({
+			"src/components/A.tsx": "export const A = () => null;\n",
+			"src/pages/B.tsx": "export const B = () => null;\n",
+			"src/legacy/C.tsx": "export const C = () => null;\n",
+		});
+		const ws = Workspace.acquire({
+			projectRoot: root,
+			include: ["src/@(components|pages)/**"],
+		});
+		expect(rels(ws).sort()).toEqual([
+			"src/components/A.tsx",
+			"src/pages/B.tsx",
+		]);
+	});
+
+	it("expands a directory whose name only looks like a glob", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;\n" });
+		// `src/**` is a glob, so it is passed through rather than expanded — and a
+		// trailing globstar covers the directory entry itself, which is what every
+		// engine that will read this pattern next already believed.
+		const ws = Workspace.acquire({ projectRoot: root, include: ["src/**"] });
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+	});
+});
+
+/**
  * The config candidate list is the one cache an epoch bump does not clear: an
  * edit changes what a config *says*, never which files exist, and re-globbing
  * the repository on every keystroke would put a filesystem walk on the hot path.

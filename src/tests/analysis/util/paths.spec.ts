@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
 	defKey,
 	escapeRegExp,
-	globToRegExp,
 	isCaseInsensitiveFileSystem,
 	isDeclarationFile,
+	isGlobPattern,
 	isIgnoredPath,
 	isOutsideRoot,
 	keyFold,
@@ -135,24 +135,122 @@ describe("isIgnoredPath / isDeclarationFile", () => {
 	});
 });
 
-describe("globToRegExp", () => {
-	it("matches `**/` across zero or more directories", () => {
-		const regex = globToRegExp("**/*.tsx");
-		expect(regex.test("App.tsx")).toBe(true);
-		expect(regex.test("src/components/App.tsx")).toBe(true);
-		expect(regex.test("src/App.ts")).toBe(false);
+/**
+ * Characterization of the glob engine.
+ *
+ * Every row is a *measured* answer, not an intended one: the same pattern a
+ * caller writes for `--src-dir` is handed to ts-morph's `addSourceFilesAtPaths`
+ * as well, which globs with picomatch. Whenever the two engines disagree the
+ * analysed scope comes out silently empty, so the table exists to make any
+ * change of answer a visible diff rather than a silent one.
+ */
+describe("matchesAnyGlob", () => {
+	/** `[pattern, workspace-relative posix path, matches]`. */
+	const CASES: ReadonlyArray<readonly [string, string, boolean]> = [
+		// Segment and globstar matching.
+		["**/*.tsx", "App.tsx", true],
+		["**/*.tsx", "src/components/App.tsx", true],
+		["**/*.tsx", "src/App.ts", false],
+		["src/*.ts", "src/a.ts", true],
+		["src/*.ts", "src/nested/a.ts", false],
+		["src/**/*.ts", "src/a.ts", true],
+		["src/**", "src/a/b.ts", true],
+		// A trailing `**` covers the directory itself, which is how every other
+		// glob engine reads it.
+		["src/**", "src", true],
+
+		// Brace alternatives, including stars inside a brace and nested braces.
+		["**/*.{spec,test}.ts", "e2e/a.spec.ts", true],
+		["**/*.{spec,test}.ts", "e2e/a.other.ts", false],
+		["**/{*.ts,*.tsx}", "src/a/b.tsx", true],
+		["**/{*.ts,*.tsx}", "src/a/b.ts", true],
+		["src/{a,{b,c}}/x.ts", "src/b/x.ts", true],
+		["src/{a,{b,c}}/x.ts", "src/d/x.ts", false],
+
+		// Character classes.
+		["src/[ab]/x.ts", "src/a/x.ts", true],
+		["src/[ab]/x.ts", "src/c/x.ts", false],
+
+		// Extglobs.
+		["src/?(a|b).ts", "src/a.ts", true],
+		["+(a|b).ts", "a.ts", true],
+		["src/@(foo|bar)/x.ts", "src/foo/x.ts", true],
+
+		// Dot directories and dotfiles are ordinary source here: a `.storybook`
+		// tree holds components the engine has to read.
+		["src/**/*.ts", "src/.storybook/a.ts", true],
+		["src/**/*.ts", "src/.hidden.ts", true],
+		["**/*.{ts,tsx,mts,cts,jsx}", ".storybook/main.ts", true],
+
+		// A leading `!` is a literal character: negation is resolved one layer up,
+		// in `withNormalizedScope`, which rewrites it into an `exclude` entry.
+		["!src/a.ts", "!src/a.ts", true],
+		["!src/a.ts", "src/a.ts", false],
+		["!src/a.ts", "other.ts", false],
+
+		// Characters that are regex magic but not glob magic stay literal.
+		["a+b/x.ts", "a+b/x.ts", true],
+		["src/a.ts", "src/a.ts", true],
+		["src/a.ts", "srcXa.ts", false],
+
+		// Paths are posix on every platform; a backslash is not a separator.
+		["src/*.ts", "src\\a.ts", false],
+	];
+
+	it.each(CASES)("%j matches %j -> %s", (glob, relPath, expected) => {
+		expect(matchesAnyGlob(relPath, [glob])).toBe(expected);
 	});
 
-	it("keeps `*` inside one segment", () => {
-		expect(globToRegExp("src/*.ts").test("src/a.ts")).toBe(true);
-		expect(globToRegExp("src/*.ts").test("src/nested/a.ts")).toBe(false);
+	it("matches against every pattern in the list", () => {
+		const globs = ["src/**/*.ts", "e2e/**/*.ts"];
+		expect(matchesAnyGlob("e2e/b.ts", globs)).toBe(true);
+		expect(matchesAnyGlob("src/a.ts", globs)).toBe(true);
+		expect(matchesAnyGlob("lib/c.ts", globs)).toBe(false);
 	});
 
-	it("expands brace alternatives", () => {
-		expect(matchesAnyGlob("e2e/a.spec.ts", ["**/*.{spec,test}.ts"])).toBe(true);
-		expect(matchesAnyGlob("e2e/a.other.ts", ["**/*.{spec,test}.ts"])).toBe(
-			false,
-		);
+	it("matches nothing against an empty pattern list", () => {
+		expect(matchesAnyGlob("src/a.ts", [])).toBe(false);
+	});
+
+	// A caller-supplied pattern may arrive spelled the way Windows spells paths.
+	it("reads a pattern written with backslashes as posix", () => {
+		expect(matchesAnyGlob("src/a.ts", ["src\\a.ts"])).toBe(true);
+		expect(matchesAnyGlob("src/nested/a.ts", ["src\\**\\*.ts"])).toBe(true);
+	});
+});
+
+describe("isGlobPattern", () => {
+	it("reads a plain path as a plain path", () => {
+		for (const literal of [
+			"src",
+			"e2e/tests",
+			"a.config.ts",
+			".storybook",
+			"packages/ui-2.0/src",
+		]) {
+			expect(isGlobPattern(literal)).toBe(false);
+			// The verdict has to agree with the matcher: a pattern called literal
+			// here is expanded into a directory glob, and one called a glob is
+			// passed through untouched. Either way the matcher reads it next.
+			expect(matchesAnyGlob(literal, [literal])).toBe(true);
+		}
+	});
+
+	it("recognises every shape picomatch treats as magic", () => {
+		for (const glob of [
+			"src/**/*.ts",
+			"src/*",
+			"{a,b}",
+			"src/[ab]",
+			"src/?(a).ts",
+			// Extglobs: the hand-rolled `[*?[\]{}]` set called these plain paths,
+			// so the scope normalizer expanded them as directory names.
+			"+(a|b).ts",
+			"src/@(a|b)",
+			"src/!(generated)",
+		]) {
+			expect(isGlobPattern(glob)).toBe(true);
+		}
 	});
 });
 
