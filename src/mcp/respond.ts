@@ -11,8 +11,22 @@ import { logger } from "./logger";
  * tokens on deep trees and buys the consuming model nothing.
  */
 
-/** Serialized response size cap (~10k tokens) before truncation kicks in. */
-export const MAX_RESPONSE_BYTES = 40_000;
+/**
+ * Serialized response size cap.
+ *
+ * 200 KB is roughly 50k tokens — deliberately larger than what a client will
+ * accept whole, because the client is the right place to decide that. Claude
+ * Code allows 25k tokens by default, raises a tool's own ceiling to the
+ * `anthropic/maxResultSizeChars` annotation (see `MAX_RESULT_SIZE_CHARS` in
+ * server.ts) up to 500k, and spills anything past that to disk with a file
+ * reference. The earlier 40 KB was stricter than every client we target and
+ * was rejecting answers all of them would have taken: on a 4,924-file repo it
+ * turned `map_coverage` into four failed calls.
+ *
+ * A cap still exists so a runaway payload fails with a hint rather than
+ * flooding a context window.
+ */
+export const MAX_RESPONSE_BYTES = 200_000;
 
 export interface ToolMeta {
 	[key: string]: unknown;

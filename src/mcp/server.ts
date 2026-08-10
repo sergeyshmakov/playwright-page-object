@@ -23,6 +23,23 @@ const READ_ONLY = {
 	openWorldHint: false,
 } as const;
 
+/**
+ * Per-tool result-size ceiling, read by Claude Code from `tools/list`.
+ *
+ * Without it a client applies its own default (25k tokens there) and, past
+ * that, persists the result to disk and hands the model a file reference. The
+ * annotation raises the ceiling for these tools specifically, up to the
+ * client's own 500k hard limit. It is an unknown key to every other client and
+ * is ignored, so it costs nothing to send.
+ *
+ * Only the two tools that legitimately answer big get it: a whole-repository
+ * coverage report and a deep selector graph. The list and tree tools page, and
+ * a large answer from them means the caller should narrow instead.
+ */
+const LARGE_RESULT = {
+	"anthropic/maxResultSizeChars": 400_000,
+} as const;
+
 const INSTRUCTIONS = `Static-analysis tools for playwright-page-object test suites. All tools are read-only.
 
 Results reflect the files on disk at the moment of the call - edits (including Playwright config changes) are visible to the next call. A restart is only needed to change the server's own flags, such as --src-dir scope or --attribute.
@@ -91,6 +108,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: TREE_DESCRIPTION,
 			inputSchema: getPageObjectTreeInput,
 			annotations: READ_ONLY,
+			_meta: LARGE_RESULT,
 		},
 		safeHandler((args) => handleGetPageObjectTree(getWorkspace(), args)),
 	);
@@ -113,6 +131,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: COVERAGE_DESCRIPTION,
 			inputSchema: mapCoverageInput,
 			annotations: READ_ONLY,
+			_meta: LARGE_RESULT,
 		},
 		safeHandler((args) =>
 			handleMapCoverage(getWorkspace(), args, {

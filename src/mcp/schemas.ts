@@ -126,7 +126,20 @@ export const mapCoverageInput = z.object({
 		.describe(
 			"Return only these lists. summary and scope always ship, so [] returns just those two. Wins over includeUnused, which is then echoed in meta.ignored.",
 		),
-	limit: z.number().int().min(1).max(1000).default(200),
+	// 50, not 200: six buckets at 200 is half a megabyte on a large repository,
+	// and the default call is the one an agent makes before it knows the shape
+	// of the answer. At 50 a whole-project report fits, and `offset` pages the
+	// bucket that turns out to matter. Measured on a 4,924-file app: 527 KB
+	// rejected at 200, 145 KB returned at 50.
+	limit: z
+		.number()
+		.int()
+		.min(1)
+		.max(1000)
+		.default(50)
+		.describe(
+			"Entries per returned bucket. Bucket totals always ship in summary, so a capped list still tells you how much it is hiding; page the rest with offset.",
+		),
 	offset: z
 		.number()
 		.int()

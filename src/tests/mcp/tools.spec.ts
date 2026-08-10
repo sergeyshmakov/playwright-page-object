@@ -5,6 +5,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterAll, describe, expect, it } from "vitest";
 import type { McpServerOptions } from "../../mcp/options";
 import { createMcpServer } from "../../mcp/server";
+import { coverageShrinkHint } from "../../mcp/tools";
 
 /**
  * In-process integration tests: a real Client talks to the real server over
@@ -1507,17 +1508,30 @@ describe("MCP server over in-memory transport", () => {
 	/* ---------------------------------------------------------------------- */
 
 	/** One file declaring `count` trivially different page objects. */
-	function manyPageObjects(count: number): string {
+	function manyPageObjects(count: number, fat = false): string {
 		const lines = [
 			'import type { Locator } from "@playwright/test";',
 			'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
 			"",
 		];
+		// `limit` maxes out at 500, so a response can only outgrow the cap through
+		// entry SIZE, not entry count. `fat` gives each summary the doc string and
+		// the long names that a real repository has.
+		// docSummary keeps the first sentence up to 160 chars, so this is written
+		// to just fill that: a wide entry is the point of the fixture.
+		const doc =
+			"Screen page object generated for a response-size test, carrying a summary sentence of the width a documented page object in a real repository has.";
 		for (let index = 0; index < count; index += 1) {
+			const name = fat
+				? `GeneratedAdministrationSettingsAndPreferencesScreenNumber${index}SectionDetailPage`
+				: `GeneratedScreenNumber${index}Page`;
+			if (fat) {
+				lines.push(`/** ${doc} */`);
+			}
 			lines.push(
-				`@RootSelector("Screen${index}Root")`,
-				`export class GeneratedScreenNumber${index}Page extends RootPageObject {`,
-				`\t@Selector("Screen${index}Input")`,
+				`@RootSelector("AdministrationSettingsAndPreferencesScreen${index}RootContainerElement")`,
+				`export class ${name} extends RootPageObject {`,
+				`\t@Selector("AdministrationSettingsAndPreferencesScreen${index}PrimaryInputFieldElement")`,
 				"\taccessor Input!: Locator;",
 				"}",
 				"",
@@ -1595,10 +1609,13 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	// `limit` caps at 500, so this response can only pass MAX_RESPONSE_BYTES on
+	// entry width - hence the fat fixture. It was 400 thin ones while the cap
+	// was 40 KB.
 	it("names only its own knobs when a response is too large", async () => {
 		await withProject(
 			"ppo-too-large-",
-			{ "e2e/many.ts": manyPageObjects(400) },
+			{ "e2e/many.ts": manyPageObjects(500, true) },
 			async (client) => {
 				const { isError, envelope } = await callTool(
 					client,
@@ -1614,6 +1631,28 @@ describe("MCP server over in-memory transport", () => {
 			},
 		);
 	}, 60_000);
+
+	// The field trap: a caller who had already narrowed to one bucket was told
+	// to pass `includeUnused:false`, which `selectedBuckets` ignores whenever
+	// `buckets` is set. The re-call returned a byte-identical error, so the
+	// advice cost a call and taught nothing.
+	it("never advises a knob the current coverage arguments ignore", () => {
+		const narrowed = coverageShrinkHint(["unknownTestIds"], 200);
+		expect(narrowed).not.toContain("includeUnused:");
+		expect(narrowed).toContain("limit");
+		expect(narrowed).toContain("offset");
+
+		const several = coverageShrinkHint(["unknownTestIds", "deadSelectors"], 50);
+		expect(several).toContain("buckets");
+		expect(several, "still ignored while buckets is set").not.toContain(
+			"includeUnused:",
+		);
+
+		// Without `buckets` the flag is live, so recommending it is correct.
+		const wide = coverageShrinkHint(undefined, 200);
+		expect(wide).toContain("includeUnused:false");
+		expect(wide).toContain("buckets");
+	});
 
 	it("returns only the requested coverage buckets, with totals intact", async () => {
 		await withProject(

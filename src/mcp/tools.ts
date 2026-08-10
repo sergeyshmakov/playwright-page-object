@@ -1053,10 +1053,38 @@ export function handleMapCoverage(
 			),
 		},
 		{
-			shrinkHint:
-				"Re-call with a lower `limit`, fewer `buckets`, or includeUnused:false.",
+			shrinkHint: coverageShrinkHint(
+				args.buckets as CoverageBucket[] | undefined,
+				args.limit,
+			),
 		},
 	);
+}
+
+/**
+ * What to change to make THIS coverage call fit.
+ *
+ * The generic advice named `includeUnused`, which `selectedBuckets` ignores
+ * whenever `buckets` is set. A caller who had already narrowed to one bucket
+ * was told to pass a no-op, re-called, and got a byte-identical error - the
+ * one shape of hint that costs a call and teaches nothing. So the advice now
+ * depends on which knobs are still live.
+ */
+export function coverageShrinkHint(
+	buckets: CoverageBucket[] | undefined,
+	limit: number,
+): string {
+	const lowerLimit = `a lower \`limit\` (this call used ${limit})`;
+
+	if (buckets === undefined) {
+		return `Re-call with ${lowerLimit}, \`buckets\` naming only the lists you need, or includeUnused:false. \`buckets: []\` returns summary and scope alone, which always fits.`;
+	}
+	if (buckets.length > 1) {
+		return `Re-call with ${lowerLimit}, or fewer \`buckets\` - one at a time pages cleanly through \`offset\`. (\`includeUnused\` is ignored while \`buckets\` is set.)`;
+	}
+	// One bucket already, so the only lever left is the page size. Naming
+	// `buckets` again here is what produced the loop.
+	return `Re-call with ${lowerLimit}, then page the rest with \`offset\`. \`buckets: []\` returns summary and scope alone if you only need the totals.`;
 }
 
 /**
