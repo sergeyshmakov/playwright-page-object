@@ -12,6 +12,7 @@ Start with `meta.warnings` and `meta.hint`. They tell you whether the result is 
 | The client cannot start the server | [Startup errors](#why-wont-the-mcp-server-start) |
 | A test-ID tree is partial | [Tree fidelity](#what-does-fidelity-partial-mean) |
 | A response exceeds the cap | [Large responses](#how-do-i-fix-a-too_large-response) |
+| You have a diagnostic code in hand | [Every code](#what-does-this-diagnostic-code-mean) |
 
 ## Why did `list_page_objects` return no page objects?
 
@@ -203,6 +204,81 @@ Causes, in order of likelihood: `--project-root` points at the e2e package rathe
 stdout carries the JSON-RPC stream and nothing else, ever. Everything the server has to say about itself goes to stderr, so `--log-level debug` is safe with any client and will not corrupt the protocol.
 
 Tool failures are returned in band, as `{"ok": false, "error": {…}}` with the MCP `isError` flag, and not as JSON-RPC transport errors. If your client reports a transport-level failure, the problem happened before or outside the tool call. Check the `-y` and Windows `cmd /c` guidance in the [Quick Start](/mcp/quick-start/#what-if-the-client-cannot-start-npx).
+
+## What does this diagnostic code mean?
+
+Every code the server can put in `meta.warnings`. They are part of the wire contract, so they are safe to match on. Severity varies by situation for several of them — `playwright-config-ambiguous` is informational when the attribute resolved anyway and a warning when it did not — so read `severity` rather than assuming.
+
+### Workspace and configuration
+
+| Code | Meaning and next step |
+| --- | --- |
+| `no-tsconfig` | No `tsconfig.json` was found. Synthesized compiler options and a default scan glob were used. Pass `--tsconfig` if that is wrong |
+| `playwright-config-not-found` | No `playwright.config.*` anywhere under the root. `data-testid` was assumed |
+| `playwright-config-ambiguous` | Several configs exist; the message names the one that was read and the ones skipped. Pin with `--playwright-config` |
+| `config-shape-unrecognized` | The config export is not a shape the static reader understands. Pass `--attribute` |
+| `config-merge-unresolved` | A `merge(...)` layer could not be followed to a literal. Pass `--attribute` if the value matters |
+| `testid-attribute-unresolved` | The config writes `use.testIdAttribute` but not as a string literal. The server will not execute your config; pass `--attribute` |
+| `testid-attribute-maybe-spread` | A spread may set the attribute, and the reader cannot tell. Confirm with `--attribute` |
+| `testid-attribute-project-override` | A `projects[].use.testIdAttribute` differs from the top level. The analysis uses the top-level value |
+| `testid-attribute-inherited` | The attribute came from a merge layer or an imported base, not the chosen file's own literal. The message names the file |
+| `testid-attribute-sibling` | Another discovered config sets an attribute. It was **reported, not applied** — apply it with `--playwright-config` or `--attribute` |
+| `testid-attribute-conflict` | Two configs disagree. Pin the one your tests run with |
+| `testdir-unresolved` | `testDir` is computed, so the tsconfig search could not start from it |
+| `large-scan` | The scan parses more than 3,000 files — most of the server's memory and all of its cold start. Narrow with `--src-dir`, or lower `--max-files` to make an oversized scope fail fast |
+
+### Environment sanity
+
+| Code | Meaning and next step |
+| --- | --- |
+| `attribute-mismatch` | Nothing in the scanned sources uses the attribute being searched for, and something else is everywhere. **Treat the whole result as unreliable** until fixed |
+| `attribute-no-evidence` | The attribute appears nowhere and nothing else stood out. Either the scope misses the UI or the name is wrong |
+| `scope-empty` | No JSX/TSX source was scanned, so no rendered test ID can be found and every selector will look unmatched |
+| `scope-dir-missing` | A `--src-dir` that existed at startup has since disappeared |
+
+### Page objects
+
+| Code | Meaning and next step |
+| --- | --- |
+| `dynamic-selector-arg` | A decorator argument is not statically knowable — a spread, a variable, a call. The selector is reported as `dynamic` with its source text rather than guessed |
+| `unresolved-factory-identifier` | A factory argument is neither a class reference nor an arrow function |
+| `type-annotation-mismatch` | The accessor's type annotation disagrees with what the decorator produces |
+| `decorator-on-non-accessor` | A selector decorator is on something other than an `accessor` — it will not run |
+| `root-decorator-on-page-object` | **Error severity.** A root decorator on a class extending `PageObject` throws at construction. Root decorators require `RootPageObject`; extend `PageObject` only for nested controls |
+| `page-object-passed-as-factory` | A `PageObject` subclass was passed where a factory was expected; the decorator throws at class definition |
+| `missing-host-context` | The class exposes selectors but nothing establishes its host locator |
+| `fixtures-argument-dynamic` | The argument to `createFixtures` is not a literal map, so its bindings cannot be read |
+| `fixture-entry-dynamic` | One fixture entry is not a constructor or arrow function |
+| `fixture-name-ambiguous` | Two fixtures bind the same name |
+
+### Traversal budgets
+
+| Code | Meaning and next step |
+| --- | --- |
+| `depth-limit-reached` | The walk stopped at a component because `depth` ran out. Emitted for the first few sites only; `tree-partial` carries the exact total |
+| `node-budget-reached` | The node budget stopped the walk. Root it narrower with `file` or `component` |
+
+### Component trees
+
+| Code | Meaning and next step |
+| --- | --- |
+| `entry-not-found` | No entry component could be rooted, so the response is a flat inventory rather than a tree |
+| `tree-partial` | One summary per holed tree: how many nodes were left unexpanded, by reason. The counts here are exact even when the per-site entries beside them are a sample |
+| `components-not-followed` | `followComponents: false` stopped the walk at every component tag. Not a budget — your argument |
+| `inventory-scope-gap` | The walk followed an import out of the caller's scope, so a file in the tree is not in the inventory's scope |
+
+### Coverage
+
+| Code | Meaning and next step |
+| --- | --- |
+| `raw-locators-disabled` | Direct `getByTestId`-family calls were not scanned, so an uncovered ID is not necessarily untested. Re-run with `includeRawLocators: true` |
+| `testid-forwarding-unproven` | Some IDs are written as component props with no proof they reach the DOM |
+| `forwarding-unproven-widespread` | Enough selectors land on unproven props that the run is worth repeating with `--assume-forwarded` |
+| `forwarding-assumed` | `--assume-forwarded` is on; the message counts the IDs it promoted, and every affected entry is labelled |
+| `unanchored-testid-pattern` | A pattern matches every possible ID, so it was quarantined rather than allowed to match one. Give those elements a literal prefix |
+| `no-matchable-testids` | Nothing in the scan was matchable, so `summary.coverage` has no denominator and is `null` |
+| `coverage-scope-narrowed` | You scoped the page-object side while the UI side stayed project-wide. `coverage` is `null`; the two counts still ship |
+| `ui-scope-incomplete` | Component tags come from modules outside the scan, so dead selectors are unverified. The message names the modules and, when their sources are in this repository, the `--project-root` that would include them |
 
 ## See also
 
