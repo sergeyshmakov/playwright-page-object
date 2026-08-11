@@ -35,6 +35,15 @@ export interface HeritageInfo {
 	localBases: ClassLike[];
 	/** `true` when the walk stopped at the depth cap rather than at a root. */
 	truncated: boolean;
+	/**
+	 * `true` when a base class in the chain could not be resolved to a class.
+	 *
+	 * The difference between "this class provably extends no library base" and
+	 * "the walk lost the trail". Both leave `inheritedApi` null, and a caller that
+	 * treats the second as the first turns a gap in the analysis into a positive
+	 * claim about someone's code.
+	 */
+	unresolvedBase: boolean;
 }
 
 function syntheticChain(api: InheritedApi): string[] {
@@ -74,14 +83,26 @@ export function readHeritage(
 	for (let depth = 0; depth < MAX_HERITAGE_DEPTH; depth += 1) {
 		const baseName = heritageName(current);
 		if (!baseName) {
-			return { chain, inheritedApi: null, localBases, truncated: false };
+			return {
+				chain,
+				inheritedApi: null,
+				localBases,
+				truncated: false,
+				unresolvedBase: false,
+			};
 		}
 
 		const canonical = canonicalLocalName(baseName.qualified, currentImports);
 		if (canonical && LIBRARY_BASE_CLASSES.has(canonical)) {
 			const api = canonical as InheritedApi;
 			chain.push(...syntheticChain(api));
-			return { chain, inheritedApi: api, localBases, truncated: false };
+			return {
+				chain,
+				inheritedApi: api,
+				localBases,
+				truncated: false,
+				unresolvedBase: false,
+			};
 		}
 
 		chain.push(baseName.simple);
@@ -99,14 +120,26 @@ export function readHeritage(
 				Node.isClassExpression(resolution.declaration)
 			)
 		) {
-			return { chain, inheritedApi: null, localBases, truncated: false };
+			return {
+				chain,
+				inheritedApi: null,
+				localBases,
+				truncated: false,
+				unresolvedBase: true,
+			};
 		}
 		current = resolution.declaration;
 		localBases.push(current);
 		currentImports = collectLibraryImports(current.getSourceFile(), ctx);
 	}
 
-	return { chain, inheritedApi: null, localBases, truncated: true };
+	return {
+		chain,
+		inheritedApi: null,
+		localBases,
+		truncated: true,
+		unresolvedBase: false,
+	};
 }
 
 /** Class decorator drawn from the library's `Root*` set, if any. */

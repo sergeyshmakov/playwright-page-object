@@ -1,0 +1,242 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { readPlaywrightConfig } from "../../analysis/config/playwrightConfig";
+import { locateTsConfig } from "../../analysis/config/tsconfig";
+import { discoverPageObjects } from "../../analysis/page-objects/discover";
+import { buildPageObjectTree } from "../../analysis/page-objects/tree";
+import { Workspace } from "../../analysis/workspace";
+import { validateServerOptions } from "../../mcp/options";
+import { libImport, makeWorkspace } from "./helpers/inMemory";
+
+/**
+ * Questions the tools answered confidently and wrongly.
+ *
+ * These are not gaps in coverage — a gap is visible. Each of these produced a
+ * definite answer of the right shape, so nothing downstream had any reason to
+ * doubt it: an analysis run against the wrong attribute, a member that promises
+ * an API the value does not have, a scope that selects nothing, a class that
+ * reports no members because a loop counter ran out.
+ */
+
+const roots: string[] = [];
+
+function scratch(files: Record<string, string>): string {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-wrong-"));
+	roots.push(root);
+	for (const [relativePath, contents] of Object.entries(files)) {
+		const absolute = path.join(root, relativePath);
+		fs.mkdirSync(path.dirname(absolute), { recursive: true });
+		fs.writeFileSync(absolute, contents, "utf8");
+	}
+	return root;
+}
+
+afterAll(() => {
+	for (const root of roots) {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	Workspace.reset();
+});
+
+describe("config read wrongly", () => {
+	it("does not silently skip a shorthand testIdAttribute", () => {
+		// The whole analysis runs against whatever attribute this resolves to, so
+		// dropping the key meant every id in every report came from the wrong
+		// attribute with nothing said about it.
+		const root = scratch({
+			"playwright.config.ts": [
+				'import { defineConfig } from "@playwright/test";',
+				'const testIdAttribute = "data-tid";',
+				"export default defineConfig({ use: { testIdAttribute } });",
+			].join("\n"),
+		});
+		Workspace.reset();
+		const ws = Workspace.acquire({ projectRoot: root });
+		const config = readPlaywrightConfig(ws);
+		expect(config.testIdAttribute).toBeUndefined();
+		expect(
+			config.notes.some((note) => note.message.includes("testIdAttribute")),
+		).toBe(true);
+	});
+
+	it("does not select an ancestor tsconfig when testDir escapes the root", () => {
+		// The walk's only stop condition is reaching the project root, which a
+		// testDir outside it never does — so it ran to the filesystem root and
+		// could pick, then fully parse, an unrelated ancestor's config.
+		const outer = scratch({
+			"tsconfig.json": "{}",
+			"repo/package.json": "{}",
+			"sibling/e2e/.keep": "",
+		});
+		const projectRoot = path.join(outer, "repo");
+		const located = locateTsConfig(projectRoot, undefined, "../sibling/e2e");
+		expect(located.source).toBe("none");
+		expect(located.path).toBeNull();
+	});
+});
+
+describe("scope validated wrongly", () => {
+	it("refuses a glob whose static base escapes the root", () => {
+		const root = scratch({ "src/.keep": "" });
+		const problems = validateServerOptions({
+			projectRoot: root,
+			srcDirs: ["../other/**/*.tsx"],
+		});
+		expect(problems.join("\n")).toContain("outside --project-root");
+	});
+
+	it("still accepts a glob inside the root", () => {
+		const root = scratch({ "src/.keep": "" });
+		expect(
+			validateServerOptions({ projectRoot: root, srcDirs: ["src/**/*.tsx"] }),
+		).toEqual([]);
+	});
+
+	it("still accepts a root-relative glob with no static base", () => {
+		const root = scratch({ "src/.keep": "" });
+		expect(
+			validateServerOptions({ projectRoot: root, srcDirs: ["**/*.tsx"] }),
+		).toEqual([]);
+	});
+
+	it("still accepts a negated pattern pointing outside", () => {
+		// An exclusion of something outside the root is a harmless no-op, not a
+		// mistake worth refusing.
+		const root = scratch({ "src/.keep": "" });
+		expect(
+			validateServerOptions({ projectRoot: root, srcDirs: ["!../other/**"] }),
+		).toEqual([]);
+	});
+});
+
+describe("members typed wrongly", () => {
+	function memberKind(
+		files: Record<string, string>,
+		member: string,
+	): string | undefined {
+		const tree = buildPageObjectTree(makeWorkspace(files), "HomePage");
+		return tree.defs[tree.root]?.members.find((one) => one.name === member)
+			?.result.kind;
+	}
+
+	it("reports `new Widget()` on a plain class as a locator", () => {
+		// `getSelector` clones a PageObject instance and lets everything else fall
+		// through as the raw Locator, so calling this a page object made apiHints
+		// promise `.$` and the waits on a value that has neither.
+		expect(
+			memberKind(
+				{
+					"e2e/Widget.ts": "export class Widget { label = 1; }",
+					"e2e/HomePage.ts": [
+						libImport("RootPageObject", "RootSelector", "Selector"),
+						'import { Widget } from "./Widget";',
+						"@RootSelector()",
+						"export class HomePage extends RootPageObject {",
+						'  @Selector("Thing")',
+						"  accessor Thing: Widget = new Widget();",
+						"}",
+					].join("\n"),
+				},
+				"Thing",
+			),
+		).toBe("locator");
+	});
+
+	it("still reports a real PageObject subclass as a page object", () => {
+		expect(
+			memberKind(
+				{
+					"e2e/Panel.ts": [
+						libImport("PageObject"),
+						"export class Panel extends PageObject {}",
+					].join("\n"),
+					"e2e/HomePage.ts": [
+						libImport("RootPageObject", "RootSelector", "Selector"),
+						'import { Panel } from "./Panel";',
+						"@RootSelector()",
+						"export class HomePage extends RootPageObject {",
+						'  @Selector("Panel")',
+						"  accessor Side: Panel = new Panel();",
+						"}",
+					].join("\n"),
+				},
+				"Side",
+			),
+		).toBe("pageObject");
+	});
+
+	it("still reports a subclass of a project page object as a page object", () => {
+		// The guard has to survive a chain: the heritage walk resolves `Widget ->
+		// BaseWidget -> PageObject`, so this must not be downgraded.
+		expect(
+			memberKind(
+				{
+					"e2e/BaseWidget.ts": [
+						libImport("PageObject"),
+						"export class BaseWidget extends PageObject {}",
+					].join("\n"),
+					"e2e/Widget.ts": [
+						'import { BaseWidget } from "./BaseWidget";',
+						"export class Widget extends BaseWidget {}",
+					].join("\n"),
+					"e2e/HomePage.ts": [
+						libImport("RootPageObject", "RootSelector", "Selector"),
+						'import { Widget } from "./Widget";',
+						"@RootSelector()",
+						"export class HomePage extends RootPageObject {",
+						'  @Selector("Thing")',
+						"  accessor Thing: Widget = new Widget();",
+						"}",
+					].join("\n"),
+				},
+				"Thing",
+			),
+		).toBe("pageObject");
+	});
+
+	it("reads every class a deep factory chain reaches", () => {
+		// The D4 fixpoint used to stop after six rounds, and a class first reached
+		// on the seventh shipped `members: []` - indistinguishable, in the payload,
+		// from a class that genuinely has none.
+		//
+		// This nine-deep chain passed before the cap was removed too: D1/D2 register
+		// every in-scope class with a library base up front, so all nine are read in
+		// round one and the counter never advances. It is kept as the guard for the
+		// chain itself, not as proof about the cap - the cap goes on the termination
+		// argument in `discover.ts`, and no fixture here reaches round seven.
+		const depth = 9;
+		const files: Record<string, string> = {};
+		for (let level = 0; level < depth; level += 1) {
+			const next = level + 1 < depth ? `Level${level + 1}` : null;
+			files[`e2e/Level${level}.ts`] = [
+				libImport("PageObject", "Selector"),
+				next ? `import { ${next} } from "./${next}";` : "",
+				`export class Level${level} extends PageObject {`,
+				`  @Selector("Id${level}")`,
+				next
+					? `  accessor Child = (locator: never) => new ${next}(locator);`
+					: "  accessor Leaf!: never;",
+				"}",
+			].join("\n");
+		}
+		files["e2e/HomePage.ts"] = [
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			'import { Level0 } from "./Level0";',
+			"@RootSelector()",
+			"export class HomePage extends RootPageObject {",
+			'  @Selector("Root")',
+			"  accessor Start = (locator: never) => new Level0(locator);",
+			"}",
+		].join("\n");
+
+		const discovery = discoverPageObjects(makeWorkspace(files));
+		for (let level = 0; level < depth; level += 1) {
+			const summary = discovery.pageObjects.find(
+				(one) => one.className === `Level${level}`,
+			);
+			expect(summary?.counts.members).toBeGreaterThan(0);
+		}
+	});
+});

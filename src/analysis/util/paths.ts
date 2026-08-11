@@ -249,3 +249,17 @@ export function matchesAnyGlob(relPosix: string, globs: string[]): boolean {
 export function isGlobPattern(pattern: string): boolean {
 	return picomatch.scan(toPosix(pattern)).isGlob;
 }
+
+/**
+ * The static leading path of a pattern, before the first magic character.
+ *
+ * `"../other/**\/*.tsx"` yields `"../other"` and `"**\/*.tsx"` yields `""`. The
+ * point is containment: a glob is validated by matching rather than by
+ * stat'ing, so it skipped the check that refuses `--src-dir ../other` — and the
+ * two spellings select exactly the same nothing once the analysis drops
+ * everything outside the root. The base is a real path and can be checked like
+ * one. Same source as {@link isGlobPattern}, so the two cannot disagree.
+ */
+export function globStaticBase(pattern: string): string {
+	return picomatch.scan(toPosix(pattern)).base;
+}

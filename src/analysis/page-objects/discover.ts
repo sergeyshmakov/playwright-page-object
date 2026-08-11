@@ -69,8 +69,6 @@ export interface DiscoveryResult {
 	ctx: AnalysisContext;
 }
 
-const MAX_FACTORY_ROUNDS = 6;
-
 /**
  * Every decorated member the class exposes at runtime: its own, plus those it
  * inherits from project-local base classes.
@@ -184,6 +182,7 @@ function buildEntry(
 				inheritedApi: null,
 				localBases: [],
 				truncated: false,
+				unresolvedBase: false,
 			},
 			rootDecorator: null,
 			warnings: [],
@@ -289,16 +288,27 @@ export function runDiscovery(
 		);
 	}
 
-	// D4 — repeat until no new control classes appear.
+	// D4 — repeat until every discovered class has been read.
+	//
+	// Unbounded on purpose, because the loop is not the thing that needs
+	// bounding: `membersRead` is set on every entry a round takes and never
+	// cleared, `pending` selects only entries without it, and `register` keys on
+	// a folded def key over a finite set of declarations. So each class is read
+	// exactly once and the total work is linear in the classes discovered.
+	//
+	// The old cap of six rounds was a safety net over an already-safe loop, and
+	// it charged for the reassurance: a class first reached on round seven of a
+	// factory chain shipped with `members: []`, which in the payload is
+	// indistinguishable from a class that genuinely has none. A silent wrong
+	// answer, in exchange for a guard against nothing.
 	const factoryArgKeys = new Set<string>();
-	for (let round = 0; round < MAX_FACTORY_ROUNDS; round += 1) {
+	for (;;) {
 		const pending = [...classes.values()].filter(
 			(entry) => entry.members.length === 0 && !entry.membersRead,
 		);
 		if (pending.length === 0) {
 			break;
 		}
-		let added = false;
 		for (const entry of pending) {
 			entry.membersRead = true;
 			for (const read of collectMembers(entry, ctx)) {
@@ -310,20 +320,13 @@ export function runDiscovery(
 					if (!edge.declaration) {
 						continue;
 					}
-					const before = classes.size;
 					register(
 						edge.declaration,
 						collectLibraryImports(edge.declaration.getSourceFile(), ctx),
 						"factoryArg",
 					);
-					if (classes.size !== before) {
-						added = true;
-					}
 				}
 			}
-		}
-		if (!added) {
-			break;
 		}
 	}
 

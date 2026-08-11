@@ -3,6 +3,7 @@ import {
 	Node,
 	type ObjectLiteralExpression,
 	type PropertyAssignment,
+	type ShorthandPropertyAssignment,
 	type SourceFile,
 	SyntaxKind,
 } from "ts-morph";
@@ -60,7 +61,7 @@ interface ConfigLayer {
 	 * the spread, then `base` on top of them. Splitting the literal at each spread
 	 * is what keeps the walk's precedence the same as JavaScript's.
 	 */
-	properties: PropertyAssignment[];
+	properties: ConfigProperty[];
 	/** The file the literal is written in. */
 	sourceFile: SourceFile;
 	origin: "primary" | "merge-arg" | "spread" | "imported-base";
@@ -112,6 +113,16 @@ interface LayerRequest {
 /* -------------------------------------------------------------------------- */
 /* Layer flattening                                                           */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * A key a config literal writes, in either spelling.
+ *
+ * The shorthand form carries no initializer, so nothing can be read out of it -
+ * but it is still a *write*, and that is the half that matters: it overrides
+ * whatever a lower layer says. The collector skipped shorthands outright, which
+ * made `use: { testIdAttribute }` invisible rather than unreadable.
+ */
+type ConfigProperty = PropertyAssignment | ShorthandPropertyAssignment;
 
 function getProperty(
 	object: ObjectLiteralExpression,
@@ -334,7 +345,7 @@ function objectLayers(
 	ctx: LayerContext,
 ): ConfigLayer[] {
 	const layers: ConfigLayer[] = [];
-	let own: PropertyAssignment[] = [];
+	let own: ConfigProperty[] = [];
 	let groups = 0;
 	// Only the first group a literal produces inherits how the literal itself
 	// merges into what is below it. Everything after that is composed *by* a
@@ -348,7 +359,10 @@ function objectLayers(
 		}
 	};
 	for (const property of object.getProperties()) {
-		if (Node.isPropertyAssignment(property)) {
+		if (
+			Node.isPropertyAssignment(property) ||
+			Node.isShorthandPropertyAssignment(property)
+		) {
 			own.push(property);
 			continue;
 		}
@@ -391,7 +405,7 @@ function objectLayers(
 }
 
 function layerOf(
-	properties: PropertyAssignment[],
+	properties: ConfigProperty[],
 	request: LayerRequest,
 	useShallow: boolean,
 ): ConfigLayer {
@@ -518,7 +532,7 @@ type ScalarRead =
  */
 function readLayered(
 	layers: ConfigLayer[],
-	pick: (layer: ConfigLayer) => PropertyAssignment | undefined,
+	pick: (layer: ConfigLayer) => ConfigProperty | undefined,
 ): ScalarRead {
 	for (let index = layers.length - 1; index >= 0; index -= 1) {
 		const layer = layers[index];
@@ -526,7 +540,14 @@ function readLayered(
 		if (!property) {
 			continue;
 		}
-		const initializer = property.getInitializer();
+		// A shorthand has no initializer to read. `use: { testIdAttribute }` used to
+		// be dropped by the collector entirely, so the whole analysis ran against
+		// the default attribute with nothing said about it - the one config mistake
+		// that silently invalidates every id in the report. It is a write like any
+		// other now, and an unreadable one, so it stops the walk and says so.
+		const initializer = Node.isPropertyAssignment(property)
+			? property.getInitializer()
+			: undefined;
 		const value = stringLiteralValue(initializer);
 		if (value === undefined) {
 			return { state: "unresolved", layer, node: initializer ?? property };
@@ -558,7 +579,7 @@ function readLayered(
 function layerProperty(
 	layer: ConfigLayer,
 	name: string,
-): PropertyAssignment | undefined {
+): ConfigProperty | undefined {
 	for (let index = layer.properties.length - 1; index >= 0; index -= 1) {
 		const property = layer.properties[index];
 		if (property.getName() === name) {
@@ -594,7 +615,9 @@ function readTestIdAttribute(
 		if (!property) {
 			continue;
 		}
-		const initializer = property.getInitializer();
+		const initializer = Node.isPropertyAssignment(property)
+			? property.getInitializer()
+			: undefined;
 		const nested = initializer
 			? layersFromExpression(
 					{

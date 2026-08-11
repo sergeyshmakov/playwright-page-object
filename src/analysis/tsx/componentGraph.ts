@@ -293,13 +293,31 @@ function forwardsSpread(fn: ComponentFunction, sources: string[]): boolean {
 	return false;
 }
 
-/** `export default () => …`, `export default function () {}`, `export default class {}`. */
+/**
+ * `export default () => …`, `export default function () {}`, `export default
+ * class {}`.
+ *
+ * Wrappers are climbed on the way up: `export default (Card)`,
+ * `export default Card as FC` and the `satisfies` spelling all put a node
+ * between the expression and the assignment, and testing the immediate parent
+ * read every one of them as not exported at all.
+ */
 function isDefaultExportExpression(node: Node): boolean {
-	const parent = node.getParent();
+	let current: Node | undefined = node.getParent();
+	while (
+		current !== undefined &&
+		(Node.isParenthesizedExpression(current) ||
+			Node.isAsExpression(current) ||
+			Node.isNonNullExpression(current) ||
+			Node.isTypeAssertion(current) ||
+			Node.isSatisfiesExpression(current))
+	) {
+		current = current.getParent();
+	}
 	return (
-		parent !== undefined &&
-		Node.isExportAssignment(parent) &&
-		!parent.isExportEquals()
+		current !== undefined &&
+		Node.isExportAssignment(current) &&
+		!current.isExportEquals()
 	);
 }
 

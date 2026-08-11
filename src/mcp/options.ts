@@ -6,7 +6,7 @@ import * as path from "node:path";
 // belongs to the matcher that will read the pattern next. `util/paths` imports
 // `node:path` and `picomatch`, nothing else — `src/tests/analysis/
 // no-runtime-import.spec.ts` holds that shut.
-import { isGlobPattern } from "../analysis/util/paths";
+import { globStaticBase, isGlobPattern } from "../analysis/util/paths";
 
 /** Runtime options resolved from CLI flags (see src/cli.ts). */
 export interface McpServerOptions {
@@ -72,24 +72,34 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 		}
 	}
 	for (const dir of options.srcDirs ?? []) {
-		// A glob is checked by matching it, not by stat'ing it, and a `!` prefix is
-		// an exclusion whose target legitimately may not exist. The verdict comes
-		// from picomatch, so an extglob without a `*` in it — `src/@(App|Admin).tsx`
-		// — is not mistaken for a plain path and refused for not existing.
-		if (dir.startsWith("!") || isGlobPattern(dir)) {
+		// A `!` prefix is an exclusion: its target legitimately may not exist, and
+		// excluding something outside the root is a harmless no-op rather than a
+		// mistake worth refusing.
+		if (dir.startsWith("!")) {
 			continue;
 		}
-		const resolved = resolveAgainst(root, dir);
 		// The analysis drops every path outside the root before it counts anything,
 		// so a scope that lands outside contributes no file at all: the server would
 		// start, every tool would answer with an empty index, and nothing would say
 		// why. A relative value resolves against the root and is inside it unless it
 		// climbs out with `..`; an absolute one inside the root is fine.
-		if (!isInside(root, resolved)) {
+		//
+		// A glob is checked by its *static base* — `../other/**/*.tsx` reaches no
+		// further in than `../other`, and that plain spelling is refused. Skipping
+		// the check for anything with a `*` in it let the escaping form through, to
+		// select precisely the same nothing, silently.
+		const containment = isGlobPattern(dir) ? globStaticBase(dir) : dir;
+		if (containment && !isInside(root, resolveAgainst(root, containment))) {
 			problems.push(`--src-dir is outside --project-root: ${dir}`);
 			continue;
 		}
-		if (!exists(resolved)) {
+		// Existence is only meaningful for a plain path. The verdict comes from
+		// picomatch, so an extglob without a `*` in it — `src/@(App|Admin).tsx` — is
+		// not mistaken for a plain path and refused for not existing.
+		if (isGlobPattern(dir)) {
+			continue;
+		}
+		if (!exists(resolveAgainst(root, dir))) {
 			problems.push(`--src-dir does not exist: ${dir}`);
 		}
 	}

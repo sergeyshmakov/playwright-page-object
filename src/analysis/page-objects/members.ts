@@ -143,6 +143,32 @@ function heritageApiOf(
 	return readHeritage(declaration, imports, ctx).inheritedApi;
 }
 
+/**
+ * Whether a resolved class *provably* extends no library page object.
+ *
+ * The runtime decides by `PageObject.isInstance` (`PageObject.ts:133`): a
+ * `new X()` that is not one is not cloned, and the member evaluates to the bare
+ * `Locator`. Reporting it as `pageObject` made `apiHints` promise `.$` and the
+ * waits on a value that has neither — the tool confirming broken code rather
+ * than catching it.
+ *
+ * "Provably" is the whole point. A chain the walk could not follow, or one that
+ * hit the depth cap, is a gap in the analysis and not evidence about anyone's
+ * code, so those keep the old benefit of the doubt.
+ */
+function provablyNotPageObject(
+	declaration: ClassDeclaration,
+	ctx: AnalysisContext,
+): boolean {
+	const imports = collectLibraryImports(declaration.getSourceFile(), ctx);
+	const heritage = readHeritage(declaration, imports, ctx);
+	return (
+		heritage.inheritedApi === null &&
+		!heritage.truncated &&
+		!heritage.unresolvedBase
+	);
+}
+
 function newExpressionClassName(node: Node): NameRef | null {
 	if (!Node.isNewExpression(node)) {
 		return null;
@@ -273,6 +299,14 @@ export function inferResult(
 				],
 				warnings,
 			};
+		}
+		// A class we resolved and that extends nothing from the library: the
+		// runtime hands back the raw locator, so that is what this member is.
+		if (
+			listRef.declaration &&
+			provablyNotPageObject(listRef.declaration, ctx)
+		) {
+			return { result: { kind: "locator" }, edges, warnings };
 		}
 		pushEdge(edges, listRef, false);
 		return {

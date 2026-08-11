@@ -2,7 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CompilerOptions } from "ts-morph";
 import { ts } from "ts-morph";
-import { ignoredExcludeGlobs, toPosix } from "../util/paths";
+import {
+	ignoredExcludeGlobs,
+	isOutsideRoot,
+	toPosix,
+	toPosixRelative,
+} from "../util/paths";
 
 export interface TsConfigLocation {
 	/** Absolute path, or `null` when nothing usable was found. */
@@ -50,9 +55,19 @@ export function locateTsConfig(
 		// cap would silently analyse a deep monorepo e2e package as if it had no
 		// tsconfig. The root itself was already checked above, so the walk stops
 		// there rather than escaping into unrelated ancestors.
+		//
+		// `current === stopAt` is the stop condition, and on its own it is only
+		// reachable when `testDir` is *inside* the root. A config pointing outside
+		// it - `testDir: "../e2e"`, an absolute path, a sibling package - walks a
+		// chain that never passes through the root, so the loop ran to the
+		// filesystem root and could select, then fully parse, an unrelated
+		// ancestor's tsconfig. Starting outside means there is nothing to walk.
 		const stopAt = path.resolve(projectRoot);
-		let current = path.resolve(projectRoot, testDir);
-		while (true) {
+		const from = path.resolve(projectRoot, testDir);
+		let current: string | null = isOutsideRoot(toPosixRelative(stopAt, from))
+			? null
+			: from;
+		while (current !== null) {
 			const candidate = path.join(current, "tsconfig.json");
 			if (existsFile(candidate)) {
 				return { path: candidate, source: "test-dir" };
