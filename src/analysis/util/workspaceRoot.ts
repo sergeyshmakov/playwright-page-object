@@ -49,6 +49,17 @@ interface RootRecord {
 	realRoot: string;
 	/** Directory path (posix) to its real path, or `null` when unreadable. */
 	realDirs: Map<string, string | null>;
+	/**
+	 * Directory path (posix) to whether it holds a `node_modules` at all.
+	 *
+	 * What bounds the upward probe now that it is not capped by hop count. Every
+	 * probe from every importing directory walks the same ancestor chain, and the
+	 * overwhelming majority of those directories hold no `node_modules` — one
+	 * memoized boolean per directory answers that for every package, so a walk
+	 * that is unbounded in *depth* still costs one stat per directory per epoch
+	 * rather than one per (directory, package).
+	 */
+	nodeModulesDirs: Map<string, boolean>;
 }
 
 const roots = new WeakMap<Project, RootRecord>();
@@ -86,6 +97,7 @@ export function registerWorkspaceRoot(project: Project, root: string): void {
 		root: foldPath(posix),
 		realRoot: foldPath(realPathOf(posix) ?? posix),
 		realDirs: new Map(),
+		nodeModulesDirs: new Map(),
 	});
 }
 
@@ -129,7 +141,12 @@ export function realDirectory(
  * not what they were.
  */
 export function clearRealPathCache(project: Project): void {
-	roots.get(project)?.realDirs.clear();
+	const record = roots.get(project);
+	record?.realDirs.clear();
+	// A `node_modules` can be installed or removed between epochs like anything
+	// else on disk, and this cache is the reason the probe is cheap - keeping it
+	// across an epoch would make the probe fast and wrong.
+	record?.nodeModulesDirs.clear();
 }
 
 function insideRoot(record: RootRecord, posixPath: string): boolean {
@@ -269,9 +286,6 @@ export function linkedOutsideRoot(
 	return insideRoot(record, real) ? null : real;
 }
 
-/** Directory levels the diagnostic probe walks up looking for `node_modules`. */
-const MAX_DIAGNOSTIC_HOPS = 10;
-
 /**
  * Real source directory of a package linked into a `node_modules` **above** the
  * analysed root, or `null`.
@@ -301,15 +315,25 @@ export function packageSourceOutsideRoot(
 	}
 	const fileSystem = project.getFileSystem();
 	let directory = toPosix(fromDirectory).replace(/\/+$/, "");
-	for (let hop = 0; hop < MAX_DIAGNOSTIC_HOPS; hop += 1) {
-		const candidate = `${directory}/node_modules/${packageName}`;
-		if (fileSystem.directoryExistsSync(candidate)) {
-			const real = realDirectory(project, candidate);
-			return real === null ||
-				hasNodeModulesSegment(real) ||
-				insideRoot(record, real)
-				? null
-				: real;
+	// Unbounded in depth, bounded in work. The old ten-hop cap answered "not
+	// linked" for any importer more than ten directories below the
+	// `node_modules` holding the link - a monorepo shape, and exactly the shape
+	// the linked/installed split exists to tell apart. So the package read as an
+	// installed dependency, `linkedCount` undercounted, and `sourceRoot` lost the
+	// one directory the remedy could name. The walk terminates at the filesystem
+	// root either way; what the cap was really standing in for is the cost, and
+	// `nodeModulesDirs` bounds that directly.
+	for (;;) {
+		if (hasNodeModules(record, fileSystem, directory)) {
+			const candidate = `${directory}/node_modules/${packageName}`;
+			if (fileSystem.directoryExistsSync(candidate)) {
+				const real = realDirectory(project, candidate);
+				return real === null ||
+					hasNodeModulesSegment(real) ||
+					insideRoot(record, real)
+					? null
+					: real;
+			}
 		}
 		const parent = directory.slice(0, directory.lastIndexOf("/"));
 		if (parent === "" || parent === directory || !parent.includes("/")) {
@@ -317,7 +341,21 @@ export function packageSourceOutsideRoot(
 		}
 		directory = parent;
 	}
-	return null;
+}
+
+/** Memoized `<dir>/node_modules` presence. See {@link RootRecord.nodeModulesDirs}. */
+function hasNodeModules(
+	record: RootRecord,
+	fileSystem: { directoryExistsSync: (path: string) => boolean },
+	directory: string,
+): boolean {
+	const cached = record.nodeModulesDirs.get(directory);
+	if (cached !== undefined) {
+		return cached;
+	}
+	const present = fileSystem.directoryExistsSync(`${directory}/node_modules`);
+	record.nodeModulesDirs.set(directory, present);
+	return present;
 }
 
 /**

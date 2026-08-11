@@ -116,6 +116,14 @@ const UNKNOWN_TOTAL = -1;
  */
 const MAX_ENVIRONMENT_WARNINGS = 8;
 
+/** Every lockfile the four package managers write, stat'ed as one signal. */
+const LOCKFILE_NAMES = [
+	"package-lock.json",
+	"yarn.lock",
+	"pnpm-lock.yaml",
+	"bun.lockb",
+];
+
 /**
  * Ordering of environment warnings: what makes the answer wrong, before what
  * makes it incomplete, before why.
@@ -274,6 +282,8 @@ export class Workspace {
 	 * last acquire. See {@link projectIdentity}.
 	 */
 	private identity: string | null = null;
+	/** Summed lockfile mtimes as of the last sweep. See {@link lockfileChanged}. */
+	private lockfileStamp: number | null = null;
 
 	private constructor(
 		project: Project,
@@ -452,6 +462,33 @@ export class Workspace {
 
 	private rememberProjectIdentity(): void {
 		this.identity = this.projectIdentity();
+	}
+
+	/**
+	 * Whether a package install has happened since the last sweep.
+	 *
+	 * The lockfile stands in for the whole of `node_modules`: it is one file, it
+	 * is rewritten by every install across npm, yarn, pnpm and bun, and the
+	 * alternative — walking a dependency tree on every tool call — is not
+	 * something this can afford. Missing entirely is a stable state, not a
+	 * change, so a repository with no lockfile never bumps on this.
+	 *
+	 * Only the root's. A monorepo installs at its root, and a workspace rooted at
+	 * a package below it will see the change on its own lockfile if it has one.
+	 */
+	private lockfileChanged(): boolean {
+		let stamp = 0;
+		for (const name of LOCKFILE_NAMES) {
+			try {
+				stamp += fs.statSync(path.join(this.root, name)).mtimeMs;
+			} catch {
+				// Absent: contributes nothing, and stays contributing nothing.
+			}
+		}
+		const previous = this.lockfileStamp;
+		this.lockfileStamp = stamp;
+		// The first sweep establishes the baseline rather than reporting a change.
+		return previous !== null && previous !== stamp;
 	}
 
 	/** Whether {@link projectIdentity} has moved since the last acquire. */
@@ -945,7 +982,17 @@ export class Workspace {
 			this.playwrightInfo = null;
 		}
 
+		// An install changes what the resolver would answer without touching a
+		// single analysed file, and every one of those answers is memoized per
+		// epoch: which package resolves to which entry, which link leads where,
+		// which specifier is external. Nothing in the mtime sweep can see it —
+		// `node_modules` is skipped by the sweep, deliberately — so a linked
+		// workspace package added mid-session stayed external for as long as the
+		// process ran. One stat on the lockfile is the cheapest thing that notices.
+		const installChanged = this.lockfileChanged();
+
 		if (
+			installChanged ||
 			result.changed.length > 0 ||
 			result.added.length > 0 ||
 			result.removed.length > 0
@@ -1187,10 +1234,23 @@ export class Workspace {
 	 */
 	private admitResolvedFile(added: SourceFile): void {
 		const limit = this.options.maxFiles ?? DEFAULT_MAX_FILES;
-		this.parsedTotal =
-			this.parsedTotal === UNKNOWN_TOTAL
-				? this.project.getSourceFiles().length
-				: this.parsedTotal + 1;
+		// The same set the cap counts, which the raw project length is not: it
+		// includes declaration files and `node_modules`, both of which
+		// `countsAgainstCap` drops. Two effects, and the second is the reason this
+		// is a bug rather than a rounding difference. Once enough `.d.ts` files
+		// push the raw number past the limit, *every* admission falls into
+		// `enforceMaxFiles` and pays for a full project walk — reinstating the
+		// quadratic cost the running total exists to remove, permanently, on
+		// exactly the large repositories it was written for. And `large-scan`
+		// quotes this number against `cap ${limit}`, so the two halves of that
+		// sentence were counting different things.
+		const absolute = added.getFilePath();
+		if (this.parsedTotal === UNKNOWN_TOTAL) {
+			// `added` is already in the project, so the recount includes it.
+			this.parsedTotal = this.parsedCount();
+		} else if (countsAgainstCap(absolute, this.rel(absolute))) {
+			this.parsedTotal += 1;
+		}
 		if (this.parsedTotal > limit) {
 			this.enforceMaxFiles([added]);
 		} else {

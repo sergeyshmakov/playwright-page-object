@@ -1241,6 +1241,19 @@ interface CoveragePaging {
 	returned: number;
 	/** The size cap cut something: `truncatedBuckets` is non-empty. */
 	degraded: boolean;
+	/**
+	 * Buckets that kept no entry at all, so `nextOffset` cannot name them.
+	 *
+	 * Carried here rather than re-derived from `shown === 0`, which is how
+	 * {@link degradeHint} used to find them. The reserve measurement builds the
+	 * meta at its widest, and under that rule the two dimensions fight: the
+	 * widest `shown` is the page length, which is never zero, so the starvation
+	 * sentence was never in the reserve at all - and a page trimmed to the bytes
+	 * it allowed came back `too_large` anyway, reproduced at 99 bytes over. As
+	 * its own field it can be set to every bucket while the numbers beside it
+	 * stay at full width.
+	 */
+	starved: CoverageBucket[];
 }
 
 /**
@@ -1279,6 +1292,7 @@ function coverageResult(input: {
 		const shown: Record<string, number> = {};
 		const nextOffset: Record<string, number> = {};
 		const truncatedBuckets: CoverageBucket[] = [];
+		const starved: CoverageBucket[] = [];
 		let truncated = false;
 		let returned = 0;
 		slices.forEach((slice, index) => {
@@ -1303,6 +1317,9 @@ function coverageResult(input: {
 			if (count < slice.page.length) {
 				truncatedBuckets.push(slice.name);
 			}
+			if (count === 0 && slice.page.length > 0) {
+				starved.push(slice.name);
+			}
 		});
 		return {
 			shown,
@@ -1311,6 +1328,7 @@ function coverageResult(input: {
 			truncated,
 			returned,
 			degraded: truncatedBuckets.length > 0,
+			starved,
 		};
 	};
 
@@ -1345,6 +1363,10 @@ function coverageResult(input: {
 		truncated: true,
 		returned: 0,
 		degraded: true,
+		// Every bucket, so the starvation sentence is measured at full length.
+		starved: slices
+			.filter((slice) => slice.page.length > 0)
+			.map((slice) => slice.name),
 	});
 	const reserve = envelopeBytes(dataFor(slices.map(() => 0)), widestMeta);
 	const fit = fitBuckets(
@@ -1368,18 +1390,12 @@ function coverageResult(input: {
  */
 function degradeHint(
 	paging: CoveragePaging,
-	slices: BucketSlice[],
 	coverageId: string | undefined,
 ): string | undefined {
 	if (!paging.degraded) {
 		return undefined;
 	}
-	const starved = slices
-		.filter(
-			(slice) =>
-				slice.page.length > 0 && (paging.shown[slice.name] ?? -1) === 0,
-		)
-		.map((slice) => slice.name);
+	const starved = paging.starved;
 	const cut = paging.truncatedBuckets;
 	// The worked example resumes a bucket that actually has a next page; a
 	// starved one has no offset to name and gets its own sentence instead.
@@ -1604,7 +1620,7 @@ export function handleMapCoverage(
 			// payload nobody double-checks. It gets the loudest treatment.
 			hint: withEnvironmentHint(
 				report.warnings,
-				degradeHint(paging, slices, coverageId) ??
+				degradeHint(paging, coverageId) ??
 					pagingHint(offset, slices.length, paging.returned, largest) ??
 					(unusedDefaultedOff
 						? `uncoveredTestIds was left out: this call is scoped to a page object, and that list is project-wide whatever the scope, so it would mostly be ids other page objects cover (summary.uncoveredTestIds still counts them). Ask for it with buckets:["uncoveredTestIds"] or includeUnused:true.`
@@ -1685,7 +1701,7 @@ export function handleQueryCoverage(
 			truncated: paging.truncated,
 			hint: withEnvironmentHint(
 				report.warnings,
-				degradeHint(paging, [slice], args.coverageId) ??
+				degradeHint(paging, args.coverageId) ??
 					pagingHint(args.offset, 1, paging.returned, list.length),
 			),
 		}),

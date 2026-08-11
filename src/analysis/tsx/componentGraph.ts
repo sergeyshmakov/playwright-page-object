@@ -574,6 +574,17 @@ export interface ExternalModuleEvidence {
 
 const MAX_EXTERNAL_MODULES = 10;
 
+/**
+ * Importing directories probed per external specifier.
+ *
+ * The probe answers "is this package linked to sources in this repository", and
+ * the answer depends on which directory asks. Four distinct importers is enough
+ * to find a link in any monorepo layout that has one, and small enough that a
+ * specifier imported from three hundred files does not turn one warning into
+ * three hundred filesystem walks. Every probe is memoized per epoch besides.
+ */
+const MAX_SAMPLE_DIRS = 4;
+
 /** Workspace memo slot holding the shared "outside the workspace" answers. */
 const CENSUS_CACHE_KEY = "external-module-census";
 
@@ -620,8 +631,21 @@ export class ExternalModuleCensus {
 	private readonly sourcePaths = new Set<string>();
 	/** Specifiers behind those paths, so the remedy can name only them. */
 	private readonly linked = new Set<string>();
-	/** One importing directory per specifier that resolved to no source. */
-	private readonly sampleDirs = new Map<string, string>();
+	/**
+	 * Importing directories per specifier that resolved to no source.
+	 *
+	 * A set, not one directory. `packageSourceOutsideRoot` walks up from the
+	 * *importer*, so in a monorepo where one package links `@acme/ui` to its own
+	 * sources and another has an installed copy, the answer depends on which
+	 * importer asks - the same reason {@link placementOf} keys on the file. One
+	 * sample meant whichever file was scanned first decided for the whole
+	 * repository, and a specifier could be reported as linked while the sources
+	 * named beside it belong to a package nothing in that scope imports.
+	 *
+	 * Bounded per specifier: the point is to find *a* link, and beyond a handful
+	 * of distinct importers the extra probes buy nothing but stats.
+	 */
+	private readonly sampleDirs = new Map<string, Set<string>>();
 	private tagCount = 0;
 
 	constructor(private readonly ws: Workspace) {
@@ -656,10 +680,17 @@ export class ExternalModuleCensus {
 			if (placement.sourcePath) {
 				this.sourcePaths.add(placement.sourcePath);
 				this.linked.add(specifier);
-			} else if (!this.sampleDirs.has(specifier)) {
-				// One importer per specifier is enough to walk up from later; keeping
-				// them all would be a map the size of the repository.
-				this.sampleDirs.set(specifier, sourceFile.getDirectoryPath());
+			} else {
+				// Keeping every importer would be a map the size of the repository;
+				// keeping one answered the wrong question in a monorepo.
+				let dirs = this.sampleDirs.get(specifier);
+				if (!dirs) {
+					dirs = new Set<string>();
+					this.sampleDirs.set(specifier, dirs);
+				}
+				if (dirs.size < MAX_SAMPLE_DIRS) {
+					dirs.add(sourceFile.getDirectoryPath());
+				}
 			}
 		}
 	}
@@ -673,27 +704,34 @@ export class ExternalModuleCensus {
 		// one warning, so it is asked once per specifier that ended up external and
 		// has no source yet — at most `MAX_EXTERNAL_MODULES` questions per tree,
 		// memoized per epoch alongside the placements.
-		for (const [specifier, directory] of this.sampleDirs) {
+		for (const [specifier, directories] of this.sampleDirs) {
 			const split = splitPackageName(specifier);
 			if (!split) {
 				continue;
 			}
-			const key = `${CACHE_FIELD}${DIAGNOSTIC_PREFIX}${CACHE_FIELD}${split}`;
-			let placement = this.outside.get(key);
-			if (placement === undefined) {
-				placement = {
-					outside: true,
-					sourcePath: packageSourceOutsideRoot(
-						this.ws.project,
-						directory,
-						split,
-					),
-				};
-				this.outside.set(key, placement);
-			}
-			if (placement.sourcePath) {
-				sources.add(placement.sourcePath);
-				linked.add(specifier);
+			for (const directory of directories) {
+				// The importing directory is part of the key, not just the package
+				// name. Without it one directory's answer was handed to every other
+				// importer of the same package - so a specifier could be named as
+				// linked on the strength of a probe from somewhere else entirely, and
+				// `sourceRoot` widened to sources that scope never imports.
+				const key = `${CACHE_FIELD}${DIAGNOSTIC_PREFIX}${CACHE_FIELD}${directory}${CACHE_FIELD}${split}`;
+				let placement = this.outside.get(key);
+				if (placement === undefined) {
+					placement = {
+						outside: true,
+						sourcePath: packageSourceOutsideRoot(
+							this.ws.project,
+							directory,
+							split,
+						),
+					};
+					this.outside.set(key, placement);
+				}
+				if (placement.sourcePath) {
+					sources.add(placement.sourcePath);
+					linked.add(specifier);
+				}
 			}
 		}
 		return {

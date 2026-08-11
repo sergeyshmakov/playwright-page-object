@@ -276,8 +276,15 @@ function computePageObjectTree(
 	// walk can detect.
 	const warnings: Diagnostic[] = [...ws.environmentWarnings()];
 	let truncated = false;
-	/** Classes the node budget refused, reported once rather than each. */
-	let omitted = 0;
+	/**
+	 * Classes the node budget refused, reported once rather than each.
+	 *
+	 * A set of refs, not a counter. Both call sites fire per *edge*, so a class
+	 * three members point at was counted three times and the warning told the
+	 * caller three classes were left out when one was. The number is the reason
+	 * they would widen the budget, so it has to be the number of classes.
+	 */
+	const omitted = new Set<string>();
 
 	const ensureExternal = (ref: string): void => {
 		if (defs[ref]) {
@@ -288,7 +295,7 @@ function computePageObjectTree(
 			// definitions the budget refused, and the outline reads a missing
 			// `$ref` as "not expanded: node budget" from that one warning.
 			truncated = true;
-			omitted += 1;
+			omitted.add(ref);
 			return;
 		}
 		defs[ref] = externalStub(ref);
@@ -342,7 +349,7 @@ function computePageObjectTree(
 			// now absent reads as "not expanded: node budget" from the single
 			// summary warning, which is what the outline already renders.
 			truncated = true;
-			omitted += 1;
+			omitted.add(entry.key);
 			return;
 		}
 
@@ -385,11 +392,11 @@ function computePageObjectTree(
 
 	ensure(rootEntry, 0);
 
-	if (omitted > 0) {
+	if (omitted.size > 0) {
 		warnings.push(
 			warn(
 				"node-budget-reached",
-				`Node budget of ${budget.maxNodes} definitions reached; ${omitted} more class${omitted === 1 ? " was" : "es were"} left out and references to them do not resolve. Re-call with a smaller depth, or address one of the nested classes directly.`,
+				`Node budget of ${budget.maxNodes} definitions reached; ${omitted.size} more class${omitted.size === 1 ? " was" : "es were"} left out and references to them do not resolve. Re-call with a smaller depth, or address one of the nested classes directly.`,
 			),
 		);
 	}
