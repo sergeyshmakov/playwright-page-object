@@ -142,6 +142,18 @@ describe("scope validated wrongly", () => {
 		expect(problems.join("\n")).toContain("..");
 	});
 
+	it("refuses a `..` hidden inside a brace alternative", () => {
+		// `src/{components,../..}/**` splits into `{components,..` and `..}`, and
+		// neither is equal to `..` — so a segment check on `/` alone was one brace
+		// away from being decorative.
+		const root = scratch({ "src/.keep": "" });
+		const problems = validateServerOptions({
+			projectRoot: root,
+			srcDirs: ["src/{components,../..}/**/*.tsx"],
+		});
+		expect(problems.join("\n")).toContain("..");
+	});
+
 	it("still accepts a glob inside the root", () => {
 		const root = scratch({ "src/.keep": "" });
 		expect(

@@ -131,7 +131,17 @@ export function tsConfigChain(tsConfigFilePath: string): string[] {
 				continue;
 			}
 			const resolved = path.resolve(path.dirname(current), specifier);
-			queue.push(existsFile(resolved) ? resolved : `${resolved}.json`);
+			// Both spellings TypeScript accepts, and *whether or not they exist*.
+			// Deciding by existence was the bug: a specifier that already ends in
+			// `.json` and is not there yet became `base.json.json`, so the day the
+			// real file appeared nothing was watching it — which is precisely the
+			// case this fingerprint has to catch, since a config coming into
+			// existence changes the effective options as much as an edit does.
+			if (resolved.toLowerCase().endsWith(".json")) {
+				queue.push(resolved);
+			} else {
+				queue.push(`${resolved}.json`, path.join(resolved, "tsconfig.json"));
+			}
 		}
 	}
 	return chain;

@@ -117,6 +117,30 @@ describe("what survives a config edit", () => {
 		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
 	});
 
+	it("notices an extends target that did not exist yet", () => {
+		// The chain resolved `./base.json` by *existence*, so a target that was
+		// not there yet became `base.json.json` — and the day the real file
+		// appeared nothing was watching it. A config coming into existence changes
+		// the effective options as much as an edit does.
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				extends: "./base.json",
+				include: ["src/**/*.ts"],
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		Workspace.reset();
+		const first = Workspace.acquire({ projectRoot: root });
+		write(
+			root,
+			"base.json",
+			JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+		);
+		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
+	});
+
 	it("keeps the same project when an ordinary source file changes", () => {
 		// The guard has to be stable, or every call pays for a rebuild. An
 		// unstable comparison here costs ~2.3 s per tool call on a large repo.

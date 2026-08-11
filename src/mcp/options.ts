@@ -98,7 +98,13 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 		// the root, and reaches well outside it. `..` is never useful in a scope
 		// pattern and its only effect here is to escape, so it is refused as a
 		// whole segment wherever it appears.
-		if (toPosix(dir).split("/").includes("..")) {
+		//
+		// Matched against the raw pattern rather than against `split("/")`, because
+		// a brace alternative is a segment boundary that no slash marks:
+		// `src/{components,../..}/**` splits into `{components,..` and `..}`, and
+		// neither is equal to `..` — so the whole guard was one brace away from
+		// being decorative. `{`, `,` and `}` count as boundaries alongside `/`.
+		if (/(^|[/{,])\.\.($|[/},])/.test(toPosix(dir))) {
 			problems.push(
 				`--src-dir must not contain a ".." segment: ${dir} (write the directory you mean, relative to --project-root)`,
 			);
