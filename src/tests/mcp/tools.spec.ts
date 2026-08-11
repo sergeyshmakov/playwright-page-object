@@ -1677,6 +1677,70 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	/**
+	 * The instructions used to promise `buckets: []` costs "a few hundred bytes".
+	 * Measured on a production repository it was 5,362 B cold and 1,769 B warm —
+	 * a number written into the prose and never checked. The claim is qualitative
+	 * now, and this holds it to the only part that has to be true: summary-first
+	 * is a small fraction of the full report, whatever repository it runs on.
+	 */
+	it("makes the summary-first call a small fraction of the full report", async () => {
+		const { client } = await connect(exampleRoot);
+		const summary = await callTool(client, "map_coverage", { buckets: [] });
+		const full = await callTool(client, "map_coverage", {});
+
+		expect(summary.envelope.ok).toBe(true);
+		expect(summary.text.length).toBeLessThan(full.text.length / 3);
+		// And it must still carry the two things it exists to deliver.
+		const data = summary.envelope.data as Record<string, unknown>;
+		expect(data.summary).toBeDefined();
+		expect(data.scope).toBeDefined();
+	}, 30_000);
+
+	/**
+	 * The same defect at a second call site: `map_coverage` scoping by a path
+	 * that holds no page object. The previous round fixed the component branch
+	 * and left this one, so the wording now comes from one shared helper.
+	 */
+	it("does not promise suggested paths when scoping by a UI file", async () => {
+		await withProject(
+			"ppo-scope-ui-file-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="AppRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+				"e2e/HomePage.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("AppRoot")',
+					"export class HomePage extends RootPageObject {",
+					'\t@Selector("Thing")',
+					"\taccessor Thing!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { isError, envelope } = await callTool(client, "map_coverage", {
+					file: "src/App.tsx",
+				});
+
+				expect(isError).toBe(true);
+				expect(envelope.error?.code).toBe("file_not_found");
+				const hint = envelope.error?.hint ?? "";
+				if ((envelope.error?.suggestions ?? []).length === 0) {
+					expect(hint).not.toContain("suggested paths");
+				} else {
+					expect(hint).toContain("suggested paths");
+				}
+			},
+		);
+	}, 30_000);
+
 	it("does not promise suggestions it has none of", async () => {
 		await withProject(
 			"ppo-no-suggestions-",

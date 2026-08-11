@@ -23,7 +23,7 @@ import {
 	type Workspace,
 } from "../analysis";
 import { apiHintsFor } from "./api";
-import { ToolError } from "./errors";
+import { hintForSuggestions, ToolError } from "./errors";
 import {
 	type CoverageHandles,
 	HANDLE_LIFETIME_TEXT,
@@ -530,12 +530,18 @@ function resolveEntryFile(
 		);
 	}
 	if (match.kind === "none") {
+		const suggestions = nearestFiles(resolved.file, candidates);
+		const scopeAdvice =
+			"Only scanned .tsx/.jsx sources can root a tree: if the file is on disk but outside the scan, restart the server with --src-dir <dir> (or --project-root <dir>) covering it.";
 		throw new ToolError(
 			"file_not_found",
 			`No scanned .tsx/.jsx source matches "${file}".`,
 			{
-				suggestions: nearestFiles(resolved.file, candidates),
-				hint: "Use one of the suggested paths, or pass `component` and let the server find the file. Only scanned .tsx/.jsx sources can root a tree: if the file is on disk but outside the scan, restart the server with --src-dir <dir> (or --project-root <dir>) covering it.",
+				suggestions,
+				hint: hintForSuggestions(suggestions, {
+					some: `Use one of the suggested paths, or pass \`component\` and let the server find the file. ${scopeAdvice}`,
+					none: `Nothing in the scan resembles that path. Pass \`component\` and let the server find the file, or pass \`testId\` to find where a known id is rendered. ${scopeAdvice}`,
+				}),
 			},
 		);
 	}
@@ -587,13 +593,10 @@ function missingComponent(
 			`No component named "${wanted}" was found in the scanned sources.`,
 			{
 				suggestions,
-				// Only when there are some. A name nothing resembles produced an empty
-				// list under a hint that said "pass one of the suggested names",
-				// sending the reader to look for something that was not sent.
-				hint:
-					suggestions.length > 0
-						? "Pass one of the suggested names, pass `file` with the component's path, or omit both to auto-detect the app entry."
-						: "Nothing in the scan resembles that name. Pass `file` with the component's path, omit both to auto-detect the app entry, or pass `testId` to find where a known id is rendered.",
+				hint: hintForSuggestions(suggestions, {
+					some: "Pass one of the suggested names, pass `file` with the component's path, or omit both to auto-detect the app entry.",
+					none: "Nothing in the scan resembles that name. Pass `file` with the component's path, omit both to auto-detect the app entry, or pass `testId` to find where a known id is rendered.",
+				}),
 			},
 		);
 	}
@@ -612,10 +615,10 @@ function missingComponent(
 			: `No component named "${wanted}" is declared in "${scopeFile}".`,
 		{
 			suggestions: inFile,
-			hint:
-				inFile.length === 0
-					? "Pass `file` with the path of a file that declares a component, or omit both to auto-detect the app entry."
-					: "Pass one of the suggested names, drop `file` to search every scanned file, or omit both to auto-detect the app entry.",
+			hint: hintForSuggestions(inFile, {
+				some: "Pass one of the suggested names, drop `file` to search every scanned file, or omit both to auto-detect the app entry.",
+				none: "Pass `file` with the path of a file that declares a component, or omit both to auto-detect the app entry.",
+			}),
 		},
 	);
 }
@@ -1269,12 +1272,16 @@ export function handleMapCoverage(
 			match = files.find((file) => foldFile(file) === wanted);
 		}
 		if (!match) {
+			const suggestions = nearestFiles(resolved.file, files);
 			throw new ToolError(
 				"file_not_found",
 				`No page object is declared in "${args.file}".`,
 				{
-					suggestions: nearestFiles(resolved.file, files),
-					hint: "Use one of the suggested paths, or pass `class` and let the server find the file; list_page_objects reports the file of every page object.",
+					suggestions,
+					hint: hintForSuggestions(suggestions, {
+						some: "Use one of the suggested paths, or pass `class` and let the server find the file; list_page_objects reports the file of every page object.",
+						none: "No page-object file resembles that path - it may be a UI source rather than a page object, and this tool scopes by page object. Pass `class`, or call list_page_objects to see every page object and its file.",
+					}),
 				},
 			);
 		}

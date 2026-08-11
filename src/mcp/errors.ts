@@ -37,3 +37,19 @@ export class ToolError extends Error {
 		this.suggestions = extras?.suggestions;
 	}
 }
+
+/**
+ * Picks the wording that matches what the payload actually carries.
+ *
+ * Three call sites computed a suggestion list that can legitimately come back
+ * empty, and told the reader "use one of the suggested paths" either way — an
+ * instruction to read something that was not sent. It was fixed at one of them
+ * and the audit promptly hit another, so the choice lives here now: pass both
+ * wordings and the list decides, and a fourth site cannot get it wrong.
+ */
+export function hintForSuggestions(
+	suggestions: string[] | undefined,
+	wording: { some: string; none: string },
+): string {
+	return suggestions && suggestions.length > 0 ? wording.some : wording.none;
+}
