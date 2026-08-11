@@ -214,6 +214,47 @@ describe("MCP server over in-memory transport", () => {
 	}, 30_000);
 
 	/**
+	 * The tree is a chain of names; the calls that walk it are not in the tree.
+	 * A page object's inherited library helpers are deliberately not repeated on
+	 * every class, so without this block a reader has the whole selector graph
+	 * and still cannot write `await checkoutPage.CartItems.first().waitVisible()`.
+	 */
+	it("ships the runtime API of every base the tree uses", async () => {
+		const { client } = await connect(exampleRoot);
+		const { envelope } = await callTool(client, "get_page_object_tree", {
+			class: "CheckoutPage",
+		});
+
+		const hints = envelope.meta?.apiHints as Record<string, string>;
+		expect(Object.keys(hints)).toEqual([
+			"members",
+			"RootPageObject",
+			"PageObject",
+			"ListPageObject",
+		]);
+		// The four things the example spec does that the tree cannot express.
+		expect(hints.RootPageObject).toContain("new CheckoutPage(page)");
+		expect(hints.members).toContain(".$");
+		expect(hints.PageObject).toContain(".waitVisible()");
+		expect(hints.ListPageObject).toContain(".first()");
+	}, 30_000);
+
+	it("ships the same API block with the outline format", async () => {
+		const { client } = await connect(exampleRoot);
+		const { envelope } = await callTool(client, "get_page_object_tree", {
+			class: "CheckoutPage",
+			format: "outline",
+		});
+
+		expect(typeof envelope.data).toBe("string");
+		// `outline` is the format an agent is told to prefer, so it is the one
+		// that must not be the cheaper answer in the way that matters.
+		expect(
+			Object.keys(envelope.meta?.apiHints as Record<string, string>),
+		).toContain("ListPageObject");
+	}, 30_000);
+
+	/**
 	 * The engine memoizes the tree and hands the same object to every caller, so
 	 * `includeMethods: false` must not be able to trim it. It used to delete the
 	 * methods in place, which — once the cache existed — silently emptied the

@@ -22,6 +22,7 @@ import {
 	type UiUnresolvedReason,
 	type Workspace,
 } from "../analysis";
+import { apiHintsFor } from "./api";
 import { ToolError } from "./errors";
 import {
 	type CoverageHandles,
@@ -376,6 +377,10 @@ export function handleGetPageObjectTree(
 		playwrightConfig: configFileOf(workspace),
 		note: resolved.note,
 		truncated: tree.truncated,
+		// In meta, so both formats carry it: `outline` ships a string as its data,
+		// and the call syntax is no less needed there. It describes how to *use*
+		// what the tree found rather than being part of the finding.
+		apiHints: apiHintsFor(tree),
 		warnings: tree.warnings,
 		hint: environmentHint(tree.warnings),
 	};
