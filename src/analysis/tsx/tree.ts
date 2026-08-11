@@ -1462,7 +1462,11 @@ class TreeBuilder {
 		if (!found || !containsJsx(found)) {
 			return null;
 		}
-		return { fn: found, parameters: parameterNames(found) };
+		return {
+			fn: found,
+			parameters: parameterNames(found),
+			nested: isLexicallyInside(found, owner.fn),
+		};
 	}
 
 	/**
@@ -1504,7 +1508,22 @@ class TreeBuilder {
 			const initializer = declaration.getInitializer();
 			if (initializer && isInlineFunction(initializer)) {
 				index.set(name, unwrapExpression(initializer));
+			} else {
+				// A local that is *not* a function written here still shadows the
+				// module-scope one of the same name — `const renderIcon =
+				// props.renderIcon ?? fallback` is the caller's function or the
+				// module's, and the call site cannot say which. Leaving the module
+				// entry in place inlined a subtree this render may never produce,
+				// with `fidelity: "full"` over the top.
+				index.delete(name);
 			}
+		}
+		// Props shadow module scope outright: a render prop is the caller's
+		// function, and no local declaration can share a parameter's name (that is a
+		// redeclaration), so anything still indexed under one came from module scope
+		// and is the wrong function.
+		for (const name of parameterNames(owner.fn)) {
+			index.delete(name);
 		}
 		this.helpers.set(key, index);
 		return index;
@@ -1556,7 +1575,9 @@ class TreeBuilder {
 		if (returns.length === 0) {
 			return [];
 		}
-		const childState = shadowParameters(state, helper.parameters);
+		const childState = helper.nested
+			? shadowParameters(state, helper.parameters)
+			: detachFromCallSite(state);
 		this.activeHelpers.add(key);
 		try {
 			return returns.flatMap((expression) =>
@@ -2157,7 +2178,18 @@ class TreeBuilder {
 			return;
 		}
 		if (scanned.hasSpread) {
-			if (state.directAttribute) {
+			// The spread has to be carrying *this component's props*, or the caller's
+			// attribute never reaches this element. `hasSpread` is true for any
+			// spread at all, so `function Save(props) { return <button
+			// {...styleProps}/> }` under `<Save data-testid="Save"/>` reported
+			// `data-testid="Save"` as rendered on that button — an id nothing in the
+			// DOM carries, shipped with `fidelity: "full"` and then matched against a
+			// selector as if it had been observed. `spreadNames` and
+			// `spreadSourceNames` were both already computed and neither was read.
+			const carriesProps = scanned.spreadNames.some((name) =>
+				owner.spreadSourceNames.includes(name),
+			);
+			if (carriesProps && state.directAttribute) {
 				node.testId = state.directAttribute;
 				node.viaSpread = true;
 				return;
@@ -2183,6 +2215,16 @@ class TreeBuilder {
 	): SiteValue {
 		const reference = propReferenceIn(value.raw, owner);
 		if (reference) {
+			// The name has to be a prop before anything at the call site can speak
+			// for it. Without this the *local* in `const id = makeId()` was looked
+			// up in the call-site bindings, so `<Card id="CardRoot"/>` made the tree
+			// report `data-testid="CardRoot"` on an element that renders a generated
+			// value — and `mergeResolvedOccurrences` then filed the invention as a
+			// proven-rendered id. `provablyAbsent` has always demanded this check;
+			// the path that *asserts* a value did not, which is the wrong way round.
+			if (!declaresProp(reference, owner)) {
+				return { kind: "unknown" };
+			}
 			const bound = state.bindings.get(reference.name);
 			if (bound) {
 				return { kind: "value", value: bound, viaProp: reference.name };
@@ -2210,6 +2252,11 @@ class TreeBuilder {
 		// `data-tid={dataTid || "Row"}` and its `??` / ternary spellings.
 		const fallback = this.fallbackExpression(scanned, owner);
 		if (!fallback) {
+			return { kind: "unknown" };
+		}
+		// Same rule for the operand of `local || "Row"`: only a prop is answerable
+		// from the call site.
+		if (!declaresProp(fallback.reference, owner)) {
 			return { kind: "unknown" };
 		}
 		const bound = state.bindings.get(fallback.reference.name);
@@ -2309,20 +2356,7 @@ class TreeBuilder {
 		if (state.provided.has(reference.name)) {
 			return false;
 		}
-		// The name has to be one this component actually reads as a prop. Anything
-		// else is some other binding — a hook result, a module constant — and says
-		// nothing at all about what the call site passed.
-		//
-		// `props.testId` qualifies by construction: `props` *is* the parameter, so
-		// every member read off it is a prop whether or not the component
-		// destructured it anywhere.
-		const declaresIt =
-			owner.propNames.includes(reference.name) ||
-			owner.propAliases.has(reference.name) ||
-			owner.propDefaults.has(reference.name) ||
-			(reference.container !== null &&
-				owner.spreadSourceNames.includes(reference.container));
-		if (!declaresIt) {
+		if (!declaresProp(reference, owner)) {
 			return false;
 		}
 		const written = owner.propAliases.get(reference.name);
@@ -2338,6 +2372,33 @@ class TreeBuilder {
 interface PropReference {
 	name: string;
 	container: string | null;
+}
+
+/**
+ * Whether a name a test-id expression reads is one this component takes as a
+ * prop. Anything else is some other binding — a hook result, a module constant,
+ * a local — and says nothing at all about what the call site passed.
+ *
+ * `props.testId` qualifies by construction: `props` *is* the parameter, so every
+ * member read off it is a prop whether or not the component destructured it
+ * anywhere.
+ *
+ * Shared by both directions on purpose. Asking it before *denying* an id but not
+ * before *asserting* one is exactly backwards: a wrong denial hides a selector,
+ * a wrong assertion invents one and the coverage report then treats the
+ * invention as proven.
+ */
+function declaresProp(
+	reference: PropReference,
+	owner: ComponentDefinition,
+): boolean {
+	return (
+		owner.propNames.includes(reference.name) ||
+		owner.propAliases.has(reference.name) ||
+		owner.propDefaults.has(reference.name) ||
+		(reference.container !== null &&
+			owner.spreadSourceNames.includes(reference.container))
+	);
 }
 
 /** Tags the top level of a passed expression; descendants keep proven placement. */
@@ -2375,6 +2436,8 @@ function unwrapExpression(node: Node): Node {
 interface RenderHelper {
 	fn: Node;
 	parameters: string[];
+	/** Declared inside the component body, so it closes over the component's props. */
+	nested: boolean;
 }
 
 /**
@@ -2434,6 +2497,48 @@ function shadowParameters(state: ExpandState, names: string[]): ExpandState {
 		provided.add(name);
 	}
 	return { ...state, bindings, provided };
+}
+
+/**
+ * The state a helper declared *outside* the component body is walked with.
+ *
+ * {@link shadowParameters} removes the names a helper's parameters bind, which
+ * is the whole story for a helper written inside the component: everything it
+ * did not shadow really is the component's own scope. A module-scope function
+ * closes over nothing of the kind. Its identifiers resolve to module scope, and
+ * walking it with the component's call-site state read them as the component's
+ * props anyway — with no parameters to shadow, a zero-argument
+ * `function renderRow() { return <div data-testid={rowId}/> }` was handed the
+ * caller's `rowId` verbatim and reported it as the id that renders.
+ *
+ * Clearing `bindings` is half of it; `callSiteKnown: false` is the other half,
+ * for the same reason it is false at the root. Without it the empty `provided`
+ * set becomes positive evidence of *absence*, and the walk swaps one wrong
+ * answer for its mirror image — "no id renders here" asserted from a scope it
+ * cannot see. `conditional` and `repeated` are kept: they describe the position
+ * the call sits at, which is the caller's fact, not the callee's.
+ */
+function detachFromCallSite(state: ExpandState): ExpandState {
+	return {
+		...state,
+		bindings: new Map(),
+		provided: new Set(),
+		spreadAtSite: false,
+		callSiteKnown: false,
+		directAttribute: null,
+	};
+}
+
+/** Whether `node` is written somewhere inside `container`. */
+function isLexicallyInside(node: Node, container: Node): boolean {
+	let current: Node | undefined = node.getParent();
+	while (current) {
+		if (current === container) {
+			return true;
+		}
+		current = current.getParent();
+	}
+	return false;
 }
 
 /** Source text for a marker: one line, bounded, so a long call cannot bloat the payload. */
