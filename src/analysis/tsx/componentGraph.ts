@@ -87,22 +87,85 @@ export type ComponentResolution =
 	| { kind: "external"; module: string }
 	| { kind: "unresolved"; reason: ComponentUnresolvedReason };
 
-function componentFunctionOf(node: Node): ComponentFunction | null {
-	if (Node.isFunctionDeclaration(node)) {
-		return node;
+/**
+ * Calls that wrap a component and return one.
+ *
+ * Matched by name rather than by resolving the callee. The name *is* the
+ * convention here — `React.memo` and a bare `memo` are the same thing, and no
+ * codebase names an unrelated function `forwardRef` and wraps a component in
+ * it — while resolving would turn every call in the declaration position into a
+ * module lookup.
+ */
+const COMPONENT_WRAPPERS = new Set(["memo", "forwardRef"]);
+
+/** Parentheses and type assertions, which say nothing about what a node is. */
+function unwrapSyntax(node: Node): Node {
+	let current = node;
+	while (
+		Node.isParenthesizedExpression(current) ||
+		Node.isAsExpression(current) ||
+		Node.isNonNullExpression(current) ||
+		Node.isTypeAssertion(current) ||
+		Node.isSatisfiesExpression(current)
+	) {
+		current = current.getExpression();
 	}
-	if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
-		return node;
+	return current;
+}
+
+/**
+ * The function inside any stack of component wrappers.
+ *
+ * `memo(Foo)`, `forwardRef(Foo)` and `memo(forwardRef(Foo))` are how a large
+ * share of real React components are declared, and every one of them used to
+ * resolve as `not-a-function-component` — honestly marked, so the tree never
+ * lied about it, but a boundary the walk had no reason to stop at. Of the
+ * defects on this branch it has the widest reach: it applies to every React
+ * repository, not to a particular shape of one.
+ *
+ * `forwardRef`'s callback takes `(props, ref)`, and `readProps` reads the first
+ * parameter, so the props side needs nothing special.
+ */
+function unwrapComponentWrapper(node: Node): Node {
+	let current = unwrapSyntax(node);
+	// Terminates: every iteration descends into a strictly smaller subexpression.
+	while (Node.isCallExpression(current)) {
+		const callee = current.getExpression();
+		const name = Node.isPropertyAccessExpression(callee)
+			? callee.getName()
+			: Node.isIdentifier(callee)
+				? callee.getText()
+				: null;
+		if (name === null || !COMPONENT_WRAPPERS.has(name)) {
+			return current;
+		}
+		const [first] = current.getArguments();
+		if (!first) {
+			return current;
+		}
+		current = unwrapSyntax(first);
+	}
+	return current;
+}
+
+function asComponentFunction(node: Node): ComponentFunction | null {
+	return Node.isFunctionDeclaration(node) ||
+		Node.isArrowFunction(node) ||
+		Node.isFunctionExpression(node)
+		? node
+		: null;
+}
+
+function componentFunctionOf(node: Node): ComponentFunction | null {
+	const direct = asComponentFunction(unwrapComponentWrapper(node));
+	if (direct) {
+		return direct;
 	}
 	if (Node.isVariableDeclaration(node)) {
 		const initializer = node.getInitializer();
-		if (
-			initializer &&
-			(Node.isArrowFunction(initializer) ||
-				Node.isFunctionExpression(initializer))
-		) {
-			return initializer;
-		}
+		return initializer
+			? asComponentFunction(unwrapComponentWrapper(initializer))
+			: null;
 	}
 	return null;
 }

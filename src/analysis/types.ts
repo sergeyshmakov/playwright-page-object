@@ -436,6 +436,20 @@ export type UiUnresolvedReason =
 	 * no marker.
 	 */
 	| "local-render-function"
+	/**
+	 * The same shape one module away: `{renderRow()}` whose `renderRow` is
+	 * imported from another file in this repository and returns JSX. Its subtree
+	 * is not inlined — the nodes would be attributed to the caller's file, which
+	 * is not where they are written — but the call is reported, because silence
+	 * here left the ids it renders missing from the tree with `fidelity: "full"`
+	 * over the top and `traversalGap` returning null.
+	 *
+	 * Held to the same evidence bar as `local-render-function`: the callee has to
+	 * resolve to in-repo source whose body contains JSX. An imported `t("label")`
+	 * is not this and gets no marker; neither does a call into a package, where
+	 * nothing can tell the two apart.
+	 */
+	| "imported-render-function"
 	/* content the walk could see but not place */
 	/** The expression syntactically contains JSX the walk could not attach to a node. */
 	| "unresolved-jsx"

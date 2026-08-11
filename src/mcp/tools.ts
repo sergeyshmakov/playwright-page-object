@@ -1175,6 +1175,8 @@ function gapHint(
 			return `Those components ship from outside the scanned sources, so no depth reaches inside them - re-root the server with --project-root covering their sources, or accept the gap. ${caveat}`;
 		case "local-render-function":
 			return `A same-file function returning JSX could not be inlined; its call is in the node's \`raw\`, so read that function directly. ${caveat}`;
+		case "imported-render-function":
+			return `A function imported from another file in this repository returns JSX and is called here; the call is in the node's \`raw\`. Its elements belong to that file, so root a tree there rather than expecting them inline. ${caveat}`;
 		case "identifier-unresolved":
 		case "namespaced-component":
 		case "not-a-function-component":

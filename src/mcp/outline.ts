@@ -240,12 +240,19 @@ function unresolvedLabel(reason: UiUnresolvedReason): string {
 			return "node budget";
 		case "local-render-function":
 			return "local render function";
+		case "imported-render-function":
+			return "imported render function";
 		case "unresolved-jsx":
 			return "hole: unresolved-jsx";
 		case "opaque-expression":
 			return "hole: opaque";
-		default:
+		case "spread-props":
 			return "spread props";
+		default:
+			// The code itself, not the last label that happened to be here. The
+			// default used to read "spread props", so any reason added to the union
+			// would have been labelled as a spread until someone noticed.
+			return reason;
 	}
 }
 

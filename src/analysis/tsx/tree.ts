@@ -1230,6 +1230,16 @@ class TreeBuilder {
 		const branches: UiNode[] = [];
 		for (const expression of returns) {
 			if (!this.spendNode()) {
+				// The reserve exists for exactly this cut: no node left to charge, and
+				// the loss real. Breaking without spending it shipped three branches of
+				// nine and said nothing about the other six — the payload reads as a
+				// complete list of what the component can return.
+				if (this.markerSlot === "held") {
+					this.markerSlot = "spent";
+					branches.push(
+						this.markerNode(definition, expression, "node-budget-reached"),
+					);
+				}
 				break;
 			}
 			const position = lineAndColumnAt(
@@ -1374,7 +1384,9 @@ class TreeBuilder {
 			// `fidelityReason` blamed unrelated external modules.
 			const helper = this.renderHelperOf(callee, owner);
 			if (!helper) {
-				return fromArguments;
+				return fromArguments.length > 0
+					? fromArguments
+					: this.importedRenderHelper(callee, owner);
 			}
 			const inlined = this.walkRenderHelper(
 				helper,
@@ -1492,6 +1504,55 @@ class TreeBuilder {
 			parameters: parameterNames(found),
 			nested: isLexicallyInside(found, owner.fn),
 		};
+	}
+
+	/**
+	 * The marker for a render helper that lives in another file.
+	 *
+	 * `renderHelperOf` is same-file by construction, so `{renderRow()}` importing
+	 * `renderRow` from a sibling module produced no nodes *and* no marker: the ids
+	 * it renders were missing from the tree, `fidelity` still read `"full"`,
+	 * `traversalGap` returned null on the strength of that, and `idsNotPlaced` was
+	 * never even computed. Nothing in the response admitted anything was dropped.
+	 *
+	 * Not inlined, only reported. The walk attributes every node it makes to
+	 * `owner.file`, so pulling a subtree across a module boundary would file those
+	 * elements under a file that does not contain them — the fix would be a new
+	 * wrong answer in place of a silence.
+	 *
+	 * The evidence bar is the same as the same-file rule's, which is what keeps
+	 * this from marking every `{t("label")}` in the codebase: the name has to
+	 * resolve to in-repo source, and that source has to contain JSX. A call into
+	 * an installed package resolves external and is left alone — there, nothing
+	 * distinguishes a render helper from a formatter.
+	 */
+	private importedRenderHelper(
+		callee: Node,
+		owner: ComponentDefinition,
+	): UiNode[] {
+		if (!Node.isIdentifier(callee)) {
+			return [];
+		}
+		const resolution = resolveComponentRef(
+			this.ws,
+			this.ws.project,
+			owner.sourceFile,
+			callee.getText(),
+			{ preferSyntacticResolution: true },
+		);
+		if (resolution.kind !== "local") {
+			return [];
+		}
+		const { fn, sourceFile } = resolution.definition;
+		if (sourceFile === owner.sourceFile || !containsJsx(fn)) {
+			return [];
+		}
+		return this.marker(
+			owner,
+			callee,
+			"imported-render-function",
+			rawText(callee.getParent() ?? callee),
+		);
 	}
 
 	/**
