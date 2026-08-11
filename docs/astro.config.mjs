@@ -63,6 +63,7 @@ export default defineConfig({
 					items: [
 						"mcp",
 						"mcp/quick-start",
+						"mcp/workflows",
 						"mcp/tools",
 						"mcp/configuration",
 						"mcp/troubleshooting",

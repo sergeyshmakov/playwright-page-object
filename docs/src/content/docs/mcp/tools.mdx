@@ -297,6 +297,8 @@ Here, "rendered" means the scanner traced a test ID to a host JSX element. The t
 | `"partial"` | At least one subtree is missing or its placement is unproven. `roots` is real but has holes, and `meta.fidelityReason` counts them |
 | `"flat"` | No entry component could be rooted. `roots` is empty and only `inventory` is meaningful |
 
+For the full decision procedure — every response shape and what absence means in each — see [when "not found" is proof](/mcp/workflows/#when-can-i-treat-not-found-as-proof).
+
 A traversal gap is a successful response, not an error: the tool returns the part of the tree it could build and describes the hole. So read `meta.fidelity` and `meta.truncated` before treating `roots` as the whole picture — only `"full"` with no `truncated` flag makes absence from the tree evidence that an ID is not rendered. The one gap that does fail is a `component` the walk could not root at all, which returns `incomplete_tree`.
 
 The flat inventory is complete in all three states, so a `testId` lookup answers correctly whatever the walk did.

@@ -108,6 +108,10 @@ It is the only error a gap in the walk produces. A tree that is merely missing s
 
 ## What does `fidelity: "partial"` mean?
 
+:::tip
+If you are deciding whether an ID really does not exist, the [proof table](/mcp/workflows/#when-can-i-treat-not-found-as-proof) in the workflow guide covers every response shape in one place.
+:::
+
 A partial tree means the walk found a root but could not place or expand every subtree. `meta.fidelityReason` counts the gaps and names their codes.
 
 Absence from a partial tree is not proof that a test ID cannot reach a host element. Two fields turn that from a caveat into an answer:
