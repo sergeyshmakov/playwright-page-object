@@ -9,6 +9,7 @@ import { dedupeDiagnostics, info } from "../diagnostics";
 import type {
 	ComponentInfo,
 	Diagnostic,
+	DiagnosticCode,
 	SourceLoc,
 	TestIdOccurrence,
 	TestIdTree,
@@ -108,6 +109,15 @@ const DEFAULT_MAX_DEPTH = 6;
  */
 const DEFAULT_MAX_NODES = 1500;
 const ENTRY_BASENAMES = ["main.tsx", "main.jsx", "index.tsx", "index.jsx"];
+
+/**
+ * How many per-site diagnostics of one code a tree may emit.
+ *
+ * Enough to show a reader *where* the walk kept stopping; far short of one per
+ * site, which on a deep page meant 46 near-identical entries and a third of the
+ * whole response. `tree-partial` carries the exact totals either way.
+ */
+const MAX_SITE_DIAGNOSTICS = 3;
 
 /** Variable hops one expression walk may take. One, by design — see the header. */
 const MAX_VARIABLE_HOPS = 1;
@@ -764,7 +774,20 @@ function computeTestIdTree(
 		if (shape.unresolved > 0 || budget.exhausted) {
 			fidelity = "partial";
 			fidelityReason = partialReason(shape, budget.exhausted);
-			warnings.push(info("tree-partial", fidelityReason));
+			// The counts above are exact; the individual site entries beside them
+			// are not, and a reader counting three of them would undercount badly.
+			const sampled = builder
+				.sampledSites()
+				.map((one) => `${one.shown} of ${one.total} ${one.code}`)
+				.join(", ");
+			warnings.push(
+				info(
+					"tree-partial",
+					sampled
+						? `${fidelityReason} Per-site entries in this response are a sample (${sampled}); the counts here are exact.`
+						: fidelityReason,
+				),
+			);
 		} else {
 			fidelity = "full";
 			fidelityReason = undefined;
@@ -1003,6 +1026,12 @@ class TreeBuilder {
 	private readonly activeHelpers = new Set<string>();
 
 	/**
+	 * How many per-site diagnostics each code has produced, and how many of them
+	 * were actually emitted. See {@link TreeBuilder.noteSite}.
+	 */
+	private readonly siteCounts = new Map<DiagnosticCode, number>();
+
+	/**
 	 * Every file the walk actually read. `buildTestIdTree` reconciles this with
 	 * the scan set so a file the resolver pulled in mid-walk still reaches the
 	 * inventory.
@@ -1055,6 +1084,50 @@ class TreeBuilder {
 		private readonly warnings: Diagnostic[],
 		private readonly followComponents: boolean,
 	) {}
+
+	/**
+	 * Records a diagnostic that fires once per *site*, emitting only the first
+	 * few.
+	 *
+	 * A deep component tree hits the depth limit at dozens of places, and each
+	 * one used to become its own warning: measured on one production page, 46
+	 * `depth-limit-reached` entries, 14,698 bytes of `meta.warnings` on a 43,402
+	 * byte response — a third of it. They said one thing 46 times, and the same
+	 * response already stated it exactly once, with an exact count, in
+	 * `tree-partial` ("… depth-limit-reached ×49 …").
+	 *
+	 * The session warning ledger cannot help here: every site has its own `loc`,
+	 * so all 46 are new on the first call, which is the call that hurts. A few
+	 * examples are worth keeping — a reader wants to see *where* — so the first
+	 * few ship and {@link TreeBuilder.sampledSites} reports what that cost.
+	 */
+	private noteSite(
+		code: DiagnosticCode,
+		message: string,
+		loc: SourceLoc | undefined,
+	): void {
+		const seen = this.siteCounts.get(code) ?? 0;
+		this.siteCounts.set(code, seen + 1);
+		if (seen < MAX_SITE_DIAGNOSTICS) {
+			this.warnings.push(info(code, message, loc));
+		}
+	}
+
+	/** Codes whose per-site diagnostics were cut, and by how much. */
+	sampledSites(): Array<{
+		code: DiagnosticCode;
+		shown: number;
+		total: number;
+	}> {
+		const out: Array<{ code: DiagnosticCode; shown: number; total: number }> =
+			[];
+		for (const [code, total] of this.siteCounts) {
+			if (total > MAX_SITE_DIAGNOSTICS) {
+				out.push({ code, shown: MAX_SITE_DIAGNOSTICS, total });
+			}
+		}
+		return out;
+	}
 
 	/**
 	 * Spends one node on tree content, keeping the marker slot back.
@@ -1822,12 +1895,10 @@ class TreeBuilder {
 
 		if (!this.budget.allowsDepth(depth + 1)) {
 			this.boundaries += 1;
-			this.warnings.push(
-				info(
-					"depth-limit-reached",
-					`Depth limit reached at <${tag}>; its subtree was not expanded.`,
-					node.loc,
-				),
+			this.noteSite(
+				"depth-limit-reached",
+				`Depth limit reached at <${tag}>; its subtree was not expanded.`,
+				node.loc,
 			);
 			return stop("depth-limit-reached");
 		}

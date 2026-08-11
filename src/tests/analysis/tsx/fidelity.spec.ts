@@ -146,6 +146,47 @@ describe("tree fidelity", () => {
 		expect(tree.stats.unresolvedByReason["depth-limit-reached"]).toBe(1);
 	});
 
+	/**
+	 * A deep page hits the depth limit at dozens of sites, and each used to
+	 * become its own warning: 46 of them on one production page, 14,698 bytes of
+	 * `meta.warnings` on a 43,402-byte response. They said one thing many times
+	 * over, and `tree-partial` in the same payload already said it once with an
+	 * exact count. The session ledger cannot help — every site has its own `loc`,
+	 * so all 46 are new on the first call, which is the call that hurts.
+	 */
+	it("samples per-site depth diagnostics and says the counts are not", () => {
+		// Eight siblings, each cut at the same depth.
+		const wide = {
+			"src/App.tsx": [
+				'import { Leaf } from "./Leaf";',
+				"export function App() {",
+				`  return <div>${"<Leaf />".repeat(8)}</div>;`,
+				"}",
+			].join("\n"),
+			"src/Leaf.tsx": [
+				"export function Leaf() {",
+				'  return <span data-testid="Deep" />;',
+				"}",
+			].join("\n"),
+		};
+		const { tree } = treeFor(wide, { maxDepth: 1 });
+
+		const perSite = tree.warnings.filter(
+			(diag) => diag.code === "depth-limit-reached",
+		);
+		expect(perSite.length, "a few examples, not one per site").toBe(3);
+		// Every example still names a real location.
+		expect(perSite.every((diag) => diag.loc !== undefined)).toBe(true);
+
+		// The exact total survives, and the response says the entries are a sample
+		// so three of them are never read as the whole story.
+		expect(tree.stats.unresolvedByReason["depth-limit-reached"]).toBe(8);
+		const partial = tree.warnings.find((diag) => diag.code === "tree-partial");
+		expect(partial?.message).toContain("depth-limit-reached ×8");
+		expect(partial?.message).toContain("3 of 8 depth-limit-reached");
+		expect(partial?.message).toContain("the counts here are exact");
+	});
+
 	it("states the gap when the walk left the caller's scope", () => {
 		// The walk follows imports; the inventory follows the scope. When they
 		// disagree, ids land in `roots` and not in `inventory`, and coverage —

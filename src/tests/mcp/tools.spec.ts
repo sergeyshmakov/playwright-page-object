@@ -1772,6 +1772,151 @@ describe("MCP server over in-memory transport", () => {
 	}, 30_000);
 
 	/**
+	 * The hint used to be picked by fixed priority, so one depth-limited node
+	 * decided the advice for a tree whose real problem was something else.
+	 * Measured on a production page: 49 depth cuts against 178 external-module
+	 * boundaries, and the reader was told to raise the depth — which cost 37%
+	 * more bytes and returned nothing, because no depth reaches into a module
+	 * that was never scanned.
+	 */
+	it("advises on the gap that dominates, not the first one it finds", async () => {
+		await withProject(
+			"ppo-gap-weight-",
+			{
+				"src/App.tsx": [
+					'import { A, B, C, D } from "@vendor/ui";',
+					'import { Deep1 } from "./Deep1";',
+					"export function App() {",
+					"\treturn (",
+					"\t\t<div>",
+					'\t\t\t<span data-testid="Anchor" />',
+					"\t\t\t<A /><B /><C /><D />",
+					"\t\t\t<Deep1 />",
+					"\t\t</div>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+				// One local chain, so a depth cut exists but is outnumbered.
+				"src/Deep1.tsx": [
+					'import { Deep2 } from "./Deep2";',
+					"export function Deep1() {",
+					"\treturn <Deep2 />;",
+					"}",
+					"",
+				].join("\n"),
+				"src/Deep2.tsx": [
+					"export function Deep2() {",
+					'\treturn <i data-testid="Bottom" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {
+					component: "App",
+					depth: 2,
+				});
+
+				const hint = String(envelope.meta?.hint ?? "");
+				// Four external boundaries outweigh the single depth cut.
+				expect(hint).toContain("outside the scanned sources");
+				expect(hint).not.toContain("larger depth");
+			},
+		);
+	}, 30_000);
+
+	/**
+	 * Rooting at a page whose content sits behind a router walks hundreds of
+	 * scaffolding nodes and reaches no id at all — 43 KB on the measured page,
+	 * none of it an answer. The walk being incomplete is what makes the nodes
+	 * worthless: they prove nothing about what renders there.
+	 */
+	it("omits a cut tree that reached no id, and says where to look instead", async () => {
+		await withProject(
+			"ppo-zero-id-tree-",
+			{
+				"src/App.tsx": [
+					'import { Wall } from "@vendor/ui";',
+					'import { Hidden } from "./Hidden";',
+					"export function App() {",
+					"\treturn (",
+					"\t\t<div>",
+					"\t\t\t<Wall />",
+					"\t\t\t<Wall />",
+					"\t\t\t<Wall />",
+					"\t\t\t<Hidden />",
+					"\t\t</div>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+				"src/Hidden.tsx": [
+					"export function Hidden() {",
+					'\treturn <span data-testid="OnlyRealId" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				// Rooted at App with the child walk off: every boundary is a hole and
+				// nothing under it carries an id.
+				const { isError, envelope } = await callTool(
+					client,
+					"get_testid_tree",
+					{
+						component: "App",
+						followComponents: false,
+					},
+				);
+
+				expect(isError).toBe(false);
+				expect((envelope.data as { roots: unknown[] }).roots).toEqual([]);
+				const suppressed = String(envelope.meta?.suppressed ?? "");
+				expect(suppressed).toContain("reached no test id at all");
+				// The two calls that do work, named.
+				expect(suppressed).toContain("testId");
+			},
+		);
+	}, 30_000);
+
+	/**
+	 * The limit on that. A *complete* tree with no ids is a real finding — "this
+	 * component renders none" — and suppressing it would turn an answer into a
+	 * shrug.
+	 */
+	it("still ships a complete tree that legitimately renders no id", async () => {
+		await withProject(
+			"ppo-complete-no-id-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					"\treturn <div><span /></div>;",
+					"}",
+					"",
+				].join("\n"),
+				"src/Other.tsx": [
+					"export function Other() {",
+					'\treturn <b data-testid="Elsewhere" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {
+					component: "App",
+				});
+
+				expect(envelope.meta?.fidelity).toBe("full");
+				expect(envelope.meta?.suppressed).toBeUndefined();
+				expect(
+					(envelope.data as { roots: unknown[] }).roots.length,
+				).toBeGreaterThan(0);
+			},
+		);
+	}, 30_000);
+
+	/**
 	 * The nodes are real; every one of them is id-less, because the run read an
 	 * attribute the sources do not use. 11 KB to say "you are reading the wrong
 	 * attribute", which the warning and the hint already say in full.

@@ -447,21 +447,33 @@ export function handleGetPageObjectTree(
 function blindScan(
 	warnings: Diagnostic[],
 	roots: UiNode[],
+	gap: TreeGap | null,
 ): string | undefined {
+	const hasId = (nodes: UiNode[]): boolean =>
+		nodes.some((node) => node.testId !== undefined || hasId(node.children));
+	if (roots.length === 0 || hasId(roots)) {
+		return undefined;
+	}
+
 	const blinding = warnings.find(
 		(warning) =>
 			warning.code === "attribute-mismatch" ||
 			warning.code === "attribute-no-evidence",
 	);
-	if (!blinding) {
-		return undefined;
+	if (blinding) {
+		return `Not one node in this tree carries a test id, because ${blinding.code}: this run read an attribute the sources do not use. The nodes were omitted rather than sent as an id-less shell - read the warning and the hint, fix the attribute, and re-call.`;
 	}
-	const hasId = (nodes: UiNode[]): boolean =>
-		nodes.some((node) => node.testId !== undefined || hasId(node.children));
-	if (hasId(roots)) {
-		return undefined;
+
+	// The same shape from a different cause, and the expensive one in practice.
+	// Rooting at a page component whose content sits behind a router or a
+	// provider wall walks hundreds of scaffolding nodes and reaches no id at
+	// all: 43 KB on the measured page, of which none was an answer. A *complete*
+	// tree with no ids is a real finding and still ships - "this component
+	// renders none" is worth knowing. A cut one proves nothing and costs most.
+	if (gap) {
+		return `This tree reached no test id at all, and the walk is incomplete (${gap.detail}), so its nodes prove nothing about what renders here - they were omitted. Pass testId to look an id up across the whole scan, which is complete whatever the walk did, and root a new tree at the file it names.`;
 	}
-	return `Not one node in this tree carries a test id, because ${blinding.code}: this run read an attribute the sources do not use. The nodes were omitted rather than sent as an id-less shell - read the warning and the hint, fix the attribute, and re-call.`;
+	return undefined;
 }
 
 /** What a `testId` lookup should say beyond the occurrence list itself. */
@@ -797,7 +809,7 @@ export function handleGetTestIdTree(
 	const roots = tree.roots;
 	const gap = traversalGap(roots, tree.truncated === true);
 	const warnings = planWarnings(session.warnings, tree.warnings);
-	const blind = blindScan(tree.warnings, roots);
+	const blind = blindScan(tree.warnings, roots, gap);
 	const meta: Record<string, unknown> = {
 		attribute: tree.attribute,
 		attributeSource: tree.attributeSource,
@@ -939,6 +951,8 @@ function subtreeStats(roots: UiNode[]): Record<string, unknown> {
 interface TreeGap {
 	kind: "not-followed" | "depth" | "nodes" | "boundary";
 	detail: string;
+	/** Set for `boundary`: the reason that accounts for most of the gap. */
+	reason?: UiUnresolvedReason;
 }
 
 /**
@@ -951,27 +965,34 @@ interface TreeGap {
  * whose children were still walked. `expandedAt` is not one either: the subtree
  * it points at is in this same tree.
  *
- * `not-followed` is ranked first because it is the only one the caller asked
- * for, so it is the only one where the fix is a different argument rather than
- * a bigger budget.
+ * **Chosen by weight, not by rank.** This used to return the first hit in a
+ * fixed order, so a single depth-limited node decided the advice for a tree
+ * whose real problem was something else. Measured on one production page: 49
+ * depth-limited sites against 178 `external-module` boundaries, and the reader
+ * was told to re-call with a larger depth — advice that addresses 17% of the
+ * gap. Following it cost 37% more bytes and returned nothing, because no depth
+ * reaches inside a module that was never scanned.
+ *
+ * `not-followed` still wins outright when present: it is the only reason the
+ * caller *chose*, so the fix is one argument away and no count changes that.
  */
 function traversalGap(roots: UiNode[], truncated: boolean): TreeGap | null {
 	let notFollowed = 0;
-	let depthCut = false;
-	let boundary: string | undefined;
+	let depthCut = 0;
+	const boundaries = new Map<UiUnresolvedReason, number>();
 	const visit = (nodes: UiNode[]): void => {
 		for (const node of nodes) {
 			const reason = node.unresolved?.reason;
 			if (reason === "not-followed") {
 				notFollowed += 1;
 			} else if (reason === "depth-limit-reached") {
-				depthCut = true;
+				depthCut += 1;
 			} else if (
 				reason !== undefined &&
 				reason !== "spread-props" &&
 				(node.nodeType === "component" || node.nodeType === "unresolved")
 			) {
-				boundary ??= reason;
+				boundaries.set(reason, (boundaries.get(reason) ?? 0) + 1);
 			}
 			visit(node.children);
 		}
@@ -984,17 +1005,35 @@ function traversalGap(roots: UiNode[], truncated: boolean): TreeGap | null {
 			detail: `${notFollowed} component tag(s) were reported without expanding them`,
 		};
 	}
-	if (depthCut) {
-		return { kind: "depth", detail: "the depth limit cut the walk short" };
+
+	// The widest boundary reason, and how it compares with the depth cuts.
+	let topReason: UiUnresolvedReason | undefined;
+	let topCount = 0;
+	for (const [reason, count] of boundaries) {
+		if (count > topCount) {
+			topReason = reason;
+			topCount = count;
+		}
+	}
+
+	if (topReason && topCount >= depthCut && topCount > 0) {
+		return {
+			kind: "boundary",
+			detail:
+				topCount === 1
+					? `a component in that tree was left unexpanded (${topReason})`
+					: `${topCount} component(s) in that tree were left unexpanded (${topReason})`,
+			reason: topReason,
+		};
+	}
+	if (depthCut > 0) {
+		return {
+			kind: "depth",
+			detail: `the depth limit cut the walk short at ${depthCut} site(s)`,
+		};
 	}
 	if (truncated) {
 		return { kind: "nodes", detail: "the node budget ran out mid-walk" };
-	}
-	if (boundary) {
-		return {
-			kind: "boundary",
-			detail: `a component in that tree was left unexpanded (${boundary})`,
-		};
 	}
 	return null;
 }
@@ -1027,7 +1066,24 @@ function gapHint(
 	if (gap.kind === "nodes") {
 		return `The node budget ran out; re-call with file or component set to a narrower root. ${caveat}`;
 	}
-	return caveat;
+	// The commonest gap on a real application, and the one that used to get no
+	// advice at all beyond the caveat — while a single depth-limited node
+	// elsewhere in the tree hijacked the hint into recommending a bigger depth.
+	// Each reason has a different answer and only one of them is a budget.
+	switch (gap.reason) {
+		case "external-module":
+			return `Those components ship from outside the scanned sources, so no depth reaches inside them - re-root the server with --project-root covering their sources, or accept the gap. ${caveat}`;
+		case "local-render-function":
+			return `A same-file function returning JSX could not be inlined; its call is in the node's \`raw\`, so read that function directly. ${caveat}`;
+		case "identifier-unresolved":
+		case "namespaced-component":
+		case "not-a-function-component":
+			return `Those tags do not resolve to a function component the walk can enter. If one of them is a component in this repository, root a tree at it with \`component\`. ${caveat}`;
+		case "recursive":
+			return `The component renders itself and the walk cut the cycle; there is nothing to re-call with. ${caveat}`;
+		default:
+			return caveat;
+	}
 }
 
 /** Bucket names in the order the report ships them. */
