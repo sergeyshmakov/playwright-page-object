@@ -25,7 +25,7 @@ The hint distinguishes three causes, because two of them are the call's own argu
 | "No page object matches filter … but the index holds N" | Your `filter` matched nothing | Widen it. The hint lists the closest class names |
 | "offset N is past the end of M result(s)" | You paged past the end | Re-call with a smaller `offset` |
 
-An index that is genuinely empty has two usual causes. Either the page objects are outside the scanned scope, which `--src-dir` fixes, or they do not import from `playwright-page-object` at all. Discovery is evidence-based: a class is indexed because it carries a library decorator, extends a library base class, is bound in a fixture, or is passed as a factory argument. A class that re-exports decorators through a local wrapper module is not recognised.
+An index that is genuinely empty has two usual causes. Either the page objects are outside the scanned scope, which `--src-dir` fixes, or they do not import from `playwright-page-object` at all. Discovery is evidence-based: a class is indexed because it carries a library decorator, extends a library base class, or is bound in a fixture. A class whose *only* evidence is being passed as a factory argument is a control: `map_coverage` analyses it, and `list_page_objects` deliberately leaves it out, so a control can be absent from the index and present in the coverage scan. A class that re-exports decorators through a local wrapper module is not recognised.
 
 Check `meta.scanned` in the same response. A small number there means the scope is wrong, not the discovery.
 
@@ -145,7 +145,7 @@ To settle one specific id regardless of the tree, use the lookup form: `{"testId
 | `get_testid_tree` tree | `format: "outline"`, then a lower `depth`, then scope with `file` or `component` |
 | `get_testid_tree` lookup | No per-call size control; narrow the server scope with `--src-dir` or `--project-root` |
 
-Switching to `outline` is often enough for a model-readable tree. The outline omits visibility, JSDoc, column numbers, and some structured fields, so keep JSON when another program will parse the response. `meta` is unchanged by the format, so nothing diagnostic is lost.
+Outline is already the default, so a `too_large` on a tree means you asked for `format: "json"` — dropping that argument is usually enough on its own. The outline omits visibility, JSDoc, column numbers and some structured fields, so keep JSON when another program will parse the response. `meta` is unchanged by the format, so nothing diagnostic is lost.
 
 The `hint` on a `too_large` error names only knobs that call actually has. If you already narrowed to one `bucket`, it will not tell you to pass `includeUnused: false`, which `buckets` ignores.
 

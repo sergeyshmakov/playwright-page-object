@@ -30,7 +30,7 @@ The second failure is harder to spot because the code looks valid. The agent wri
 
 ## What does the playwright-page-object MCP server do?
 
-The server answers four source-level questions: which page objects exist, what one class exposes, which test IDs appear in a resolved component tree, and where page-object test-ID selectors disagree with UI source. Each answer comes from a focused MCP tool instead of a broad file search.
+The server answers four source-level questions: which page objects exist, what one class exposes, which test IDs appear in a resolved component tree, and where page-object test-ID selectors disagree with UI source. Each answer comes from a focused MCP tool instead of a broad file search, and a fifth tool pages the long lists the fourth can return.
 
 | Question | Tool |
 | --- | --- |
@@ -38,6 +38,7 @@ The server answers four source-level questions: which page objects exist, what o
 | Which selectors and methods does one class expose? | `get_page_object_tree` |
 | Which test IDs does static analysis find in a component tree? | `get_testid_tree` |
 | Which page-object test-ID selectors match UI source? | `map_coverage` |
+| How do I read the rest of a long coverage list? | `query_coverage` |
 
 The decorator API makes the page-object side possible. `@Selector("PromoCodeInput")` is a static declaration, so the server can extract the selector graph without executing the class. On the app side, it reads `data-testid` attributes from JSX or TSX, including template literals such as `` `CartItem_${item.id}` ``, which become the pattern `CartItem_*` with the original expression attached.
 
@@ -78,10 +79,22 @@ Automatic discovery searches the repository for a Playwright config, uses its `t
 ```json
 {
   "name": "CartItems",
-  "selector": { "kind": "testIdPattern", "pattern": "CartItem_" },
+  "selector": {
+    "kind": "testIdPattern",
+    "decorator": "ListSelector",
+    "pattern": {
+      "source": "CartItem_",
+      "flags": "",
+      "origin": "string",
+      "matchMode": "regexUnanchored",
+      "literalPrefix": "CartItem_"
+    }
+  },
   "result": { "kind": "list", "itemClassName": "CartItemControl" }
 }
 ```
+
+`matchMode: "regexUnanchored"` mirrors the runtime: `@ListSelector("CartItem_")` compiles to `new RegExp("CartItem_")`, so it matches `XCartItem_1` as well as `CartItem_1`.
 
 That entry identifies a `ListPageObject`, the `CartItem_` row prefix, and the `CartItemControl` item type. The expanded control definition also includes `RemoveButton`, so the agent can derive `checkoutPage.CartItems.first().RemoveButton` from one response.
 

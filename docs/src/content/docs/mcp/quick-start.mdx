@@ -164,7 +164,7 @@ The server found six classes in one call, so the agent does not have to open eac
 
 ### 2. What does one page object expose?
 
-`get_page_object_tree` with `{"class": "CheckoutPage", "format": "outline"}` returns the selector tree as indented text, which costs fewer tokens than JSON:
+`get_page_object_tree` with `{"class": "CheckoutPage"}` returns the selector tree as indented text — outline is the default, and costs a fraction of the tokens JSON would:
 
 ```text
 CheckoutPage (rootPageObject)  @testId "CheckoutPage"  e2e/page-objects/CheckoutPage.ts  fixture: checkoutPage
@@ -198,27 +198,25 @@ No file was opened, and no method name was guessed.
 
 ### 3. Which test IDs does static analysis find?
 
-`get_testid_tree` with `{"format": "outline"}` walks from the app entry:
+`get_testid_tree` with no arguments walks from the auto-detected app entry:
 
 ```text
 -  Header  src/App.tsx:31
-  -  header  src/components/Header.tsx:3
-    -  h1  src/components/Header.tsx:4
-    SignIn  button  src/components/Header.tsx:5
+  SignIn  button  src/components/Header.tsx:5
 -  CheckoutPage  src/App.tsx:32
   CheckoutPage  main  src/components/CheckoutPage.tsx:18
-    PromoSection  section  src/components/CheckoutPage.tsx:19
-      PromoCodeInput  input  src/components/CheckoutPage.tsx:21
-      ApplyPromoButton  button  src/components/CheckoutPage.tsx:28
-      PromoApplied  span  src/components/CheckoutPage.tsx:36 (conditional)
-    CartSection  section  src/components/CheckoutPage.tsx:39
-      EmptyCart  p  src/components/CheckoutPage.tsx:42 (conditional)
-      CartItemsList  div  src/components/CheckoutPage.tsx:44 (conditional)
-        -  CartItemComponent  src/components/CheckoutPage.tsx:46 (conditional, repeated)
+    PromoSection  section  :19
+      PromoCodeInput  input  :21
+      ApplyPromoButton  button  :28
+      PromoApplied  span  :36 (conditional)
+    CartSection  section  :39
+      EmptyCart  p  :42 (conditional)
+      CartItemsList  div  :44 (conditional)
+        -  CartItemComponent  :46 (conditional, repeated)
           CartItem_*  div  src/components/CartItem.tsx:10 (dynamic `CartItem_${item.id}`, conditional, repeated)
-            CartItemName  span  src/components/CartItem.tsx:11 (conditional, repeated)
-            CartItemPrice  span  src/components/CartItem.tsx:12 (conditional, repeated)
-            Remove  button  src/components/CartItem.tsx:13 (conditional, repeated)
+            CartItemName  span  :11 (conditional, repeated)
+            CartItemPrice  span  :12 (conditional, repeated)
+            Remove  button  :13 (conditional, repeated)
 ```
 
 A leading `-` marks a node with no test ID. `CartItem_*` is a template-literal ID reported as a pattern with its source expression, which explains why the rows use `@ListSelector("CartItem_")`. This response has `meta.fidelity: "full"`, so the tree has no unresolved component boundary under its root.

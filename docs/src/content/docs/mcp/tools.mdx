@@ -6,7 +6,7 @@ head:
     content: Playwright Page Object MCP Tool Reference
 ---
 
-The server exposes five read-only, idempotent tools. Start with `list_page_objects`, request only the tree you need, and prefer `format: "outline"` when a model will read the result directly. Use JSON when code needs to parse the response.
+The server exposes five read-only, idempotent tools. Start with `list_page_objects` and request only the tree you need. Both tree tools return `format: "outline"` by default, which is what a model should read; pass `format: "json"` when code has to parse the response.
 
 ## Which MCP tool should I use?
 
@@ -35,9 +35,9 @@ Failure, with the MCP `isError` flag set:
 	"ok": false,
 	"error": {
 		"code": "class_not_found",
-		"message": "No page object named \"ChekoutPage\" was found.",
+		"message": "No page object named \"ChekoutPage\" was discovered among the 8 distinct page-object name(s) in the index.",
 		"suggestions": ["CheckoutPage"],
-		"hint": "Call list_page_objects to see every page object."
+		"hint": "Call list_page_objects to see every page object and its file."
 	}
 }
 ```
@@ -66,23 +66,24 @@ That means `repeat` warnings of this code are still in force and their text has 
 | `attribute` | all | Test-id attribute this call read the sources with |
 | `attributeSource` | all | `"param"`, `"playwright-config"`, or `"default"` |
 | `playwrightConfig` | all | Project-relative path of the config that was read; absent when none was found |
-| `scanned` | `list_page_objects`, `get_testid_tree` | Files parsed |
-| `warnings` | all | Environment diagnostics, worst-invalidating first, capped at 8. Repeats within a session are abbreviated, as above |
-| `apiHints` | `get_page_object_tree` | The runtime API of the base classes this tree uses, so the call syntax arrives with the selector chain |
-| `idsNotPlaced` | `get_testid_tree` | On a holed tree: test IDs the scan found **in files this tree walked** that did not end up in `roots`. This is how you tell "not rendered" from "not reached" |
-| `suppressed` | `get_testid_tree` | The nodes were omitted and why. Either the attribute is wrong, or the walk was cut and reached no ID at all — in both cases the tree could not have answered |
+| `scanned` | `list_page_objects`, `get_testid_tree` | Files parsed — **two different sets**: every source the project holds on `list_page_objects`, and JSX/TSX sources only on `get_testid_tree`. The second is legitimately the smaller number |
+| `warnings` | all | Diagnostics for this call. The **environment** ones come first, worst-invalidating first, and are capped at 8; each builder then appends its own, so the array can be longer than 8 and later entries are not ranked. Repeats within a session are abbreviated, as above |
+| `apiHints` | `get_page_object_tree` | The runtime API of the base classes this tree uses, so the call syntax arrives with the selector chain. **Sent in full once per session**, then as an array of just the base names — same rule as a repeated warning, and the reason a second tree call is smaller |
+| `idsNotPlaced` | `get_testid_tree` | On a holed tree: `{ids, total}` — test IDs the scan found **in files this tree walked** that did not end up in `roots`, `ids` capped at 12 with `total` carrying the real count. This is how you tell "not rendered" from "not reached" |
+| `suppressed` | `get_testid_tree` | The nodes were omitted and why. Either the attribute is wrong, or the walk was cut and reached no ID at all — in both cases the tree could not have answered. When it is set, `data` is the JSON object `{fidelity, roots: [], stats}` **even under `format: "outline"`**, because there is no tree to render |
 | `hint` | all | What to do next, in the tool's own argument names. An environment problem is prepended, because no advice about the next call matters while the analysis reads the wrong attribute |
 | `total`, `offset`, `nextOffset` | `list_page_objects` | Unpaged count, the offset in effect, and the offset for the next page |
-| `note` | `get_page_object_tree`, `map_coverage` | An absolute `file` was accepted and relativized; says how it was read |
-| `truncated` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | A budget or a `limit` cut the payload. Distinct from `truncatedBuckets`, which means the **size cap** cut a list below what `limit` had already selected |
+| `note` | `get_page_object_tree`, `get_testid_tree`, `map_coverage`, `query_coverage` | An absolute `file` was accepted and relativized; says how it was read. `query_coverage` echoes the one from the call that minted the handle |
+| `truncated` | `get_page_object_tree`, `get_testid_tree`, `map_coverage`, `query_coverage` | A budget or a `limit` cut the payload. Distinct from `truncatedBuckets`, which means the **size cap** cut a list below what `limit` had already selected |
 | `fidelity`, `fidelityReason` | `get_testid_tree` | Completeness of the node tree, and where the holes are |
-| `alsoIncluded` | `map_coverage` | Page objects analyzed alongside the one you named, because they share its file |
-| `ignored` | `map_coverage` | Arguments overruled by `buckets` |
-| `shown` | `map_coverage`, `query_coverage` | Count of the entries actually returned, when `limit` or the size cap cut a list |
+| `alsoIncluded` | `map_coverage`, `query_coverage` | Page objects analyzed alongside the one you named, because they share its file |
+| `ignored` | `map_coverage` | Arguments you passed that `buckets` overruled. Absent when you passed none — it never reports a default as overruled |
+| `shown` | `map_coverage`, `query_coverage` | Count of the entries actually returned, when `limit` or the size cap cut a list. A record keyed by bucket on `map_coverage`, a single number on `query_coverage` — the same split as `nextOffset` |
+| `bucket` | `query_coverage` | The bucket this page came from, echoed so a page is a complete instruction for the next one |
 | `coverageId` | `map_coverage`, `query_coverage` | Opaque handle to this exact report, spent by `query_coverage` |
 | `nextOffset` | `map_coverage`, `query_coverage` | Where the next page of a cut list starts. Its absence means the list is exhausted |
 | `truncatedBuckets` | `map_coverage`, `query_coverage` | Lists the size cap cut below what `limit` had already selected |
-| `assumeForwarded` | `map_coverage` | The server runs with `--assume-forwarded` |
+| `assumeForwarded` | `map_coverage`, `query_coverage` | The server runs with `--assume-forwarded` |
 
 `attributeSource` is worth reading on every call. `"default"` means no config set `use.testIdAttribute` and Playwright's `data-testid` was assumed, which is correct for most repositories and wrong for the ones that migrated away from it.
 
@@ -92,7 +93,7 @@ That means `repeat` warnings of this code are still in force and their text has 
 | --- | --- | --- |
 | `invalid_input` | `get_page_object_tree`; invalid `file` values in `get_testid_tree` and `map_coverage` | For `get_page_object_tree`, provide `class` or `file`. For all three, pass a project-relative path, or an absolute one inside the project root. An absolute path outside the root, and the root itself, are rejected here rather than reported as missing |
 | `class_not_found` | `get_page_object_tree`, `map_coverage` | Read `suggestions` (nearest names by edit distance), or call `list_page_objects` |
-| `ambiguous_class` | `get_page_object_tree`, `map_coverage` | Several classes share the name. `candidates` holds `path.ts#ClassName` keys; re-call with `file` set to one of them |
+| `ambiguous_class` | `get_page_object_tree`, `map_coverage` | Several classes share the name. Re-call with `file` set to one of the `candidates` — which are `path.ts#ClassName` keys from `get_page_object_tree` and bare file paths from `map_coverage`. Both are accepted as `file` |
 | `ambiguous_component` | `get_testid_tree` | Several files declare that component name, or `file` named only a trailing segment that fits more than one scanned file. `candidates` lists them; re-call with the full project-relative `file` |
 | `incomplete_tree` | `get_testid_tree` | The named component could not be rooted. `candidates` lists the other components in that file; or pass `testId` to look the id up across the whole scan |
 | `file_not_found` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | The path or component name selects nothing. Use `suggestions` / `candidates`, or drop the argument to widen the search |
@@ -117,7 +118,7 @@ That means `repeat` warnings of this code are still in force and their text has 
 
 ### Response
 
-`data` is an array of entries with `name`, `file`, `kind`, optional `root` (compact selector), optional `fixtures` (binding names), `members`, `methods`, and the class JSDoc as `doc`. `kind` is one of `rootPageObject`, `rootPlain`, `pageFallback`, `fragment`, `nestedPageObject`, `externalControl`.
+`data` is an array of entries with `name`, `file`, `kind`, optional `root` (compact selector), optional `fixtures` (binding names), `members`, `methods`, and the class JSDoc as `doc` (summarised, so a long comment is cut). `kind` is one of `rootPageObject`, `rootPlain`, `pageFallback`, `fragment`, `nestedPageObject`, `externalControl`, or `unknown` when the host could not be classified.
 
 Member details are deliberately absent. Use `get_page_object_tree` for those.
 
@@ -341,14 +342,16 @@ When every occurrence is `component-prop`, the response says so in `meta.hint` r
 
 ### Example
 
-`{"component": "CartItem", "format": "outline"}`:
+`{"component": "CartItem"}` — outline is the default:
 
 ```text
 CartItem_*  div  src/components/CartItem.tsx:10 (dynamic `CartItem_${item.id}`)
-  CartItemName  span  src/components/CartItem.tsx:11
-  CartItemPrice  span  src/components/CartItem.tsx:12
-  Remove  button  src/components/CartItem.tsx:13
+  CartItemName  span  :11
+  CartItemPrice  span  :12
+  Remove  button  :13
 ```
+
+The bare `:11` inherits the file named above it; see [what the outline summarises](#node-flags).
 
 ```json
 {
@@ -393,7 +396,7 @@ The same call with `followComponents: false` from the app entry shows the other 
 | `limit` | integer 1 to 200 | `50` | Per bucket. A coverage entry averages ~800 bytes, so even 200 is a large response; the ceiling exists so the schema cannot advertise a page nobody should ask for |
 | `offset` | integer ≥ 0 | `0` | Applied to every returned bucket. To page one list, prefer `query_coverage` |
 
-Start with `buckets: []`. It returns the totals and the scope for a few hundred bytes, which is enough to see the shape of the answer before asking for a list — six buckets at `limit: 200` was 527 KB on a 4,924-file repository, past every client's ceiling.
+Start with `buckets: []`. It returns the totals and the scope for a small fraction of the full report — measured on this repository's example app, 1.4 KB against 15 KB, and on a 4,924-file application 5 KB against 146 KB — which is enough to see the shape of the answer before asking for a list — six buckets at `limit: 200` was 527 KB on a 4,924-file repository, past every client's ceiling.
 
 Omit `class` and `file` to scan the whole project. Scoping happens by path, so `class` also pulls in page objects sharing that file, and `meta.alsoIncluded` names them. A `file` that declares no page object fails with `file_not_found` rather than returning a report in which everything looks uncovered.
 
@@ -442,6 +445,7 @@ The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by def
 			"matchableUiTestIds": 13,
 			"coveredUiTestIds": 4,
 			"testIdSelectors": 14,
+			"rawSelectors": 0,
 			"matched": 14,
 			"deadSelectors": 0,
 			"nonTestIdSelectors": 5,
@@ -454,7 +458,7 @@ The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by def
 		},
 		"scope": {
 			"uiFilesScanned": 5,
-			"pageObjectFilesScanned": 17,
+			"pageObjectFilesScanned": 5,
 			"externalComponentModules": ["react"],
 			"externalComponentTags": 1
 		},
@@ -546,7 +550,7 @@ Results always reflect the files on disk at the moment of the call, so a stale p
 | | `json` | `outline` |
 | --- | --- | --- |
 | Shape | Structured objects, stable field names | Indented plain text |
-| Tokens | Usually higher on deep trees | 3–5× lower; measured at 4.7× on one production component tree |
+| Tokens | Usually higher on deep trees | 3–5× lower; measured at 4.6× on one production component tree |
 | Machine-parseable | Yes | No |
 | Carries locations | Yes, `loc` with line and column | Yes, `file:line` — the path only where it changes |
 | Carries every node | Yes | No: identical repeated subtrees, runs of sibling holes and flagless wrappers are summarised |
