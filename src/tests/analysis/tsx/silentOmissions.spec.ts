@@ -176,6 +176,38 @@ describe("gaps the tree has to admit to", () => {
 		expect(nodes.map((node) => node.testId?.value)).toContain("PanelTitle");
 	});
 
+	it("does not resolve `memo(Inner)` against a shadowed name", () => {
+		// The lookup reads the file's top-level declarations, which is only the
+		// right answer when the identifier is at top level too. Here `Inner` binds
+		// to the parameter, and handing back the module-level function would
+		// attribute another component's ids to this site.
+		//
+		// This passes without the guard as well: reaching the bad path needs a
+		// component declaration that is itself nested inside a function *and*
+		// resolved through `resolveComponentRef`, which no fixture here produces.
+		// Kept as a no-cross-attribution guard, not as proof of the fix.
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Outer from "./Outer";',
+				"export default function App() { return <Outer />; }",
+			].join("\n"),
+			"src/Outer.tsx": [
+				'import { memo } from "react";',
+				'function Inner() { return <b data-testid="ModuleInner" />; }',
+				"function make(Inner: () => unknown) {",
+				"  return memo(Inner);",
+				"}",
+				"export default function Outer() {",
+				'  return <div data-testid="OuterBody">{String(make)}</div>;',
+				"}",
+			].join("\n"),
+		});
+		expect(nodes.map((node) => node.testId?.value)).toContain("OuterBody");
+		expect(nodes.map((node) => node.testId?.value)).not.toContain(
+			"ModuleInner",
+		);
+	});
+
 	it("still forwards props through a memo wrapper", () => {
 		// `forwardRef`'s callback takes `(props, ref)` and the props reader takes
 		// the first parameter, so unwrapping must not disturb the binding path.

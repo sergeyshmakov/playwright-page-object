@@ -2662,12 +2662,20 @@ function detachFromCallSite(state: ExpandState): ExpandState {
  * body, which is why the kind is checked rather than assumed.
  */
 function shadowsWholeBody(declaration: VariableDeclaration, fn: Node): boolean {
+	// The declaration *list*, not the statement: a `for (var i = 0; ...)`
+	// initializer is a list with no enclosing statement, so requiring one missed
+	// the `var` form entirely - and `var` is exactly the kind that does shadow
+	// the whole body.
+	const list = declaration.getParent();
+	if (
+		Node.isVariableDeclarationList(list) &&
+		list.getDeclarationKind() === VariableDeclarationKind.Var
+	) {
+		return true;
+	}
 	const statement = declaration.getVariableStatement();
 	if (!statement) {
 		return false;
-	}
-	if (statement.getDeclarationKind() === VariableDeclarationKind.Var) {
-		return true;
 	}
 	const body =
 		Node.isFunctionDeclaration(fn) ||

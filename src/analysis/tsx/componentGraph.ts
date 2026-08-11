@@ -167,6 +167,23 @@ function asComponentFunction(node: Node): ComponentFunction | null {
  * `resolveComponentRef` exists to do properly.
  */
 function sameFileFunction(identifier: Node): Node | null {
+	// Module scope on both sides. The scan below reads the file's top-level
+	// declarations, which is the right answer only when the identifier itself is
+	// at top level: `memo(Inner)` written inside a function whose parameter or
+	// local is also called `Inner` binds to that one, and handing back the
+	// module-level function would attribute another component's test ids to this
+	// site. Refusing is the safe half - the site then reports
+	// `not-a-function-component`, which is what it did before this hop existed.
+	for (let up = identifier.getParent(); up; up = up.getParent()) {
+		if (
+			Node.isFunctionDeclaration(up) ||
+			Node.isFunctionExpression(up) ||
+			Node.isArrowFunction(up) ||
+			Node.isMethodDeclaration(up)
+		) {
+			return null;
+		}
+	}
 	const name = identifier.getText();
 	const sourceFile = identifier.getSourceFile();
 	for (const declaration of sourceFile.getFunctions()) {

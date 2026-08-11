@@ -141,6 +141,34 @@ describe("what survives a config edit", () => {
 		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
 	});
 
+	it("rebuilds when a linked config package it extends is edited", () => {
+		// A package specifier was skipped on the theory that `node_modules`
+		// changes by install and the lockfile stat covers it. True for an
+		// installed package; false for a linked workspace one, whose base config
+		// is edited like any other source file and moves neither the leaf
+		// tsconfig nor the lockfile.
+		const root = scratch({
+			"node_modules/@repo/tsconfig/base.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+			"tsconfig.json": JSON.stringify({
+				extends: "@repo/tsconfig/base.json",
+				include: ["src/**/*.ts"],
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		Workspace.reset();
+		const first = Workspace.acquire({ projectRoot: root });
+		write(
+			root,
+			"node_modules/@repo/tsconfig/base.json",
+			JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true, strict: true },
+			}),
+		);
+		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
+	});
+
 	it("keeps the same project when an ordinary source file changes", () => {
 		// The guard has to be stable, or every call pays for a rebuild. An
 		// unstable comparison here costs ~2.3 s per tool call on a large repo.

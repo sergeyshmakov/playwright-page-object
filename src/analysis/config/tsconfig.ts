@@ -124,10 +124,15 @@ export function tsConfigChain(tsConfigFilePath: string): string[] {
 					? extended.filter((one): one is string => typeof one === "string")
 					: [];
 		for (const specifier of specifiers) {
-			// Relative and rooted forms only. A package specifier resolves through
-			// `node_modules`, which an install changes rather than an edit — that is
-			// the lockfile stat's job, not this one's.
+			// A package specifier - `@repo/tsconfig/base.json` - is resolved rather
+			// than skipped. The original reasoning was that `node_modules` changes
+			// by install and the lockfile stat covers that, which is true for an
+			// *installed* package and false for the case that matters: a linked
+			// workspace package, whose base config is edited like any other source
+			// file in the repository and moves neither the leaf tsconfig nor the
+			// lockfile.
 			if (!specifier.startsWith(".") && !path.isAbsolute(specifier)) {
+				queue.push(...packageExtends(path.dirname(current), specifier));
 				continue;
 			}
 			const resolved = path.resolve(path.dirname(current), specifier);
@@ -145,6 +150,36 @@ export function tsConfigChain(tsConfigFilePath: string): string[] {
 		}
 	}
 	return chain;
+}
+
+/**
+ * The config a package-specifier `extends` names, found the way Node would.
+ *
+ * Walks up looking for `node_modules/<specifier>`, taking the first hit — which
+ * is what makes a linked workspace package resolve to its real source rather
+ * than to a copy. Only an existing file is returned: unlike the relative form,
+ * there is no single canonical path to watch for one that does not exist yet,
+ * and inventing one per ancestor directory would put a stat storm on a path
+ * that runs per acquire.
+ */
+function packageExtends(fromDirectory: string, specifier: string): string[] {
+	let directory = fromDirectory;
+	for (;;) {
+		const base = path.join(directory, "node_modules", specifier);
+		const candidates = specifier.toLowerCase().endsWith(".json")
+			? [base]
+			: [`${base}.json`, path.join(base, "tsconfig.json")];
+		for (const candidate of candidates) {
+			if (existsFile(candidate)) {
+				return [candidate];
+			}
+		}
+		const parent = path.dirname(directory);
+		if (parent === directory) {
+			return [];
+		}
+		directory = parent;
+	}
 }
 
 /**
