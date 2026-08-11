@@ -1772,6 +1772,80 @@ describe("MCP server over in-memory transport", () => {
 	}, 30_000);
 
 	/**
+	 * "293 of 375 nodes were left unexpanded" is a count, not a list, so an agent
+	 * could not tell "this id does not exist" from "the walk did not reach it" —
+	 * and the whole promise of the tool is that absence means something. Measured
+	 * on the real repo: a tree rooted at `GuestsList.tsx` reported ids from lines
+	 * 29–50 of a component file and omitted two from lines 18 and 23 of the same
+	 * file, which `map_coverage` located exactly.
+	 */
+	it("names the ids a holed tree read but did not place", async () => {
+		await withProject(
+			"ppo-unplaced-ids-",
+			{
+				"src/App.tsx": [
+					'import { Wall } from "@vendor/ui";',
+					'import { Panel } from "./Panel";',
+					"export function App() {",
+					"\treturn (",
+					"\t\t<div>",
+					'\t\t\t<span data-testid="Placed" />',
+					"\t\t\t<Panel />",
+					"\t\t\t<Wall />",
+					"\t\t</div>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+				// Two ids in this file: one the walk places, one behind a call it
+				// cannot enter, so the file is walked but the id never lands.
+				"src/Panel.tsx": [
+					"function hidden() {",
+					'\treturn <b data-testid="NeverPlaced" />;',
+					"}",
+					"export function Panel({ render }: { render?: () => JSX.Element }) {",
+					'\treturn <section data-testid="PanelRoot">{render?.()}</section>;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {
+					component: "App",
+				});
+
+				const unplaced = envelope.meta?.idsNotPlaced as
+					| { ids: string[]; total: number }
+					| undefined;
+				expect(unplaced?.ids ?? []).toContain("NeverPlaced");
+				// And what the tree did place is not listed as missing.
+				expect(unplaced?.ids ?? []).not.toContain("Placed");
+			},
+		);
+	}, 30_000);
+
+	it("says nothing about unplaced ids when the tree is complete", async () => {
+		await withProject(
+			"ppo-no-unplaced-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="Root"><span data-testid="Leaf" /></div>;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {
+					component: "App",
+				});
+				expect(envelope.meta?.fidelity).toBe("full");
+				expect(envelope.meta?.idsNotPlaced).toBeUndefined();
+			},
+		);
+	}, 30_000);
+
+	/**
 	 * The hint used to be picked by fixed priority, so one depth-limited node
 	 * decided the advice for a tree whose real problem was something else.
 	 * Measured on a production page: 49 depth cuts against 178 external-module

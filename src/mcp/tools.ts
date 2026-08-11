@@ -18,6 +18,7 @@ import {
 	type PageObjectSummary,
 	type SelectorInfo,
 	scannedComponents,
+	type TestIdOccurrence,
 	type UiNode,
 	type UiUnresolvedReason,
 	type Workspace,
@@ -476,6 +477,71 @@ function blindScan(
 	return undefined;
 }
 
+/** Ids named in a capped list, plus how many more there were. */
+interface IdsNotPlaced {
+	ids: string[];
+	total: number;
+}
+
+/** A short list is for reading; past this the count carries it. */
+const MAX_UNPLACED_IDS = 12;
+
+/**
+ * Ids the walk read out of the files it visited but did not put in the tree.
+ *
+ * A partial tree says "293 of 375 nodes were left unexpanded", which is a
+ * count, not a list — so an agent cannot tell "this id does not exist" from
+ * "the walk did not reach it", and the whole promise of the tool is that
+ * absence means something. Measured: a tree rooted at `GuestsList.tsx` reported
+ * ids from lines 29–50 of a component file and silently omitted two from lines
+ * 18 and 23 of that same file, which `map_coverage` located exactly.
+ *
+ * Scoped to files the tree actually walked, deliberately. Scan-wide this would
+ * be ~1,500 entries on a real repository and useless; restricted this way it is
+ * short, exact, and answers the question that was asked. The inventory is
+ * complete in every fidelity mode, so this is a set difference over data the
+ * response already holds — no extra analysis.
+ */
+function idsNotPlaced(
+	roots: UiNode[],
+	inventory: TestIdOccurrence[],
+): IdsNotPlaced | undefined {
+	const walkedFiles = new Set<string>();
+	const placed = new Set<string>();
+	const visit = (nodes: UiNode[]): void => {
+		for (const node of nodes) {
+			walkedFiles.add(node.file);
+			if (node.testId?.kind === "static" && node.testId.value !== undefined) {
+				placed.add(node.testId.value);
+			}
+			visit(node.children);
+		}
+	};
+	visit(roots);
+	if (walkedFiles.size === 0) {
+		return undefined;
+	}
+
+	const missing = new Set<string>();
+	for (const occurrence of inventory) {
+		if (
+			occurrence.value.kind === "static" &&
+			occurrence.value.value !== undefined &&
+			walkedFiles.has(occurrence.file) &&
+			!placed.has(occurrence.value.value)
+		) {
+			missing.add(occurrence.value.value);
+		}
+	}
+	if (missing.size === 0) {
+		return undefined;
+	}
+	return {
+		ids: [...missing].sort().slice(0, MAX_UNPLACED_IDS),
+		total: missing.size,
+	};
+}
+
 /** What a `testId` lookup should say beyond the occurrence list itself. */
 function lookupHint(
 	needle: string,
@@ -820,6 +886,9 @@ export function handleGetTestIdTree(
 		truncated: tree.truncated,
 		scanned: tree.stats.files,
 		suppressed: blind,
+		// Only on a holed tree: on a complete one every id in a walked file is in
+		// the tree by construction, and an empty key would be noise on every call.
+		idsNotPlaced: gap ? idsNotPlaced(roots, tree.inventory) : undefined,
 		warnings: warnings.shown,
 		// A partial tree is the normal answer for any real app, so the useful
 		// thing is not the word but what to do about it. "Absent from this tree"
