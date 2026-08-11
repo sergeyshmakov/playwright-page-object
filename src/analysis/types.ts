@@ -43,6 +43,8 @@ export type DiagnosticCode =
 	| "attribute-no-evidence"
 	| "scope-empty"
 	| "scope-dir-missing"
+	/** The scan is large enough to be worth stating: it is most of the memory. */
+	| "large-scan"
 	// page objects
 	| "dynamic-selector-arg"
 	| "unresolved-factory-identifier"

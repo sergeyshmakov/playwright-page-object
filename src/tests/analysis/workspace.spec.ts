@@ -146,6 +146,32 @@ describe("Workspace.acquire", () => {
 		}
 	});
 
+	/**
+	 * The default refused every call on the repositories this server exists for —
+	 * a 4,924-file application needed `--max-files` before anything worked — and
+	 * because it is a startup flag, the agent holding that error cannot act on
+	 * it. Raising it is the whole point; a test that only checked "some cap
+	 * exists" would have let it be lowered again by accident.
+	 */
+	it("parses a repository of a few thousand files without a flag", () => {
+		const files: Record<string, string> = {};
+		for (let index = 0; index < 3_200; index += 1) {
+			files[`src/m${index}.ts`] = `export const v${index} = ${index};`;
+		}
+		const root = scratch(files);
+
+		const workspace = Workspace.acquire({ projectRoot: root });
+		// Well past the old ceiling of 2,000, which refused this outright.
+		expect(workspace.sourceFiles().length).toBeGreaterThanOrEqual(3_200);
+
+		// And it says what that cost, because raising the ceiling removed the only
+		// thing that ever mentioned the size of the scan.
+		const note = workspace.warnings.find((one) => one.code === "large-scan");
+		expect(note?.severity).toBe("info");
+		expect(note?.data?.files).toBeGreaterThanOrEqual(3_200);
+		expect(note?.message).toContain("--src-dir");
+	}, 60_000);
+
 	it("treats different include globs as different workspaces", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
 		const first = Workspace.acquire({ projectRoot: root });

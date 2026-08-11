@@ -36,7 +36,7 @@ npx playwright-page-object mcp [options]
 | `--playwright-config <file>` | discovered, ranked | The `playwright.config.*` to read. Suppresses discovery entirely |
 | `--src-dir <dir>` | tsconfig `include` | Restrict scanning to this directory. Repeatable |
 | `--attribute <name>` | see below | Test-id attribute name |
-| `--max-files <n>` | `2000` | Cap on files parsed |
+| `--max-files <n>` | `8000` | Cap on files parsed. Roughly 0.13 MB of RSS per file, so the default ceiling is about a gigabyte |
 | `--assume-forwarded` | off | Count a test ID written on a component tag as rendered in `map_coverage` |
 | `--log-level <level>` | `error` | stderr verbosity: `silent`, `error`, `info`, `debug` |
 
@@ -167,6 +167,10 @@ A `--src-dir` naming a directory that is not on disk stops the server at startup
 Narrowing the scope usually means fewer files are parsed, and so a lower count against `--max-files`, but the two are not the same set: see below. It does not narrow Playwright config discovery, which always searches the whole root.
 
 ### Limiting the scan with `--max-files`
+
+The default is **8000**, which covers a large application and the monorepo root above it. It was 2000, and that refused every call on the repositories this server exists for — and because it is a startup flag, an agent that hits it cannot do anything but stop and ask you to edit your MCP config. The failure is asymmetric: too low and the tool does not work, too high and a scan uses memory you can see and that is released after ten idle minutes.
+
+A scan past 3000 files reports itself with a `large-scan` info diagnostic naming the count, since that is most of the server's memory and all of its cold start. Lower `--max-files` if you would rather an oversized scope fail fast than run.
 
 The cap governs files **parsed**, not files analyzed: every source the project holds, less declaration files and ignored directories such as `node_modules` and build output. `--src-dir` says which files are analyzed, and the resolver still parses what analyzed code imports — an alias target or a `.js` module outside the scope is parsed, retained, and counted. Counting only the narrowed scope let a project sitting on the cap pull in unlimited siblings for free.
 

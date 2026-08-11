@@ -116,7 +116,7 @@ program
 	)
 	.option(
 		"--max-files <n>",
-		"Cap on files parsed (default: 2000)",
+		"Cap on files parsed (default: 8000)",
 		parsePositiveInt,
 	)
 	.option(

@@ -50,8 +50,40 @@ import { clearResolutionCaches } from "./util/resolve";
 import { registerWorkspaceRoot } from "./util/workspaceRoot";
 
 export const DEFAULT_TEST_ID_ATTRIBUTE = "data-testid";
-/** Matches the documented `--max-files` default in `src/cli.ts` and the docs. */
-const DEFAULT_MAX_FILES = 2000;
+/**
+ * Files the scan will parse before refusing. Matches the documented
+ * `--max-files` default in `src/cli.ts` and the docs.
+ *
+ * 8,000, raised from 2,000. The old default refused every call on the repos
+ * this exists for — three independent audits of a 4,924-file application had to
+ * pass `--max-files` before anything worked at all — and because it is a
+ * *startup* flag, the agent holding the error cannot act on it. It has to stop
+ * and ask a human to edit an MCP client config, which is the one failure an
+ * agent-facing tool must not have.
+ *
+ * The failure is asymmetric. Set too low, the product does not work and only a
+ * human can unblock it. Set too high, a scan uses memory the user can see and
+ * that {@link IDLE_EVICT_AFTER_MS} hands back after ten idle minutes. Measured
+ * at roughly 0.13 MB of RSS per parsed file, 8,000 is about a gigabyte at the
+ * ceiling and covers both scopes those audits used: a large application and the
+ * monorepo root the `ui-scope-incomplete` warning tells you to re-root at
+ * (6,253 files — which the old cap, and even 6,000, would have refused after
+ * recommending it).
+ *
+ * It is still a cap, not a licence: pointing the server at a home directory
+ * should fail rather than swallow the machine.
+ */
+const DEFAULT_MAX_FILES = 8000;
+
+/**
+ * Parsed-file count above which a scan reports what it cost.
+ *
+ * Raising the ceiling removed a hard stop that was also, accidentally, the only
+ * thing telling anyone the scan was large. This keeps the information without
+ * the refusal: past this many files the workspace says how many it parsed and
+ * how to bound it, and the call still answers.
+ */
+const LARGE_SCAN_FILES = 3000;
 const DEFAULT_STALE_AFTER_MS = 1000;
 const LRU_SIZE = 2;
 
@@ -221,6 +253,8 @@ export class Workspace {
 	 * has answered its one question still exits immediately.
 	 */
 	private idleTimer: ReturnType<typeof setTimeout> | null = null;
+	/** So the large-scan note is stated once, not on every revalidation sweep. */
+	private largeScanNoted = false;
 	private playwrightInfo: {
 		epoch: number;
 		value: PlaywrightConfigInfo;
@@ -969,6 +1003,34 @@ export class Workspace {
 	 * rebuilding the whole project on every call would only re-parse it to fail
 	 * in the same place.
 	 */
+	/**
+	 * Reports a large scan once, without refusing it.
+	 *
+	 * Raising the ceiling removed a hard stop that was also, accidentally, the
+	 * only thing that ever told anyone the scan was big. The number is worth
+	 * having — it is most of the server's memory and all of its cold start — so
+	 * it is stated as an `info` the moment the project is known to be large, and
+	 * the call proceeds.
+	 *
+	 * Once per workspace: `enforceMaxFiles` runs on every revalidation sweep, and
+	 * a warning repeated every call would be exactly the noise the session ledger
+	 * exists to remove.
+	 */
+	private noteLargeScan(count: number, limit: number): void {
+		if (this.largeScanNoted || count < LARGE_SCAN_FILES) {
+			return;
+		}
+		this.largeScanNoted = true;
+		this.warnings.push(
+			info(
+				"large-scan",
+				`This analysis parses ${count} source file(s) (cap ${limit}), which is most of the server's memory and all of its cold start. Narrow it with --src-dir <dir> if the scope is wider than you meant, or lower --max-files to make an oversized scope fail fast instead of running.`,
+				undefined,
+				{ files: count, limit },
+			),
+		);
+	}
+
 	private enforceMaxFiles(
 		rollback: readonly SourceFile[] = [],
 		evictOnFailure = false,
@@ -976,6 +1038,7 @@ export class Workspace {
 		const limit = this.options.maxFiles ?? DEFAULT_MAX_FILES;
 		const count = this.parsedCount();
 		if (count <= limit) {
+			this.noteLargeScan(count, limit);
 			return;
 		}
 		for (const sourceFile of rollback) {
