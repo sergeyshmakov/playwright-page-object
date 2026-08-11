@@ -150,6 +150,52 @@ describe("buildCoverageReport — dynamic UI ids", () => {
 });
 
 /**
+ * A scoped run divides two different questions.
+ *
+ * `poInclude` narrows the page-object side and nothing narrows the UI side, so
+ * one class of a hundred scored a fraction of a percent against the whole
+ * application — a number that reads as a broken suite. There is no honest
+ * denominator to narrow to (nothing statically ties a page object to a subset
+ * of the UI), so the ratio is refused and the two numbers it would have divided
+ * are named in a warning.
+ */
+describe("buildCoverageReport — a scoped page-object side", () => {
+	const scoped = report({}, { poInclude: ["e2e/HomePage.ts"] });
+
+	it("refuses a ratio between a scoped numerator and a whole denominator", () => {
+		expect(scoped.summary.coverage).toBeNull();
+		// The numbers themselves still ship: a caller who wants the fraction can
+		// see exactly which two it would be.
+		expect(scoped.summary.coveredUiTestIds).toBe(1);
+		expect(scoped.summary.matchableUiTestIds).toBe(3);
+	});
+
+	it("says which halves were scoped and which stayed project-wide", () => {
+		const warning = scoped.warnings.find(
+			(diagnostic) => diagnostic.code === "coverage-scope-narrowed",
+		);
+		expect(warning?.severity).toBe("warning");
+		expect(warning?.message).toContain("e2e/HomePage.ts");
+		expect(warning?.message).toContain("uncoveredTestIds");
+		expect(warning?.data).toMatchObject({ covered: 1, matchable: 3 });
+	});
+
+	it("keeps the summary internally consistent either way", () => {
+		expect(
+			scoped.summary.coveredUiTestIds + scoped.summary.uncoveredTestIds,
+		).toBe(scoped.summary.matchableUiTestIds);
+	});
+
+	it("leaves an unscoped run scoring, and silent about scope", () => {
+		const whole = report();
+		expect(whole.summary.coverage).toBeCloseTo(1 / 3);
+		expect(whole.warnings.map((diagnostic) => diagnostic.code)).not.toContain(
+			"coverage-scope-narrowed",
+		);
+	});
+});
+
+/**
  * A test id written on a component tag is a prop, and a prop only reaches the
  * DOM if the component forwards it. Counting it as rendered invents coverage;
  * calling the selector that matches it dead invents a bug. Both are worse than
@@ -782,6 +828,38 @@ describe("buildCoverageReport — component tags from outside the scan", () => {
 			(entry) => entry.code === "ui-scope-incomplete",
 		);
 		expect(scope?.message).toContain("scopeIncomplete");
+	});
+
+	// Measured backwards on a production monorepo: of 8 selectors that were not
+	// really dead, 6 had an empty `nearestTestIds` (their ids render inside an
+	// unscanned package, so nothing in scope resembles them), while 3 of the 5
+	// genuinely dead ones had a near match — the old spelling a rename left
+	// behind. The advice used to send the reader at the empty ones first.
+	it("triages towards the near match, not away from it", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({ ...EXTERNAL, ...pageObject("InsideGapped") }),
+		);
+		const message =
+			result.warnings.find((entry) => entry.code === "ui-scope-incomplete")
+				?.message ?? "";
+		expect(message).toContain("non-empty list is the actionable case");
+		expect(message).not.toContain("start with the ones whose nearestTestIds");
+	});
+
+	// An unfollowable remedy is worse than none: `--src-dir` outside the project
+	// root is refused at startup, so "add their directories to the scan" cost a
+	// server restart and taught nothing.
+	it("never offers a wider scan as the remedy for an out-of-root module", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({ ...EXTERNAL, ...pageObject("InsideGapped") }),
+		);
+		const message =
+			result.warnings.find((entry) => entry.code === "ui-scope-incomplete")
+				?.message ?? "";
+		expect(message).not.toContain("added to the scanned sources");
+		// Nothing resolves in an in-memory fixture, so this is the "no sources to
+		// reach" branch: it must not promise a re-root that would find nothing.
+		expect(message).toContain("do not resolve at all");
 	});
 
 	it("does not count a relative import as a boundary", () => {

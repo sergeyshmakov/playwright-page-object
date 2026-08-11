@@ -489,7 +489,15 @@ function computeCoverageReport(
 		attribute: attribute.attribute,
 		include: options.uiInclude,
 	});
-	warnings.push(...uiTree.warnings);
+	// Every warning the UI scan raised except the one that describes a shape this
+	// report does not ship. `tree-partial` is a statement about `roots` — its own
+	// text says ids beyond the cut are "missing from roots but present in
+	// inventory" — and coverage returns no roots at all: it is computed from the
+	// inventory, which is complete whatever the walk did. Repeating it here told a
+	// reader their coverage numbers were partial when nothing about them was.
+	warnings.push(
+		...uiTree.warnings.filter((warning) => warning.code !== "tree-partial"),
+	);
 
 	const discovery = discoverInternal(ws, { include: options.poInclude });
 	warnings.push(...discovery.index.warnings);
@@ -731,6 +739,10 @@ function computeCoverageReport(
 	const matchable = partition.rendered.length;
 	const assumedGroups = partition.rendered.filter((ui) => ui.assumed).length;
 	const rawSelectors = usages.filter((usage) => usage.origin === "raw").length;
+	// One side of the report was narrowed and the other was not. Read once, so the
+	// nulled ratio and the warning explaining it cannot disagree.
+	const scopedToPageObjects =
+		options.poInclude !== undefined && options.poInclude.length > 0;
 
 	warnings.push(
 		...coverageWarnings({
@@ -747,6 +759,9 @@ function computeCoverageReport(
 			deadCount: deadSelectors.length,
 			includeRawLocators: options.includeRawLocators === true,
 			poInclude: options.poInclude,
+			scopedToPageObjects,
+			coveredUi: coveredUi.size,
+			uncovered: uncoveredTestIds.length,
 		}),
 	);
 
@@ -770,7 +785,24 @@ function computeCoverageReport(
 			staticUiIdsCompared: renderedIndex.statics.length,
 			// Zero of zero used to ship as `1`. A report that says "100 % covered"
 			// because it found nothing to cover is the most expensive lie in here.
-			coverage: matchable === 0 ? null : coveredUi.size / matchable,
+			//
+			// A *scoped* run is the second way this number lies, and the fix is the
+			// same one. `poInclude` narrows the numerator to the selectors of a few
+			// files while the denominator stays every matchable id the scan found,
+			// so one page object of a hundred scored 0.0366 — a number that reads as
+			// a broken suite and is really just a ratio between two different
+			// questions. Narrowing the denominator instead is not available: nothing
+			// statically ties a page object to a subset of the UI (it names strings
+			// and imports no components), so "the ids these classes could plausibly
+			// match" is either undefined or circular — the ids they *did* match,
+			// which would score every scoped run 1. Null plus a warning naming both
+			// halves is the honest answer; `coveredUiTestIds` and
+			// `matchableUiTestIds` still ship, so a caller who wants the ratio can
+			// see exactly which two numbers it would divide.
+			coverage:
+				matchable === 0 || scopedToPageObjects
+					? null
+					: coveredUi.size / matchable,
 		},
 		scope: {
 			uiFilesScanned: uiTree.stats.files,
@@ -805,6 +837,10 @@ interface WarningInputs {
 	deadCount: number;
 	includeRawLocators: boolean;
 	poInclude: string[] | undefined;
+	/** `poInclude` narrowed the page-object side while the UI side stayed whole. */
+	scopedToPageObjects: boolean;
+	coveredUi: number;
+	uncovered: number;
 }
 
 /** Share of test-id selectors landing on unproven props that is worth naming. */
@@ -847,6 +883,23 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 					attributeSource: inputs.attribute.source,
 					occurrences: total,
 					files: inputs.uiTree.stats.files,
+				},
+			),
+		);
+	}
+
+	if (inputs.scopedToPageObjects && inputs.matchable > 0) {
+		out.push(
+			warn(
+				"coverage-scope-narrowed",
+				`The page-object side of this report is scoped to ${inputs.poInclude?.length ?? 0} file(s) (${(inputs.poInclude ?? []).join(", ")}) while the UI side is every scanned source, so summary.coverage is null rather than ${inputs.coveredUi}/${inputs.matchable}: the two halves answer different questions and dividing them scores a single page object against the whole application. ` +
+					`matched, deadSelectors, nonTestIdSelectors and unknownSelectors are exact for the scoped selectors. uncoveredTestIds (${inputs.uncovered}) and matchableUiTestIds (${inputs.matchable}) stay project-wide, so most entries there are ids other page objects cover. ` +
+					"Re-run without the scope for a ratio that has a denominator.",
+				undefined,
+				{
+					files: inputs.poInclude?.length ?? 0,
+					covered: inputs.coveredUi,
+					matchable: inputs.matchable,
 				},
 			),
 		);
@@ -924,26 +977,21 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 
 	if (uiScopeIncomplete(inputs.uiTree)) {
 		const modules = inputs.uiTree.externalModules;
+		// `sourceRoot` rides in `data` as well as in the prose: a front end that
+		// translates advice into its own flags needs the directory as a value, not
+		// as a substring of an English sentence.
+		const data = {
+			tags: inputs.uiTree.stats.externalComponentTags,
+			modules: modules.length,
+			...(inputs.uiTree.externalModuleRoot
+				? { sourceRoot: inputs.uiTree.externalModuleRoot }
+				: {}),
+		};
+		const message = scopeMessage(inputs, modules);
 		out.push(
 			inputs.deadCount > 0
-				? warn(
-						"ui-scope-incomplete",
-						scopeMessage(inputs, modules),
-						undefined,
-						{
-							tags: inputs.uiTree.stats.externalComponentTags,
-							modules: modules.length,
-						},
-					)
-				: info(
-						"ui-scope-incomplete",
-						scopeMessage(inputs, modules),
-						undefined,
-						{
-							tags: inputs.uiTree.stats.externalComponentTags,
-							modules: modules.length,
-						},
-					),
+				? warn("ui-scope-incomplete", message, undefined, data)
+				: info("ui-scope-incomplete", message, undefined, data),
 		);
 	}
 
@@ -966,18 +1014,44 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 	return out;
 }
 
+/**
+ * What an incomplete UI scope means for reading the report, and what to do.
+ *
+ * Two sentences here were measured backwards against a production monorepo and
+ * are written the other way round now.
+ *
+ * **Triage order.** The old text said to start with the dead selectors whose
+ * `nearestTestIds` is empty. Of 8 selectors that were *not* really dead, 6 had
+ * an empty list — they name ids rendered inside an unscanned package, so
+ * nothing in scope resembles them — while 3 of the 5 genuinely dead ones had a
+ * near match, because a rename leaves the old spelling one edit away from the
+ * new one. Emptiness is the signature of the scope gap; a near match is the
+ * signature of the typo. So a near match is the actionable case.
+ *
+ * **The remedy.** The old text offered "rooted where they live, or with their
+ * directories added to the scanned sources" as equal options. They are not:
+ * anything outside the analysed root is dropped before it is counted, so
+ * widening the scanned directories to reach a sibling package cannot work —
+ * and a front end that validates its scope against its root refuses to start
+ * at all. Re-rooting is the only one of the two that reaches them, and when
+ * the modules resolve to source it can even be named exactly.
+ */
 function scopeMessage(inputs: WarningInputs, modules: string[]): string {
 	const named = modules.length > 0 ? modules.join(", ") : "unresolved modules";
 	// Only when there are entries to have been stamped: promising a flag on an
 	// empty list sends a reader looking for something that is not there.
 	const flagged =
 		inputs.deadCount > 0
-			? ` All ${inputs.deadCount} entr${inputs.deadCount === 1 ? "y" : "ies"} in deadSelectors carry scopeIncomplete for this reason — read them as unverified, and start with the ones whose nearestTestIds is empty.`
+			? ` All ${inputs.deadCount} entr${inputs.deadCount === 1 ? "y" : "ies"} in deadSelectors carry scopeIncomplete for this reason — read them as unverified. Triage by nearestTestIds: a non-empty list is the actionable case, because an id one edit away is what a rename leaves behind. An empty list here more often means the id is rendered inside one of the modules above than that the selector is wrong.`
 			: "";
+	const root = inputs.uiTree.externalModuleRoot;
+	const remedy = root
+		? `Their sources are in this repository, at or under "${root}", reached through a node_modules link from outside the analysed root — re-run with the analysis rooted at "${root}" to bring them into scope. Widening the scanned directories cannot: a directory outside the root is dropped before anything is counted.`
+		: "They resolve to installed packages, or do not resolve at all, so no scanning scope reaches their sources; the ids inside them can only be confirmed from the packages themselves.";
 	return (
 		`${inputs.uiTree.stats.externalComponentTags} component tag(s) come from ${modules.length} module(s) outside the scanned sources (${named}). ` +
 		"Test ids rendered inside them are invisible here, so an id may exist without appearing in this report and a selector for one reads as dead. " +
-		"If those modules are part of this repository, re-run with the scan rooted where they live, or with their directories added to the scanned sources." +
+		remedy +
 		flagged
 	);
 }
