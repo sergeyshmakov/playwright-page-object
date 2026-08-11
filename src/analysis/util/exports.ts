@@ -52,6 +52,31 @@ function declaredName(node: Node): string | undefined {
 }
 
 /**
+ * Parentheses and type assertions, which say nothing about what an expression
+ * *is*.
+ *
+ * `export default (CheckoutPage)`, `export default CheckoutPage as PageObject`
+ * and the `satisfies` spelling all wrap the identifier the clause names. Testing
+ * the expression as written reported the class as neither exported nor
+ * default — which also loses the file-target preference, because resolving a
+ * file to "its default-exported page object" then finds none and falls back to
+ * the first one declared.
+ */
+function unwrapSyntax(node: Node): Node {
+	let current = node;
+	while (
+		Node.isParenthesizedExpression(current) ||
+		Node.isAsExpression(current) ||
+		Node.isNonNullExpression(current) ||
+		Node.isTypeAssertion(current) ||
+		Node.isSatisfiesExpression(current)
+	) {
+		current = current.getExpression();
+	}
+	return current;
+}
+
+/**
  * `export default X` naming a local declaration.
  *
  * `export =` is CommonJS's whole-module export, not a default export, and
@@ -65,7 +90,7 @@ function isDefaultExportAssignment(
 		if (assignment.isExportEquals()) {
 			continue;
 		}
-		const expression = assignment.getExpression();
+		const expression = unwrapSyntax(assignment.getExpression());
 		if (Node.isIdentifier(expression) && expression.getText() === name) {
 			return true;
 		}

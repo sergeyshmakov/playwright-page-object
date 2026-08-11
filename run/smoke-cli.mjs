@@ -197,12 +197,21 @@ function smokeMcpHandshake(tempDir) {
 						(name) => !names.includes(name),
 					);
 					const extra = names.filter((name) => !EXPECTED_TOOLS.includes(name));
-					if (missing.length > 0 || extra.length > 0) {
+					// Cardinality too: membership alone lets a tool registered twice
+					// through, and a duplicated `tools/list` entry is a real shape for a
+					// server to ship. The names say *which* tool is wrong; the count is
+					// what says there is one at all.
+					const duplicated = names.length !== EXPECTED_TOOLS.length;
+					if (missing.length > 0 || extra.length > 0 || duplicated) {
 						finish(
 							new Error(
 								`smoke-cli: tools/list returned [${names.join(", ")}]${
 									missing.length > 0 ? `; missing ${missing.join(", ")}` : ""
-								}${extra.length > 0 ? `; unexpected ${extra.join(", ")}` : ""}`,
+								}${extra.length > 0 ? `; unexpected ${extra.join(", ")}` : ""}${
+									duplicated
+										? `; expected ${EXPECTED_TOOLS.length} entries, got ${names.length}`
+										: ""
+								}`,
 							),
 						);
 						return;

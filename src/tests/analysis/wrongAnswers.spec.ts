@@ -77,6 +77,49 @@ describe("config read wrongly", () => {
 	});
 });
 
+describe("exports read wrongly", () => {
+	it("sees a parenthesized default export", () => {
+		// Two costs, and the second is the one a caller feels: the summary says
+		// `isDefaultExport: false`, and resolving a file to "its default-exported
+		// page object" then finds none and silently falls back to the first class
+		// declared in it.
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/HomePage.ts": [
+					libImport("RootPageObject", "RootSelector"),
+					"@RootSelector()",
+					"class Other extends RootPageObject {}",
+					"@RootSelector()",
+					"class HomePage extends RootPageObject {}",
+					"export default (HomePage);",
+				].join("\n"),
+			}),
+		);
+		const home = discovery.pageObjects.find(
+			(one) => one.className === "HomePage",
+		);
+		expect(home?.isDefaultExport).toBe(true);
+		expect(home?.isExported).toBe(true);
+	});
+
+	it("sees a default export through `as`", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/HomePage.ts": [
+					libImport("RootPageObject", "RootSelector"),
+					"@RootSelector()",
+					"class HomePage extends RootPageObject {}",
+					"export default HomePage as never;",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage")
+				?.isDefaultExport,
+		).toBe(true);
+	});
+});
+
 describe("scope validated wrongly", () => {
 	it("refuses a glob whose static base escapes the root", () => {
 		const root = scratch({ "src/.keep": "" });
