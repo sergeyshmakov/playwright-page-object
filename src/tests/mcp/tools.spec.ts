@@ -1555,6 +1555,84 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	/**
+	 * The same five calls, read the other way round: the codes survive (asserted
+	 * above), and the 3,182 bytes of identical prose behind them do not. What
+	 * makes that safe is the hint, which is rebuilt from the full warnings and
+	 * ships whole every time — so the abbreviated call still carries the fix.
+	 */
+	it("sends a warning's text once per session, and its advice every time", async () => {
+		await withProject(
+			"ppo-warning-ledger-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					"\treturn (",
+					'\t\t<div data-tid="AppRoot">',
+					'\t\t\t<input data-tid="EmailInput" />',
+					'\t\t\t<button data-tid="SubmitButton" />',
+					"\t\t</div>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+				"e2e/LoginPage.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("AppRoot")',
+					"export class LoginPage extends RootPageObject {",
+					'\t@Selector("EmailInput")',
+					"\taccessor Email!: Locator;",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const shape = async (): Promise<{
+					warnings: Array<Record<string, unknown>>;
+					hint: string;
+					bytes: number;
+				}> => {
+					const { envelope, text } = await callTool(
+						client,
+						"list_page_objects",
+						{},
+					);
+					return {
+						warnings: (envelope.meta?.warnings ?? []) as Array<
+							Record<string, unknown>
+						>,
+						hint: String(envelope.meta?.hint ?? ""),
+						bytes: text.length,
+					};
+				};
+
+				const first = await shape();
+				const mismatch = first.warnings.find(
+					(one) => one.code === "attribute-mismatch",
+				);
+				expect(mismatch?.message, "first call must explain itself").toEqual(
+					expect.any(String),
+				);
+
+				const second = await shape();
+				const repeat = second.warnings.find(
+					(one) => one.code === "attribute-mismatch",
+				);
+				expect(repeat).toEqual({
+					code: "attribute-mismatch",
+					severity: "warning",
+					repeat: 1,
+				});
+				expect(second.bytes).toBeLessThan(first.bytes);
+				// The half that must never shrink.
+				expect(second.hint).toBe(first.hint);
+				expect(second.hint).toContain("--attribute data-tid");
+			},
+		);
+	}, 30_000);
+
 	it("tells a caller to fix the scope when no UI source was scanned", async () => {
 		await withProject(
 			"ppo-empty-scope-",

@@ -19,6 +19,7 @@ import {
 	handleMapCoverage,
 	handleQueryCoverage,
 } from "./tools";
+import { WarningLedger } from "./warnings";
 
 const READ_ONLY = {
 	readOnlyHint: true,
@@ -54,6 +55,8 @@ Both tree tools take format:"outline", which returns the same tree as indented t
 Writing the test body from a tree: a page object's members are plain properties, so the tree is the call chain - \`checkoutPage.CartItems.first().RemoveButton\`. A member whose result is Locator is a Playwright Locator and takes Playwright calls directly; every other member is a page object, whose raw locator is \`.$\`. A root class is constructed as \`new CheckoutPage(page)\`, or taken as a test argument when the node lists a fixture binding. The methods in the tree are the class's own; the inherited library helpers - the waits on PageObject, the item and filter methods on ListPageObject - are named by inheritedApi and spelled out in meta.apiHints of the same response, so do not go and read the package sources for them.
 
 Reading a coverage report: call map_coverage summary-first with buckets: [] to get the totals and the scope for a few hundred bytes, then page the one list that matters with query_coverage, passing meta.coverageId and one bucket. Copy meta.nextOffset into the next call's offset and stop when that key stops coming back; summary reports every bucket's real size throughout, so a capped page always says how much it is hiding. ${HANDLE_LIFETIME_TEXT}
+
+meta.warnings sends each distinct warning in full once per session. After that the same warning comes back as {code, severity, repeat: N} with no message, meaning N warnings of that code are still in force and their text has not changed since it was sent; a warning whose details change is sent in full again. meta.hint is never abbreviated - it always carries the current advice in full, so act on it and treat a bare code as a reminder rather than something to re-read.
 
 No response is ever refused for being long. When a page would exceed the size cap it is trimmed instead: summary and scope always ship, meta.truncatedBuckets names the lists that were cut, and meta.nextOffset says where to resume. An empty bucket in such a response means "cut here", not "nothing found" - read summary.`;
 
@@ -106,6 +109,10 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	// One store per server, so a handle cannot outlive the process that issued it
 	// or reach a workspace it was not built against.
 	const handles = new CoverageHandles();
+	// Likewise per server: "already sent" is a fact about one conversation, and a
+	// ledger shared between two of them would abbreviate for a reader who never
+	// saw the original.
+	const session = { warnings: new WarningLedger() };
 
 	server.registerTool(
 		"list_page_objects",
@@ -115,7 +122,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: listPageObjectsInput,
 			annotations: READ_ONLY,
 		},
-		safeHandler((args) => handleListPageObjects(getWorkspace(), args)),
+		safeHandler((args) => handleListPageObjects(getWorkspace(), args, session)),
 	);
 
 	server.registerTool(
@@ -127,7 +134,9 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			annotations: READ_ONLY,
 			_meta: LARGE_RESULT,
 		},
-		safeHandler((args) => handleGetPageObjectTree(getWorkspace(), args)),
+		safeHandler((args) =>
+			handleGetPageObjectTree(getWorkspace(), args, session),
+		),
 	);
 
 	server.registerTool(
@@ -138,7 +147,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: getTestIdTreeInput,
 			annotations: READ_ONLY,
 		},
-		safeHandler((args) => handleGetTestIdTree(getWorkspace(), args)),
+		safeHandler((args) => handleGetTestIdTree(getWorkspace(), args, session)),
 	);
 
 	server.registerTool(
@@ -154,6 +163,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			handleMapCoverage(getWorkspace(), args, {
 				assumeForwarded: options.assumeForwarded,
 				handles,
+				warnings: session.warnings,
 			}),
 		),
 	);
@@ -167,7 +177,9 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			annotations: READ_ONLY,
 			_meta: LARGE_RESULT,
 		},
-		safeHandler((args) => handleQueryCoverage(getWorkspace(), args, handles)),
+		safeHandler((args) =>
+			handleQueryCoverage(getWorkspace(), args, handles, session),
+		),
 	);
 
 	return server;

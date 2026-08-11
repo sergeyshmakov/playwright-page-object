@@ -48,6 +48,16 @@ import {
 	type mapCoverageInput,
 	type queryCoverageInput,
 } from "./schemas";
+import { planWarnings, type WarningLedger } from "./warnings";
+
+/**
+ * The per-server state a tool call may consult. Optional throughout: a handler
+ * called without one behaves exactly as it did before sessions existed, which
+ * is what keeps the direct-call tests honest about the payload shape.
+ */
+export interface ToolSession {
+	warnings?: WarningLedger;
+}
 
 /**
  * Thin tool handlers: validate cross-field rules, call the analysis engine,
@@ -242,6 +252,7 @@ function listEmptyHint(
 export function handleListPageObjects(
 	workspace: Workspace,
 	args: z.infer<typeof listPageObjectsInput>,
+	session: ToolSession = {},
 ) {
 	const index = discoverPageObjects(workspace);
 	let items = index.pageObjects;
@@ -257,6 +268,11 @@ export function handleListPageObjects(
 	const offset = args.offset;
 	const shown = items.slice(offset, offset + args.limit);
 	const end = offset + shown.length;
+	// Planned once and used everywhere below: the hint is built from the *full*
+	// warnings, because `environmentHint` reads their `data`, and an abbreviated
+	// warning has none. That split is the whole safety net - the advice survives
+	// at full length however many times its warning has already been sent.
+	const warnings = planWarnings(session.warnings, index.warnings);
 
 	return ok(
 		shown.map(summaryEntry),
@@ -271,7 +287,7 @@ export function handleListPageObjects(
 			total,
 			offset: offset > 0 ? offset : undefined,
 			nextOffset: end < total ? end : undefined,
-			warnings: index.warnings,
+			warnings: warnings.shown,
 			hint: withEnvironmentHint(
 				index.warnings,
 				shown.length === 0
@@ -282,6 +298,7 @@ export function handleListPageObjects(
 		{
 			shrinkHint:
 				"Re-call with a lower `limit`, a narrower `filter`, or page through with `offset`.",
+			onDelivered: warnings.delivered,
 		},
 	);
 }
@@ -334,6 +351,7 @@ function relativizeFile(
 export function handleGetPageObjectTree(
 	workspace: Workspace,
 	args: z.infer<typeof getPageObjectTreeInput>,
+	session: ToolSession = {},
 ) {
 	if (!args.class && !args.file) {
 		throw new ToolError("invalid_input", "Provide `class`, `file`, or both.", {
@@ -370,6 +388,7 @@ export function handleGetPageObjectTree(
 				),
 			};
 
+	const warnings = planWarnings(session.warnings, tree.warnings);
 	const meta = {
 		root: tree.projectRoot,
 		attribute: tree.testIdAttribute,
@@ -381,12 +400,13 @@ export function handleGetPageObjectTree(
 		// and the call syntax is no less needed there. It describes how to *use*
 		// what the tree found rather than being part of the finding.
 		apiHints: apiHintsFor(tree),
-		warnings: tree.warnings,
+		warnings: warnings.shown,
 		hint: environmentHint(tree.warnings),
 	};
 
 	const shrink = {
 		shrinkHint: `Re-call with format:"outline", a lower depth (this call used ${args.depth}), or includeMethods:false.`,
+		onDelivered: warnings.delivered,
 	};
 
 	if (args.format === "outline") {
@@ -543,6 +563,7 @@ function missingComponent(
 export function handleGetTestIdTree(
 	workspace: Workspace,
 	args: z.infer<typeof getTestIdTreeInput>,
+	session: ToolSession = {},
 ) {
 	// `followComponents` is a real engine option now, so it no longer has to be
 	// faked as `depth: 1`. That collapse reported every component boundary as
@@ -591,7 +612,8 @@ export function handleGetTestIdTree(
 		// describes a tree the caller did not ask for and cannot see — and reads as
 		// a caveat on the inventory, which is the one thing that is always
 		// complete.
-		const warnings = withoutTreeShapeWarnings(tree.warnings);
+		const full = withoutTreeShapeWarnings(tree.warnings);
+		const warnings = planWarnings(session.warnings, full);
 		return ok(
 			{ occurrences },
 			{
@@ -601,15 +623,16 @@ export function handleGetTestIdTree(
 				// "That id is not rendered anywhere" is the single most misleading
 				// answer this server can give when the attribute or the scope is
 				// wrong, and this branch used to ship it with no warnings at all.
-				warnings,
+				warnings: warnings.shown,
 				hint: withEnvironmentHint(
-					warnings,
+					full,
 					lookupHint(needle, occurrences.length, catchAllSkipped, propOnly),
 				),
 			},
 			{
 				shrinkHint:
 					'Re-call with format:"outline", a lower depth, or scope the walk with `file` or `component`.',
+				onDelivered: warnings.delivered,
 			},
 		);
 	}
@@ -685,6 +708,7 @@ export function handleGetTestIdTree(
 
 	const roots = tree.roots;
 	const gap = traversalGap(roots, tree.truncated === true);
+	const warnings = planWarnings(session.warnings, tree.warnings);
 	const meta: Record<string, unknown> = {
 		attribute: tree.attribute,
 		attributeSource: tree.attributeSource,
@@ -694,7 +718,7 @@ export function handleGetTestIdTree(
 		fidelityReason: tree.fidelityReason,
 		truncated: tree.truncated,
 		scanned: tree.stats.files,
-		warnings: tree.warnings,
+		warnings: warnings.shown,
 		// A partial tree is the normal answer for any real app, so the useful
 		// thing is not the word but what to do about it. "Absent from this tree"
 		// must never be read as "not rendered" while a gap is open.
@@ -706,6 +730,7 @@ export function handleGetTestIdTree(
 
 	const shrink = {
 		shrinkHint: `Re-call with format:"outline", a lower depth (this call used ${depth}), or scope the walk with \`file\` or \`component\`.`,
+		onDelivered: warnings.delivered,
 	};
 
 	if (args.format === "outline") {
@@ -977,8 +1002,9 @@ function coverageResult(input: {
 	offset: number;
 	buildMeta: (paging: CoveragePaging) => ToolMeta;
 	shrinkHint: string;
+	onDelivered?: () => void;
 }): TextResult {
-	const { base, slices, offset, buildMeta, shrinkHint } = input;
+	const { base, slices, offset, buildMeta, shrinkHint, onDelivered } = input;
 
 	const pagingFor = (kept: number[]): CoveragePaging => {
 		const shown: Record<string, number> = {};
@@ -1036,7 +1062,7 @@ function coverageResult(input: {
 	const wholeData = dataFor(whole);
 	const wholeMeta = buildMeta(pagingFor(whole));
 	if (envelopeBytes(wholeData, wholeMeta) <= MAX_RESPONSE_BYTES) {
-		return ok(wholeData, wholeMeta, { shrinkHint });
+		return ok(wholeData, wholeMeta, { shrinkHint, onDelivered });
 	}
 
 	const widestMeta = buildMeta({
@@ -1057,7 +1083,10 @@ function coverageResult(input: {
 		slices.map((slice) => ({ name: slice.name, entries: slice.page })),
 	);
 	const kept = slices.map((slice) => fit.get(slice.name) ?? 0);
-	return ok(dataFor(kept), buildMeta(pagingFor(kept)), { shrinkHint });
+	return ok(dataFor(kept), buildMeta(pagingFor(kept)), {
+		shrinkHint,
+		onDelivered,
+	});
 }
 
 /**
@@ -1100,9 +1129,10 @@ function degradeHint(
 export function handleMapCoverage(
 	workspace: Workspace,
 	args: z.infer<typeof mapCoverageInput>,
-	options: Pick<McpServerOptions, "assumeForwarded"> & {
-		handles?: CoverageHandles;
-	} = {},
+	options: Pick<McpServerOptions, "assumeForwarded"> &
+		ToolSession & {
+			handles?: CoverageHandles;
+		} = {},
 ) {
 	let poInclude: string[] | undefined;
 	let alsoIncluded: string[] | undefined;
@@ -1245,6 +1275,11 @@ export function handleMapCoverage(
 		note,
 	});
 
+	// Once, not inside `buildMeta`: that runs up to three times while the payload
+	// is measured against the cap, and a plan that abbreviated more on each pass
+	// would make the measured size disagree with the sent one.
+	const warnings = planWarnings(options.warnings, report.warnings);
+
 	return coverageResult({
 		// `summary` and `scope` always ship: they are the totals every capped list
 		// is read against, and a bucket selection that hid them would turn a
@@ -1252,6 +1287,7 @@ export function handleMapCoverage(
 		base: { summary: report.summary, scope: report.scope },
 		slices,
 		offset,
+		onDelivered: warnings.delivered,
 		shrinkHint: coverageShrinkHint(
 			args.buckets as CoverageBucket[] | undefined,
 			args.limit,
@@ -1277,7 +1313,7 @@ export function handleMapCoverage(
 					? paging.nextOffset
 					: undefined,
 			truncatedBuckets: paging.truncatedBuckets,
-			warnings: report.warnings,
+			warnings: warnings.shown,
 			truncated: paging.truncated,
 			// A coverage score computed against the wrong attribute used to read as
 			// a healthy `1` (zero of zero ids covered) — the one number in this
@@ -1306,6 +1342,7 @@ export function handleQueryCoverage(
 	workspace: Workspace,
 	args: z.infer<typeof queryCoverageInput>,
 	handles: CoverageHandles,
+	session: ToolSession = {},
 ) {
 	const lookup = handles.resolve(args.coverageId, workspace);
 	if (!lookup.ok) {
@@ -1323,10 +1360,13 @@ export function handleQueryCoverage(
 		page: list.slice(args.offset, args.offset + args.limit),
 	};
 
+	const warnings = planWarnings(session.warnings, report.warnings);
+
 	return coverageResult({
 		base: { summary: report.summary, scope: report.scope },
 		slices: [slice],
 		offset: args.offset,
+		onDelivered: warnings.delivered,
 		shrinkHint: `Re-call with a lower \`limit\` (this call used ${args.limit}), then page the rest with \`offset\`. map_coverage with buckets: [] returns the totals alone.`,
 		buildMeta: (paging) => ({
 			attribute: report.attribute,
@@ -1346,7 +1386,7 @@ export function handleQueryCoverage(
 			shown: paging.shown[args.bucket],
 			nextOffset: paging.nextOffset[args.bucket],
 			truncatedBuckets: paging.truncatedBuckets,
-			warnings: report.warnings,
+			warnings: warnings.shown,
 			truncated: paging.truncated,
 			hint: withEnvironmentHint(
 				report.warnings,

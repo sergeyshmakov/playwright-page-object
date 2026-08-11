@@ -72,6 +72,13 @@ export interface OkOptions {
 	 * needs a next move got advice that does not typecheck.
 	 */
 	shrinkHint?: string;
+	/**
+	 * Run when the response ships, and not when it is refused for being too
+	 * large. The warning ledger records what the reader has been shown, and a
+	 * payload that never left is not something they were shown — recording it
+	 * would abbreviate, on the next call, warnings this one swallowed.
+	 */
+	onDelivered?: () => void;
 }
 
 const GENERIC_SHRINK_HINT =
@@ -90,6 +97,7 @@ export function ok(
 
 	const serialized = JSON.stringify(payload);
 	if (serialized.length <= MAX_RESPONSE_BYTES) {
+		options.onDelivered?.();
 		return { content: [{ type: "text", text: serialized }] };
 	}
 
