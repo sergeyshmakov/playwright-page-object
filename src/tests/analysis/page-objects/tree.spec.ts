@@ -319,14 +319,19 @@ describe("buildPageObjectTree — target resolution", () => {
 		}
 	});
 
-	it("counts the index it searched when the name is simply wrong", () => {
-		expect.assertions(1);
+	// The number and `list_page_objects`' `total` disagree by design — this one
+	// counts distinct names and covers controls, that one counts classes and
+	// hides them — so it has to say what it counts. Unlabelled, a field repository
+	// reported 363 here next to 364 there and the reader went hunting for an
+	// off-by-one that was two different questions.
+	it("counts the index it searched, and says what it counted", () => {
+		expect.assertions(2);
 		try {
 			buildPageObjectTree(makeWorkspace(SHARED), "NoSuchPageObjectXyz");
 		} catch (thrown) {
-			expect((thrown as AnalysisTargetError).message).toMatch(
-				/among the \d+ in the index/,
-			);
+			const message = (thrown as AnalysisTargetError).message;
+			expect(message).toMatch(/among the \d+ distinct page-object name\(s\)/);
+			expect(message).not.toMatch(/among the \d+ in the index/);
 		}
 	});
 

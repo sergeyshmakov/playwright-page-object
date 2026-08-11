@@ -243,6 +243,118 @@ export function linkedWorkspaceFile(
 }
 
 /**
+ * Real path of a file reached through a `node_modules` link that lands on
+ * ordinary source *outside* the analysed root, or `null` when there is no such
+ * link: an installed dependency, a link back inside the root, or no hop at all.
+ *
+ * The mirror image of {@link linkedWorkspaceFile}, and the difference between
+ * the two advisable answers when a component tag resolves out of scope. A link
+ * leading to `<repo>/packages/ui/src` says the sources exist and the analysis is
+ * simply rooted too deep — re-rooting brings them in. A path that stays inside
+ * `node_modules` after the link is followed is a published package, and no
+ * scope change can reach its ids.
+ */
+export function linkedOutsideRoot(
+	project: Project,
+	filePath: string,
+): string | null {
+	const record = roots.get(project);
+	if (!record) {
+		return null;
+	}
+	const real = realFilePath(project, toPosix(filePath));
+	if (real === null || hasNodeModulesSegment(real)) {
+		return null;
+	}
+	return insideRoot(record, real) ? null : real;
+}
+
+/** Directory levels the diagnostic probe walks up looking for `node_modules`. */
+const MAX_DIAGNOSTIC_HOPS = 10;
+
+/**
+ * Real source directory of a package linked into a `node_modules` **above** the
+ * analysed root, or `null`.
+ *
+ * The one place in the engine that deliberately looks outside the root, and the
+ * reason is that it is a diagnosis rather than a resolution. `resolve.ts`'s
+ * workspace-package probe stops at the root on purpose — a `node_modules`
+ * outside it belongs to somebody else's project and its contents must never be
+ * parsed — which is exactly why an analysis rooted at one app of a monorepo
+ * reports its sibling packages as unresolvable. That is the right answer to
+ * "can I read this?" and a useless one to "why can't I, and what would fix it?".
+ *
+ * Nothing is loaded, parsed or admitted here: it answers with a directory name
+ * for a warning to quote. `null` covers every case where re-rooting would not
+ * help — no link, a link that stays inside `node_modules` (an ordinary
+ * installed dependency), or one that lands back inside the root, where the
+ * analysis can already see it.
+ */
+export function packageSourceOutsideRoot(
+	project: Project,
+	fromDirectory: string,
+	packageName: string,
+): string | null {
+	const record = roots.get(project);
+	if (!record) {
+		return null;
+	}
+	const fileSystem = project.getFileSystem();
+	let directory = toPosix(fromDirectory).replace(/\/+$/, "");
+	for (let hop = 0; hop < MAX_DIAGNOSTIC_HOPS; hop += 1) {
+		const candidate = `${directory}/node_modules/${packageName}`;
+		if (fileSystem.directoryExistsSync(candidate)) {
+			const real = realDirectory(project, candidate);
+			return real === null ||
+				hasNodeModulesSegment(real) ||
+				insideRoot(record, real)
+				? null
+				: real;
+		}
+		const parent = directory.slice(0, directory.lastIndexOf("/"));
+		if (parent === "" || parent === directory || !parent.includes("/")) {
+			return null;
+		}
+		directory = parent;
+	}
+	return null;
+}
+
+/**
+ * Deepest directory containing every input, or `null` when they share none.
+ *
+ * Used to turn "these sources are outside the analysed root" into the one thing
+ * a caller can act on: the directory to root the analysis at instead. Compared
+ * case-folded (a Windows drive letter is spelled either way) while the answer
+ * keeps the first input's spelling, and refused when the result is a filesystem
+ * or drive root, which is never useful advice.
+ */
+export function commonAncestorDirectory(paths: string[]): string | null {
+	if (paths.length === 0) {
+		return null;
+	}
+	const split = paths.map((entry) =>
+		toPosix(entry).replace(/\/+$/, "").split("/"),
+	);
+	const [first] = split;
+	let shared = first.length;
+	for (const segments of split.slice(1)) {
+		let index = 0;
+		while (
+			index < shared &&
+			index < segments.length &&
+			foldPath(segments[index]) === foldPath(first[index])
+		) {
+			index += 1;
+		}
+		shared = index;
+	}
+	// One segment is `C:` or the empty string before a leading `/`: a drive or the
+	// filesystem root, which no analysis should be pointed at.
+	return shared < 2 ? null : first.slice(0, shared).join("/");
+}
+
+/**
  * Local ⇔ the path never went through `node_modules`, or the link it went
  * through lands back inside the (real) workspace root with no `node_modules`
  * segment left.

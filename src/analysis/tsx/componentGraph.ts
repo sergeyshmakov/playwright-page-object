@@ -23,7 +23,12 @@ import {
 	resolveIdentifier,
 	resolveModuleSpecifier,
 } from "../util/resolve";
-import { isWorkspaceLocal } from "../util/workspaceRoot";
+import {
+	commonAncestorDirectory,
+	isWorkspaceLocal,
+	linkedOutsideRoot,
+	packageSourceOutsideRoot,
+} from "../util/workspaceRoot";
 import type { Workspace } from "../workspace";
 import {
 	fallbackComponentName,
@@ -446,6 +451,22 @@ export interface ExternalModuleEvidence {
 	modules: string[];
 	/** Component tags whose head resolved to one of those modules. */
 	tags: number;
+	/**
+	 * Where to root an analysis that would see those modules' sources, or `null`
+	 * when none of them has sources to see.
+	 *
+	 * Non-null exactly when at least one specifier resolves through a
+	 * `node_modules` link onto ordinary source outside the analysed root — the
+	 * workspace-monorepo shape, where the sources are right there and the root is
+	 * simply one package too deep. It is the deepest directory containing both
+	 * the current root and those sources, which makes it the value to re-root at.
+	 *
+	 * `null` means the tags come from installed packages or from specifiers that
+	 * do not resolve at all, and no scope change reaches them. The distinction is
+	 * the whole point: advice to widen the scan is unfollowable in the first case
+	 * (a scope outside the root contributes nothing) and impossible in the second.
+	 */
+	sourceRoot: string | null;
 }
 
 const MAX_EXTERNAL_MODULES = 10;
@@ -491,14 +512,18 @@ export class ExternalModuleCensus {
 	 * hands the same map to every census until something invalidates it, and hands
 	 * out a fresh one the moment anything does.
 	 */
-	private readonly outside: Map<string, boolean>;
+	private readonly outside: Map<string, ModulePlacement>;
+	/** Real paths of external modules whose sources sit outside the root. */
+	private readonly sourcePaths = new Set<string>();
+	/** One importing directory per specifier that resolved to no source. */
+	private readonly sampleDirs = new Map<string, string>();
 	private tagCount = 0;
 
 	constructor(private readonly ws: Workspace) {
 		this.outside = ws.memo(
 			CENSUS_CACHE_KEY,
 			[],
-			() => new Map<string, boolean>(),
+			() => new Map<string, ModulePlacement>(),
 		);
 	}
 
@@ -514,43 +539,130 @@ export class ExternalModuleCensus {
 				return;
 			}
 			const specifier = bindings.get(element.tag.split(".")[0]);
-			if (specifier === undefined || !this.isOutside(sourceFile, specifier)) {
+			if (specifier === undefined) {
+				continue;
+			}
+			const placement = this.placementOf(sourceFile, specifier);
+			if (!placement.outside) {
 				continue;
 			}
 			this.tagCount += 1;
 			this.modules.add(specifier);
+			if (placement.sourcePath) {
+				this.sourcePaths.add(placement.sourcePath);
+			} else if (!this.sampleDirs.has(specifier)) {
+				// One importer per specifier is enough to walk up from later; keeping
+				// them all would be a map the size of the repository.
+				this.sampleDirs.set(specifier, sourceFile.getDirectoryPath());
+			}
 		}
 	}
 
 	evidence(): ExternalModuleEvidence {
+		const sources = new Set(this.sourcePaths);
+		// Deferred to here on purpose. This is the only filesystem walk the census
+		// does, and doing it per (file, specifier) in `add` would run it thousands
+		// of times on a monorepo; the answer it produces is one directory name for
+		// one warning, so it is asked once per specifier that ended up external and
+		// has no source yet — at most `MAX_EXTERNAL_MODULES` questions per tree,
+		// memoized per epoch alongside the placements.
+		for (const [specifier, directory] of this.sampleDirs) {
+			const split = splitPackageName(specifier);
+			if (!split) {
+				continue;
+			}
+			const key = `${CACHE_FIELD}${DIAGNOSTIC_PREFIX}${CACHE_FIELD}${split}`;
+			let placement = this.outside.get(key);
+			if (placement === undefined) {
+				placement = {
+					outside: true,
+					sourcePath: packageSourceOutsideRoot(
+						this.ws.project,
+						directory,
+						split,
+					),
+				};
+				this.outside.set(key, placement);
+			}
+			if (placement.sourcePath) {
+				sources.add(placement.sourcePath);
+			}
+		}
 		return {
 			modules: [...this.modules].sort().slice(0, MAX_EXTERNAL_MODULES),
 			tags: this.tagCount,
+			sourceRoot:
+				sources.size === 0
+					? null
+					: commonAncestorDirectory([this.ws.root, ...sources]),
 		};
 	}
 
-	private isOutside(fromFile: SourceFile, specifier: string): boolean {
+	private placementOf(
+		fromFile: SourceFile,
+		specifier: string,
+	): ModulePlacement {
 		const key = `${fromFile.getFilePath()}${CACHE_FIELD}${specifier}`;
 		const cached = this.outside.get(key);
 		if (cached !== undefined) {
 			return cached;
 		}
-		let outside: boolean;
+		let placement: ModulePlacement;
 		try {
 			const resolved = resolveModuleSpecifier(
 				this.ws.project,
 				fromFile,
 				specifier,
 			);
-			outside =
-				resolved === undefined ||
-				!isWorkspaceLocal(this.ws.project, resolved.getFilePath());
+			if (resolved === undefined) {
+				placement = OUTSIDE_UNRESOLVED;
+			} else {
+				const filePath = resolved.getFilePath();
+				placement = isWorkspaceLocal(this.ws.project, filePath)
+					? INSIDE
+					: {
+							outside: true,
+							// Only a `node_modules` link onto source outside the root has a
+							// directory worth naming; an installed package has none.
+							sourcePath: linkedOutsideRoot(this.ws.project, filePath),
+						};
+			}
 		} catch {
-			outside = true;
+			placement = OUTSIDE_UNRESOLVED;
 		}
-		this.outside.set(key, outside);
-		return outside;
+		this.outside.set(key, placement);
+		return placement;
 	}
+}
+
+/** Where one specifier resolved, relative to the analysed workspace. */
+interface ModulePlacement {
+	outside: boolean;
+	/** Real path of its source, when it is source this analysis could have read. */
+	sourcePath: string | null;
+}
+
+const INSIDE: ModulePlacement = { outside: false, sourcePath: null };
+const OUTSIDE_UNRESOLVED: ModulePlacement = { outside: true, sourcePath: null };
+
+/** Cache-key namespace for the "where does this package really live" probe. */
+const DIAGNOSTIC_PREFIX = "diagnostic";
+
+/**
+ * Package name of a bare specifier: `@scope/pkg` or `pkg`, subpath dropped.
+ *
+ * `null` for a relative or absolute specifier, which names no package and has
+ * no `node_modules` directory to look for.
+ */
+function splitPackageName(specifier: string): string | null {
+	if (specifier.startsWith(".") || specifier.startsWith("/")) {
+		return null;
+	}
+	const segments = specifier.split("/");
+	const spanned = segments[0].startsWith("@") ? 2 : 1;
+	return segments.length < spanned
+		? null
+		: segments.slice(0, spanned).join("/");
 }
 
 /** Every function component declared in the scanned files. */

@@ -181,12 +181,20 @@ function resolveTarget(
 	// of the index does: zero means the scope found no page objects at all — a
 	// different problem with a different fix — and a large number means the name
 	// is wrong rather than the scan.
+	//
+	// It says *distinct names* because that is what this number counts, and it is
+	// not the total `list_page_objects` reports. The two differ in both
+	// directions: `byName` collapses two classes that share a name into one key,
+	// and it covers control classes, which the listing hides unless asked for. On
+	// one field repository they read 363 here and 364 there, and an unlabelled
+	// number invites the reader to hunt for an off-by-one that is really two
+	// different questions.
 	const indexed = discovery.byName.size;
 	throw new AnalysisTargetError(
 		"class_not_found",
 		indexed === 0
 			? `No page object named "${trimmed}" was discovered, and neither was any other: the scanned sources declare no page objects at all.`
-			: `No page object named "${trimmed}" was discovered among the ${indexed} in the index.`,
+			: `No page object named "${trimmed}" was discovered among the ${indexed} distinct page-object name(s) in the index.`,
 		{ suggestions: suggestionsFor(discovery, trimmed) },
 	);
 }

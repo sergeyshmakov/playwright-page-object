@@ -107,7 +107,36 @@ export function environmentHint(
 		return `Two Playwright configs disagree about use.testIdAttribute. Restart the server with --playwright-config <file> to pin the one your tests run with.`;
 	}
 
+	// Last, and only at warning severity — that is the run with dead selectors in
+	// it, where the reader is about to act on a list the scope makes unreliable.
+	// It also names the one flag that works: `--src-dir` outside `--project-root`
+	// is refused at startup (validateServerOptions), so the natural reading of
+	// "add their directories to the scan" is advice that kills the server.
+	const scope = warnings.find(
+		(warning) =>
+			warning.code === "ui-scope-incomplete" && warning.severity === "warning",
+	);
+	const sourceRoot = scope?.data?.sourceRoot;
+	if (typeof sourceRoot === "string") {
+		return `Dead selectors in this report are unverified: ${scope?.data?.tags} component tag(s) render from modules whose sources live at "${sourceRoot}", outside this server's --project-root. Restart with --project-root ${sourceRoot} to include them. Adding them with --src-dir will not work — a --src-dir outside the project root is refused at startup.`;
+	}
+
 	return undefined;
+}
+
+/**
+ * Warnings minus the ones that describe a node tree, for a response that ships
+ * none.
+ *
+ * `tree-partial` says where the *walk* stopped, in terms of `roots`. It is the
+ * right thing to say next to a tree and wrong next to anything else: a `testId`
+ * lookup answers from the flat inventory, which is complete in every fidelity
+ * mode, so the caveat lands on the one part of the analysis it does not apply
+ * to. The same reasoning removes it from coverage, one layer down in
+ * `buildCoverageReport`.
+ */
+function withoutTreeShapeWarnings(warnings: Diagnostic[]): Diagnostic[] {
+	return warnings.filter((warning) => warning.code !== "tree-partial");
 }
 
 /** Prepends the environment hint, so it is read before any per-tool advice. */
@@ -553,6 +582,11 @@ export function handleGetTestIdTree(
 		const propOnly =
 			occurrences.length > 0 &&
 			occurrences.every((occurrence) => occurrence.reach === "component-prop");
+		// A lookup ships occurrences, never `roots`, so `tree-partial` here
+		// describes a tree the caller did not ask for and cannot see — and reads as
+		// a caveat on the inventory, which is the one thing that is always
+		// complete.
+		const warnings = withoutTreeShapeWarnings(tree.warnings);
 		return ok(
 			{ occurrences },
 			{
@@ -562,9 +596,9 @@ export function handleGetTestIdTree(
 				// "That id is not rendered anywhere" is the single most misleading
 				// answer this server can give when the attribute or the scope is
 				// wrong, and this branch used to ship it with no warnings at all.
-				warnings: tree.warnings,
+				warnings,
 				hint: withEnvironmentHint(
-					tree.warnings,
+					warnings,
 					lookupHint(needle, occurrences.length, catchAllSkipped, propOnly),
 				),
 			},

@@ -758,3 +758,75 @@ describe("installed dependencies stay unread", () => {
 		},
 	);
 });
+
+/**
+ * Where to root an analysis whose components come from outside it.
+ *
+ * A repository rooted at one app of a monorepo reaches its sibling packages
+ * through `node_modules` links, and every one of those is an external boundary:
+ * their test ids are invisible and every selector for them reads as dead. The
+ * remedy the report used to offer — add their directories to the scanned
+ * sources — cannot work, because anything outside the root is dropped before it
+ * is counted. What *does* work is re-rooting, and when the link lands on source
+ * the directory can be named exactly instead of described.
+ */
+describe.skipIf(!LINKS_WORK)("externalModuleRoot", () => {
+	const APP_ONLY = {
+		"packages/ui/package.json": JSON.stringify({
+			name: "@acme/ui",
+			source: "src/index.tsx",
+		}),
+		"packages/ui/src/index.tsx": [
+			"export function Gapped({ children }: { children?: unknown }) {",
+			'\treturn <div data-testid="GappedRoot">{children as never}</div>;',
+			"}",
+			"",
+		].join("\n"),
+		"apps/web/tsconfig.json": JSON.stringify({
+			compilerOptions: { jsx: "react-jsx", target: "ES2022" },
+			include: ["src"],
+		}),
+		"apps/web/src/App.tsx": [
+			'import { Gapped } from "@acme/ui";',
+			"export default function App() {",
+			'\treturn <Gapped><span data-testid="Inner" /></Gapped>;',
+			"}",
+			"",
+		].join("\n"),
+	};
+
+	it("names the directory that would bring a linked sibling into scope", () => {
+		const root = scratch(APP_ONLY);
+		link(root, "node_modules/@acme/ui", "packages/ui");
+		const ws = Workspace.acquire({
+			projectRoot: path.join(root, "apps", "web"),
+		});
+
+		const tree = buildTestIdTree(ws);
+		expect(tree.externalModules).toEqual(["@acme/ui"]);
+		// The deepest directory holding both the current root and the sources: the
+		// value to pass as the new project root, not a description of one.
+		expect(tree.externalModuleRoot).toBe(toPosix(root));
+	});
+
+	it("says nothing when the package really is installed", () => {
+		const root = scratch({
+			...APP_ONLY,
+			"node_modules/@acme/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				source: "src/index.tsx",
+			}),
+			"node_modules/@acme/ui/src/index.tsx":
+				'export function Gapped() { return <div data-testid="GappedRoot" />; }\n',
+		});
+		const ws = Workspace.acquire({
+			projectRoot: path.join(root, "apps", "web"),
+		});
+
+		const tree = buildTestIdTree(ws);
+		expect(tree.externalModules).toEqual(["@acme/ui"]);
+		// No scope change reaches a published package, so promising one would be
+		// advice that cannot be followed.
+		expect(tree.externalModuleRoot).toBeUndefined();
+	});
+});

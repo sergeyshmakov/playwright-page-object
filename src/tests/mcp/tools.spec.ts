@@ -569,6 +569,50 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	// `tree-partial` says where the *walk* stopped, in terms of `roots`. A
+	// `testId` lookup ships occurrences read off the flat inventory, which is
+	// complete in every fidelity mode, so the caveat landed on the one part of
+	// the analysis it cannot apply to.
+	it("does not caveat a testId lookup with the shape of a tree it did not return", async () => {
+		await withProject(
+			"ppo-lookup-warnings-",
+			{
+				"src/App.tsx": [
+					'import { Gapped } from "@ext/ui";',
+					"export function App() {",
+					'\treturn <Gapped><span data-testid="Slotted" /></Gapped>;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const codes = (envelope: { meta?: Record<string, unknown> }) =>
+					((envelope.meta?.warnings ?? []) as Array<{ code: string }>).map(
+						(warning) => warning.code,
+					);
+
+				// The tree really is partial: the wrapper is an unresolvable module.
+				const tree = await callTool(client, "get_testid_tree", {
+					component: "App",
+				});
+				expect(tree.envelope.meta?.fidelity).toBe("partial");
+				expect(codes(tree.envelope)).toContain("tree-partial");
+
+				const lookup = await callTool(client, "get_testid_tree", {
+					testId: "Slotted",
+				});
+				expect(lookup.isError).toBe(false);
+				expect(codes(lookup.envelope)).not.toContain("tree-partial");
+
+				// Same reasoning, one layer down: coverage ships no roots either.
+				const coverage = await callTool(client, "map_coverage", {
+					buckets: [],
+				});
+				expect(codes(coverage.envelope)).not.toContain("tree-partial");
+			},
+		);
+	}, 30_000);
+
 	// The tree carries every branch of a static choice, and outline is the format
 	// an agent actually reads. Printing only the first branch there said
 	// `data-testid={big ? "Main" : "Alt"}` renders `Main`, so a correct selector
