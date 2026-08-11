@@ -362,6 +362,13 @@ export class Workspace {
 		// difference on the very first acquire and rebuild a 2.3 s project on every
 		// single call. Both sides of every later comparison come from here.
 		created.rememberProjectIdentity();
+		// The lockfile baseline belongs here too, before any tool call can populate
+		// a resolver cache. Seeded on the first *sweep* instead, an install landing
+		// between call one and call two recorded the post-install stamp and
+		// reported no change - so the caches call one filled were never cleared and
+		// every later call saw the same stamp, leaving a newly linked package
+		// misclassified for the rest of the session.
+		created.lockfileChanged();
 		while (Workspace.cache.size > LRU_SIZE) {
 			const oldest = Workspace.cache.entries().next();
 			if (oldest.done) {
@@ -854,11 +861,18 @@ export class Workspace {
 	 * covers it from the evidence side.
 	 */
 	private noteMissingScope(missing: string[]): void {
-		if (missing.length === 0) {
-			return;
-		}
+		// Replaced, not appended. The normalized include pattern is part of the
+		// cache key, so a `--src-dir` that did not exist on the first call and was
+		// created before the second reuses the same workspace with `missing` now
+		// empty - and an early return left the old diagnostic in place, still
+		// telling the caller nothing from that directory is in scope while the
+		// rescan was already loading its files. Same defect as the config notes
+		// that outlived the config: a warning has to be able to stop being true.
+		const kept = this.warnings.filter(
+			(diagnostic) => diagnostic.code !== "scope-dir-missing",
+		);
 		for (const directory of missing) {
-			this.warnings.push(
+			kept.push(
 				warn(
 					"scope-dir-missing",
 					`The analysed directory "${directory}" does not exist under ${toPosix(this.root)}; nothing from it is in scope.`,
@@ -867,7 +881,7 @@ export class Workspace {
 				),
 			);
 		}
-		const merged = dedupeDiagnostics(this.warnings);
+		const merged = dedupeDiagnostics(kept);
 		this.warnings.length = 0;
 		this.warnings.push(...merged);
 	}

@@ -131,6 +131,39 @@ describe("what survives a config edit", () => {
 	});
 });
 
+describe("what a fixed scope stops saying", () => {
+	it("retires scope-dir-missing once the directory appears", () => {
+		// The normalized include pattern is part of the cache key, so the same
+		// workspace is reused once the directory exists — and the warning outlived
+		// the condition, telling the caller nothing from that directory was in
+		// scope while the rescan had already loaded its files.
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		Workspace.reset();
+		const first = Workspace.acquire({
+			projectRoot: root,
+			include: ["src", "e2e"],
+		});
+		expect(first.warnings.map((one) => one.code)).toContain(
+			"scope-dir-missing",
+		);
+
+		write(root, "e2e/spec.ts", "export const b = 1;");
+		const second = Workspace.acquire({
+			projectRoot: root,
+			include: ["src", "e2e"],
+		});
+		expect(second).toBe(first);
+		expect(second.warnings.map((one) => one.code)).not.toContain(
+			"scope-dir-missing",
+		);
+	});
+});
+
 describe("what a fixed config stops saying", () => {
 	it("retires a config note once the config is fixed", () => {
 		// The notes used to be merged into the sticky warning list, where
