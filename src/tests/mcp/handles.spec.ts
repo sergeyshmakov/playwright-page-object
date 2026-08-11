@@ -68,6 +68,10 @@ describe("CoverageHandles", () => {
 	/**
 	 * A rebuilt workspace restarts its epoch at 0, so `(root, epoch)` can repeat.
 	 * Identity is what actually distinguishes the two.
+	 *
+	 * And it is `rebuilt`, not `stale`: the two used to share a reason, so an
+	 * idle eviction told the caller "the analysed sources changed on disk" — a
+	 * specific claim about their repository, made when nothing on disk had moved.
 	 */
 	it("refuses a handle minted against a different workspace instance", () => {
 		const first = emptyProject();
@@ -78,8 +82,18 @@ describe("CoverageHandles", () => {
 		expect(second.currentEpoch).toBe(first.currentEpoch);
 		expect(handles.resolve(id, second)).toEqual({
 			ok: false,
-			reason: "stale",
+			reason: "rebuilt",
 		});
+	});
+
+	it("tells a rebuild apart from a source change, in the message too", () => {
+		expect(handleFailureMessage("rebuilt")).toContain("rebuilt");
+		expect(handleFailureMessage("rebuilt")).toContain(
+			"Nothing in your sources necessarily changed",
+		);
+		// The claim that must only be made when it is true.
+		expect(handleFailureMessage("rebuilt")).not.toContain("changed on disk");
+		expect(handleFailureMessage("stale")).toContain("changed on disk");
 	});
 
 	it("expires a handle once the advertised TTL has passed unused", () => {

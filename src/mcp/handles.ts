@@ -72,7 +72,7 @@ interface HandleEntry {
 }
 
 /** Why a handle could not be spent. Each gets its own message. */
-export type HandleFailure = "unknown" | "expired" | "stale";
+export type HandleFailure = "unknown" | "expired" | "stale" | "rebuilt";
 
 export type HandleLookup =
 	| { ok: true; snapshot: CoverageSnapshot }
@@ -138,10 +138,17 @@ export class CoverageHandles {
 			this.entries.delete(id);
 			return { ok: false, reason: "expired" };
 		}
-		if (
-			entry.workspace !== workspace ||
-			entry.epoch !== workspace.currentEpoch
-		) {
+		// Two different failures, and they were reported as one. Identity differs
+		// when the workspace was rebuilt - after the idle eviction released it, or
+		// because this call analyses a different scope - and *nothing on disk
+		// changed*. The epoch differs when a file really did change. Collapsing
+		// them meant an eviction told the caller "the analysed sources changed on
+		// disk", which is a specific claim about their repository and false.
+		if (entry.workspace !== workspace) {
+			this.entries.delete(id);
+			return { ok: false, reason: "rebuilt" };
+		}
+		if (entry.epoch !== workspace.currentEpoch) {
 			this.entries.delete(id);
 			return { ok: false, reason: "stale" };
 		}
@@ -202,6 +209,9 @@ export function handleFailureMessage(reason: HandleFailure): string {
 	}
 	if (reason === "stale") {
 		return "The analysed sources changed on disk since that coverageId was issued, so the report it points at no longer describes the repository.";
+	}
+	if (reason === "rebuilt") {
+		return "The analysis was rebuilt since that coverageId was issued - the workspace was released after an idle period, or this call analyses a different scope - so the report it points at is no longer held. Nothing in your sources necessarily changed.";
 	}
 	return `That coverageId is not known to this server (it may have expired, been evicted after ${MAX_HANDLES} newer handles, or come from a previous session).`;
 }

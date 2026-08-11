@@ -172,6 +172,7 @@ The `coverageId` you passed to `query_coverage` can no longer be spent. Three ca
 | --- | --- |
 | not known to this server | It came from a previous server process, or 8 newer handles evicted it |
 | has expired | Nothing spent it for 10 minutes. The clock runs from the last use, so this means the walk was abandoned, not that it was slow |
+| was rebuilt | The workspace was released after an idle period, or this call analyses a different scope. **Nothing in your sources changed** — re-mint and carry on |
 | the analysed sources changed | A file changed on disk since the id was issued |
 
 The last one is the interesting case, and it is deliberate. A report built before an edit describes a repository that no longer exists — every entry carries a file and a line, and those lines have moved. Continuing to answer from it would produce a page that is wrong in a way nothing in its shape reveals.
