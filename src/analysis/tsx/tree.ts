@@ -55,17 +55,19 @@ import {
  * of a component element, including inside object literals and arrays. One hop
  * to a variable declared in the same component body, including a call with an
  * inline function argument, which is what makes `useMemo(() => <div/>)` work
- * with no `useMemo`-specific code. Conditionals, logical operators,
+ * with no `useMemo`-specific code. A *call* to a same-file function that
+ * returns JSX — `{getCheckinIcon()}` — inlined at the call site; see
+ * {@link TreeBuilder.renderHelperOf}. Conditionals, logical operators,
  * `.map`/`.flatMap` with an inline callback, fragments and type-assertion
  * wrappers.
  *
  * **Flagged, not followed.** Render props the callee invokes; `cloneElement`;
  * `Children.map`; a second variable hop; module-scope or imported JSX
  * constants; `.map(renderItem)` with a non-inline callback; JSX returned by a
- * helper; JSX-valued props on *host* elements (React stringifies those, so
- * walking them would claim an id renders that never does); namespaced tags.
- * Each leaves a `#unresolved` marker node and downgrades `fidelity` to
- * `"partial"`.
+ * helper in another file; JSX-valued props on *host* elements (React
+ * stringifies those, so walking them would claim an id renders that never
+ * does); namespaced tags. Each leaves a `#unresolved` marker node and
+ * downgrades `fidelity` to `"partial"`.
  *
  * **Depth counts component-definition boundaries, not DOM nesting.** Slot and
  * prop children are walked at the caller's depth with no increment — they are
@@ -809,6 +811,9 @@ function computeTestIdTree(
 	if (fidelityReason) {
 		tree.fidelityReason = fidelityReason;
 	}
+	if (externals.sourceRoot) {
+		tree.externalModuleRoot = externals.sourceRoot;
+	}
 	if (budget.exhausted) {
 		tree.truncated = true;
 	}
@@ -982,6 +987,17 @@ class TreeBuilder {
 		string,
 		Map<string, VariableDeclaration>
 	>();
+
+	/** Same-file functions that could be render helpers, per component body. */
+	private readonly helpers = new Map<string, Map<string, Node>>();
+
+	/**
+	 * Render helpers being inlined right now, by file and declaration offset.
+	 *
+	 * The cycle guard for {@link TreeBuilder.walkRenderHelper}: a helper that
+	 * calls itself, or two that call each other, would otherwise walk forever.
+	 */
+	private readonly activeHelpers = new Set<string>();
 
 	/**
 	 * Every file the walk actually read. `buildTestIdTree` reconciles this with
@@ -1246,11 +1262,31 @@ class TreeBuilder {
 			// Any call with an inline function argument that contains JSX:
 			// `useMemo(() => <div/>, [])`, `useCallback`, `renderWith(() => <X/>)`.
 			// `repeated` stays off — only `map`/`flatMap` repeat.
-			return node.getArguments().flatMap((argument) => {
+			const fromArguments = node.getArguments().flatMap((argument) => {
 				const inline =
 					Node.isArrowFunction(argument) || Node.isFunctionExpression(argument);
 				return inline && containsJsx(argument) ? recur(argument) : [];
 			});
+			// `{getCheckinIcon()}` — a local render helper. Inlined where it can be,
+			// marked where it cannot: this is the one shape that used to return `[]`
+			// with nothing said about it, so four real ids left the tree while
+			// `fidelityReason` blamed unrelated external modules.
+			const helper = this.renderHelperOf(callee, owner);
+			if (!helper) {
+				return fromArguments;
+			}
+			const inlined = this.walkRenderHelper(
+				helper,
+				owner,
+				depth,
+				path,
+				state,
+				scope,
+			);
+			if (inlined.length === 0 && fromArguments.length === 0) {
+				return this.marker(owner, node, "local-render-function", rawText(node));
+			}
+			return [...inlined, ...fromArguments];
 		}
 		if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
 			const body = node.getBody();
@@ -1316,6 +1352,152 @@ class TreeBuilder {
 					position: scope.position,
 				})
 			: [];
+	}
+
+	/**
+	 * The same-file function a call expression names, when it returns JSX.
+	 *
+	 * The call form of the one-hop variable support above: `{icon}` reading
+	 * `const icon = <div/>` has always been followed, while `{getIcon()}` reading
+	 * `const getIcon = () => <div/>` returned nothing at all. Both are the
+	 * caller's own source one identifier away.
+	 *
+	 * Resolved against this file only, innermost scope first — a helper declared
+	 * in the component body shadows a module-scope one of the same name — and
+	 * only when its body syntactically contains JSX. That last condition is what
+	 * keeps the marker honest: without it every `{t("label")}` between host tags
+	 * would look like a render helper the walk failed on.
+	 *
+	 * Declaration order is not consulted. A function declaration hoists, and a
+	 * module-scope `const` is initialised before any component renders; the walk
+	 * is not a linter, and refusing a helper written below its use would drop ids
+	 * over a rule TypeScript already enforces.
+	 */
+	private renderHelperOf(
+		callee: Node,
+		owner: ComponentDefinition,
+	): RenderHelper | null {
+		if (!Node.isIdentifier(callee)) {
+			// `obj.render()` reads a function out of some other object; nothing here
+			// can say which, and guessing would attach a subtree to the wrong site.
+			return null;
+		}
+		const found = this.helperIndexOf(owner).get(callee.getText());
+		if (!found || !containsJsx(found)) {
+			return null;
+		}
+		return { fn: found, parameters: parameterNames(found) };
+	}
+
+	/**
+	 * Same-file functions that could be render helpers, by name.
+	 *
+	 * Module scope first, then the component's own body, so an inner declaration
+	 * overwrites an outer one of the same name — which is what the language does.
+	 * Built once per component definition: the alternative is a file-wide
+	 * descendant scan per `{call()}` in the body.
+	 */
+	private helperIndexOf(owner: ComponentDefinition): Map<string, Node> {
+		const key = `${owner.id}${FIELD}${owner.fn.getStart()}`;
+		let index = this.helpers.get(key);
+		if (index) {
+			return index;
+		}
+		index = new Map<string, Node>();
+		for (const declaration of owner.sourceFile.getFunctions()) {
+			const name = declaration.getName();
+			if (name) {
+				index.set(name, declaration);
+			}
+		}
+		for (const declaration of owner.sourceFile.getVariableDeclarations()) {
+			const initializer = declaration.getInitializer();
+			if (initializer && isInlineFunction(initializer)) {
+				index.set(declaration.getName(), unwrapExpression(initializer));
+			}
+		}
+		for (const declaration of owner.fn.getDescendantsOfKind(
+			SyntaxKind.FunctionDeclaration,
+		)) {
+			const name = declaration.getName();
+			if (name && enclosingFunctionOf(declaration) === owner.fn) {
+				index.set(name, declaration);
+			}
+		}
+		for (const [name, declaration] of this.localVariablesOf(owner)) {
+			const initializer = declaration.getInitializer();
+			if (initializer && isInlineFunction(initializer)) {
+				index.set(name, unwrapExpression(initializer));
+			}
+		}
+		this.helpers.set(key, index);
+		return index;
+	}
+
+	/**
+	 * Inlines a local render helper's returns at the call site.
+	 *
+	 * Three things this deliberately does not do.
+	 *
+	 * **It does not bind the call's arguments.** `renderRow(item)` passes a
+	 * value, not a prop, and the prop machinery keys on *names*: a helper
+	 * parameter that happens to share a name with one of the component's props
+	 * would otherwise resolve `data-testid={id}` to whatever the component's own
+	 * call site passed — a wrong id reported as proven, the worst answer
+	 * available. So every parameter name is shadowed instead
+	 * ({@link shadowParameters}) and an id read out of one comes back dynamic,
+	 * which is what the flat inventory says about it too.
+	 *
+	 * **It does not wrap several returns in a `#branch` node.** The nodes are
+	 * inlined into the caller's own child list, where a wrapper would read as
+	 * structure the source does not have; they carry `conditional` instead, which
+	 * is the fact a selector writer needs.
+	 *
+	 * **It adds nothing to the expansion memo key.** A helper belongs to the
+	 * component body being walked, and what it produces is a function of that
+	 * body plus the same {@link ExpandState} the key already covers — the call's
+	 * arguments change nothing, precisely because they are not bound.
+	 */
+	private walkRenderHelper(
+		helper: RenderHelper,
+		owner: ComponentDefinition,
+		depth: number,
+		path: Set<string>,
+		state: ExpandState,
+		scope: WalkScope,
+	): UiNode[] {
+		// On the builder rather than in `WalkScope`, which is reset to
+		// `DEFAULT_SCOPE` at every element boundary: a helper rendering an element
+		// that calls the helper again would get a fresh visited set each time and
+		// recurse until the stack ran out.
+		const key = `${owner.file}${FIELD}${helper.fn.getStart()}`;
+		if (helper.fn === owner.fn || this.activeHelpers.has(key)) {
+			return [];
+		}
+		const returns = componentReturnExpressions(
+			helper.fn as ComponentDefinition["fn"],
+		);
+		if (returns.length === 0) {
+			return [];
+		}
+		const childState = shadowParameters(state, helper.parameters);
+		this.activeHelpers.add(key);
+		try {
+			return returns.flatMap((expression) =>
+				this.walk(
+					expression,
+					owner,
+					depth,
+					path,
+					returns.length > 1
+						? { ...childState, conditional: true }
+						: childState,
+					scope,
+				),
+			);
+		} finally {
+			this.activeHelpers.delete(key);
+		}
 	}
 
 	/**
@@ -1471,18 +1653,20 @@ class TreeBuilder {
 		owner: ComponentDefinition,
 		node: Node,
 		reason: UiUnresolvedReason,
+		raw?: string,
 	): UiNode[] {
 		if (!this.spendNode()) {
 			this.boundaries += 1;
 			return [];
 		}
-		return [this.markerNode(owner, node, reason)];
+		return [this.markerNode(owner, node, reason, raw)];
 	}
 
 	private markerNode(
 		owner: ComponentDefinition,
 		node: Node,
 		reason: UiUnresolvedReason,
+		raw?: string,
 	): UiNode {
 		const position = lineAndColumnAt(owner.sourceFile, node.getStart());
 		return {
@@ -1495,7 +1679,7 @@ class TreeBuilder {
 				column: position.column,
 			},
 			component: owner.name,
-			unresolved: { reason },
+			unresolved: raw === undefined ? { reason } : { reason, raw },
 			children: [],
 		};
 	}
@@ -2111,6 +2295,77 @@ function unwrapExpression(node: Node): Node {
 		current = current.getExpression();
 	}
 	return current;
+}
+
+/** A same-file function a call site names, plus the names its parameters bind. */
+interface RenderHelper {
+	fn: Node;
+	parameters: string[];
+}
+
+/**
+ * Every name a function's parameter list binds, destructuring included.
+ *
+ * Read off the binding names rather than off the parameter text so that
+ * `({ testId, ...rest }: Props)` contributes `testId` and `rest` and not the
+ * type annotation.
+ */
+function parameterNames(fn: Node): string[] {
+	if (
+		!Node.isArrowFunction(fn) &&
+		!Node.isFunctionExpression(fn) &&
+		!Node.isFunctionDeclaration(fn)
+	) {
+		return [];
+	}
+	const names: string[] = [];
+	const collect = (name: Node): void => {
+		if (Node.isIdentifier(name)) {
+			names.push(name.getText());
+			return;
+		}
+		if (Node.isObjectBindingPattern(name) || Node.isArrayBindingPattern(name)) {
+			for (const element of name.getElements()) {
+				if (Node.isBindingElement(element)) {
+					collect(element.getNameNode());
+				}
+			}
+		}
+	};
+	for (const parameter of fn.getParameters()) {
+		collect(parameter.getNameNode());
+	}
+	return names;
+}
+
+/**
+ * The call-site state a render helper's body is walked with.
+ *
+ * A helper *parameter* is not a prop, and the two live in the same namespace as
+ * far as `resolveSiteValue` is concerned. Removing the name from `bindings`
+ * stops the component's own call-site value from being read as this
+ * parameter's; adding it to `provided` — the evidence of absence — stops
+ * `provablyAbsent` from concluding the opposite, that the attribute renders
+ * nothing. What is left is the honest answer: unknown, reported dynamic,
+ * exactly as the flat inventory reports it.
+ */
+function shadowParameters(state: ExpandState, names: string[]): ExpandState {
+	if (names.length === 0) {
+		return state;
+	}
+	const bindings = new Map(state.bindings);
+	const provided = new Set(state.provided);
+	for (const name of names) {
+		bindings.delete(name);
+		provided.add(name);
+	}
+	return { ...state, bindings, provided };
+}
+
+/** Source text for a marker: one line, bounded, so a long call cannot bloat the payload. */
+function rawText(node: Node, limit = 80): string {
+	const text = node.getText().replace(/\s+/g, " ").trim();
+	return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
 /**

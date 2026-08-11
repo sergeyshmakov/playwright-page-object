@@ -227,6 +227,8 @@ function unresolvedLabel(reason: UiUnresolvedReason): string {
 			return "depth limit";
 		case "node-budget-reached":
 			return "node budget";
+		case "local-render-function":
+			return "local render function";
 		case "unresolved-jsx":
 			return "hole: unresolved-jsx";
 		case "opaque-expression":
@@ -282,7 +284,13 @@ function renderUiNode(node: UiNode, indent: string, lines: string[]): void {
 		flags.push("id absent at this site");
 	}
 	if (node.unresolved) {
-		flags.push(unresolvedLabel(node.unresolved.reason));
+		// The expression, where the reason names one: "local render function" says
+		// what kind of hole it is, `getCheckinIcon()` says which one to go and read.
+		flags.push(
+			node.unresolved.raw
+				? `${unresolvedLabel(node.unresolved.reason)} ${node.unresolved.raw}`
+				: unresolvedLabel(node.unresolved.reason),
+		);
 	}
 
 	if (node.expandedAt) {

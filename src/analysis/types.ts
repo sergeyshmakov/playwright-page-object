@@ -82,6 +82,8 @@ export type DiagnosticCode =
 	| "unanchored-testid-pattern"
 	/** Nothing in the scan is matchable, so the coverage ratio has no denominator. */
 	| "no-matchable-testids"
+	/** The page-object side was scoped while the UI side stayed project-wide. */
+	| "coverage-scope-narrowed"
 	/** Component tags come from modules outside the scanned sources. */
 	| "ui-scope-incomplete";
 
@@ -421,6 +423,17 @@ export type UiUnresolvedReason =
 	| "not-followed"
 	| "depth-limit-reached"
 	| "node-budget-reached"
+	/**
+	 * A call to a same-file function that returns JSX — `{getCheckinIcon()}` — that
+	 * the walk could not inline: it calls itself on this path, or its body produced
+	 * no node. `raw` carries the call as written.
+	 *
+	 * Only ever emitted with positive evidence that the callee *is* a local render
+	 * helper (a same-file arrow, function expression or function declaration whose
+	 * body contains JSX). An ordinary call — `{t("label")}` — is not this, and gets
+	 * no marker.
+	 */
+	| "local-render-function"
 	/* content the walk could see but not place */
 	/** The expression syntactically contains JSX the walk could not attach to a node. */
 	| "unresolved-jsx"
@@ -506,7 +519,14 @@ export interface UiNode {
 	 * caller is outside the analysed tree.
 	 */
 	testIdAbsent?: true;
-	unresolved?: { reason: UiUnresolvedReason };
+	/**
+	 * `raw` is the source text of what could not be resolved, collapsed to one
+	 * line and truncated. Present only where the reason is about a specific
+	 * expression the reader would otherwise have to go and find — a call to a
+	 * local render helper names the helper — and absent where the reason already
+	 * says everything (a depth limit, an external module).
+	 */
+	unresolved?: { reason: UiUnresolvedReason; raw?: string };
 	children: UiNode[];
 }
 
@@ -586,6 +606,18 @@ export interface TestIdTree {
 	 * ids do not exist.
 	 */
 	externalModules: string[];
+	/**
+	 * Directory to root an analysis at so those modules' sources come into scope,
+	 * present only when at least one of them *has* sources here: a package linked
+	 * into `node_modules` from elsewhere in the repository, which is the workspace
+	 * monorepo shape. Absent when the tags come from installed packages or from
+	 * specifiers that do not resolve, where no scope change can reach them.
+	 *
+	 * The distinction exists because the two cases take opposite advice, and one
+	 * of them takes advice that cannot be followed: widening the scanned
+	 * directories to a path outside the analysed root contributes nothing.
+	 */
+	externalModuleRoot?: string;
 	warnings: Diagnostic[];
 	truncated?: boolean;
 	stats: {
@@ -780,9 +812,16 @@ export interface CoverageReport {
 		/** Static rendered ids the selectors were compared against. */
 		staticUiIdsCompared: number;
 		/**
-		 * `coveredUiTestIds / matchableUiTestIds`, 0..1, or `null` when nothing was
-		 * matchable. A ratio of zero over zero used to ship as `1`, which is the
-		 * one number in this report nobody double-checks.
+		 * `coveredUiTestIds / matchableUiTestIds`, 0..1, or `null`.
+		 *
+		 * Null for either of the two runs where the division has no meaning, each
+		 * with a warning naming which: nothing was matchable
+		 * (`no-matchable-testids`), or the page-object side was scoped to a class or
+		 * a file while the UI side stayed project-wide
+		 * (`coverage-scope-narrowed`). Both used to ship a number — `1` for zero of
+		 * zero, and a fraction of a percent for a single page object measured
+		 * against a whole application — and this is the one number in the report
+		 * nobody double-checks.
 		 */
 		coverage: number | null;
 	};
