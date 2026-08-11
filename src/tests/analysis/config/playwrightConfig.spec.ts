@@ -249,9 +249,13 @@ describe("readPlaywrightConfig", () => {
 				"export default { use: { testIdAttribute: process.env.ATTR } };",
 		});
 		expect(ws.testIdAttribute().attribute).toBe("data-testid");
-		expect(ws.warnings.map((diagnostic) => diagnostic.code)).toContain(
-			"testid-attribute-unresolved",
-		);
+		// Read from `environmentWarnings`, which is what every payload carries.
+		// Config notes are composed per call rather than accumulated into
+		// `ws.warnings`: merged in, they outlived the config that produced them and
+		// a fixed config went on warning for the life of the process.
+		expect(
+			ws.environmentWarnings().map((diagnostic) => diagnostic.code),
+		).toContain("testid-attribute-unresolved");
 	});
 
 	/**
@@ -289,10 +293,9 @@ describe("readPlaywrightConfig", () => {
 	 */
 	it("surfaces a missing config in the workspace warnings", () => {
 		const ws = workspaceWithConfig({ "src/a.ts": "export const a = 1;" });
-		ws.playwright();
-		const note = ws.warnings.find(
-			(diagnostic) => diagnostic.code === "playwright-config-not-found",
-		);
+		const note = ws
+			.environmentWarnings()
+			.find((diagnostic) => diagnostic.code === "playwright-config-not-found");
 		expect(note?.severity).toBe("info");
 		expect(note?.message).toContain("data-testid");
 	});

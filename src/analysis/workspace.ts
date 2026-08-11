@@ -269,6 +269,11 @@ export class Workspace {
 	 */
 	private discovery: ConfigDiscovery | null = null;
 	private fileList: { epoch: number; value: SourceFile[] } | null = null;
+	/**
+	 * Fingerprint of the inputs that decided what this `Project` *is*, as of the
+	 * last acquire. See {@link projectIdentity}.
+	 */
+	private identity: string | null = null;
 
 	private constructor(
 		project: Project,
@@ -316,12 +321,24 @@ export class Workspace {
 			// long interval — and an omitted value means this caller wants the
 			// default, not whatever the first one happened to pass.
 			existing.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+			let reusable = true;
 			if (options.revalidate !== false) {
 				existing.revalidate();
+				// After the sweep, so the config read behind this is the edited one.
+				reusable = !existing.projectIdentityChanged();
 			}
-			existing.noteMissingScope(missing);
-			existing.touch();
-			return existing;
+			if (reusable) {
+				existing.noteMissingScope(missing);
+				existing.touch();
+				return existing;
+			}
+			// `testDir` or the tsconfig moved, so this project holds the wrong files
+			// under the wrong compiler options and no sweep can fix that — the file
+			// set was decided when it was built. Rebuilding is the only correct
+			// answer, and it happens here rather than inside a method because a
+			// method cannot replace `this`.
+			existing.clearIdleTimer();
+			Workspace.cache.delete(key);
 		}
 
 		const created = Workspace.create(options);
@@ -329,6 +346,12 @@ export class Workspace {
 		created.noteMissingScope(missing);
 		Workspace.cache.set(key, created);
 		created.touch();
+		// Seeded from the real workspace, not from the throwaway probe `create`
+		// used: the probe carries no tsconfig, so a base config reached through a
+		// `paths` alias reads differently there. Comparing the two would find a
+		// difference on the very first acquire and rebuild a 2.3 s project on every
+		// single call. Both sides of every later comparison come from here.
+		created.rememberProjectIdentity();
 		while (Workspace.cache.size > LRU_SIZE) {
 			const oldest = Workspace.cache.entries().next();
 			if (oldest.done) {
@@ -374,6 +397,77 @@ export class Workspace {
 			clearTimeout(this.idleTimer);
 			this.idleTimer = null;
 		}
+	}
+
+	/**
+	 * The inputs that decided which files this `Project` holds and how they parse.
+	 *
+	 * Not the same question as "did a source file change". The mtime sweep keeps
+	 * the *contents* of the file set current and can add or drop files the globs
+	 * already cover, but the set itself — which tsconfig supplied the compiler
+	 * options, which directory the scan was rooted at — was fixed at construction.
+	 * Edit `testDir` in `playwright.config.ts` and every later call answers from a
+	 * project built for the old one: the right shape of answer, about the wrong
+	 * directory, with nothing saying so.
+	 *
+	 * Idle eviction does not cover this. `touch()` restarts on every acquire, so
+	 * the timer measures silence, and an agent that edits a config and immediately
+	 * asks again is the opposite of silent — it keeps the stale project for the
+	 * whole working burst, which is exactly when it is being read.
+	 *
+	 * `null` when it cannot be read at all — reading it parses the Playwright
+	 * config, and on a repository at its file cap that parse is exactly what
+	 * `maxFiles` refuses. Failing to answer must not turn into an answer, and it
+	 * must not move that refusal into `acquire`: the tool call raises it where it
+	 * always did.
+	 */
+	private projectIdentity(): string | null {
+		if (this.inMemory) {
+			return "";
+		}
+		try {
+			const playwright = this.playwright();
+			// Same rule as `create`: an unresolved `testDir` is left unknown rather
+			// than replaced by the config's own directory.
+			const testDir = playwright.testDirUnresolved
+				? undefined
+				: (playwright.testDir ?? configDirOf(playwright.configFile));
+			const located = locateTsConfig(this.root, this.options.tsconfig, testDir);
+			// The tsconfig's mtime as well as its path: `include`, `exclude` and
+			// `paths` all decide the file set, and editing them in place leaves the
+			// path identical.
+			let stamp = "";
+			if (located.path) {
+				try {
+					stamp = String(fs.statSync(located.path).mtimeMs);
+				} catch {
+					stamp = "missing";
+				}
+			}
+			return [testDir ?? "", located.path ?? "", stamp].join("::");
+		} catch {
+			return null;
+		}
+	}
+
+	private rememberProjectIdentity(): void {
+		this.identity = this.projectIdentity();
+	}
+
+	/** Whether {@link projectIdentity} has moved since the last acquire. */
+	private projectIdentityChanged(): boolean {
+		const current = this.projectIdentity();
+		// Unreadable now, or never read: either way there is nothing to compare,
+		// and reusing the project is the answer that changes nothing.
+		if (current === null) {
+			return false;
+		}
+		if (this.identity === null || this.identity === current) {
+			this.identity = current;
+			return false;
+		}
+		this.identity = current;
+		return true;
 	}
 
 	static get cacheSize(): number {
@@ -606,17 +700,6 @@ export class Workspace {
 			this.configDiscovery(),
 		);
 		this.playwrightInfo = { epoch: this.epoch, value };
-		// Every note, unconditionally. The old gate dropped everything a *missing*
-		// config had to say — including "several configs exist" and "the one you
-		// named is not there" — on the theory that no config is not news. On a
-		// repository whose config the old fixed-basename probe never found, that
-		// silence was the difference between a wrong answer and a wrong answer
-		// nobody could see.
-		if (value.notes.length > 0) {
-			const merged = dedupeDiagnostics([...this.warnings, ...value.notes]);
-			this.warnings.length = 0;
-			this.warnings.push(...merged);
-		}
 		return value;
 	}
 
@@ -643,14 +726,24 @@ export class Workspace {
 				? "param"
 				: resolved.source;
 		return this.memo(`env-warnings::${attribute}`, [], () => {
-			// First, and not for tidiness: this is what parses the Playwright config
-			// and merges its notes into `this.warnings`.
-			this.playwright();
 			const collected: Diagnostic[] = [];
 			const verdict = attributeVerdict(censusFromText(this, attribute), source);
 			if (verdict) {
 				collected.push(verdict);
 			}
+			// Composed per call, not accumulated. Every note, unconditionally — the
+			// old gate dropped everything a *missing* config had to say, including
+			// "several configs exist" and "the one you named is not there", on the
+			// theory that no config is not news.
+			//
+			// What it must not do is *keep* them. These notes used to be merged into
+			// the sticky list, and `dedupeDiagnostics` collapses repeats but never
+			// retires one: a config the user then fixed went on warning for the life
+			// of the process, with `environmentHint` telling an agent to restart a
+			// server that had already picked the fix up. The config read is memoized
+			// per epoch and an edit bumps the epoch, so reading `notes` here is both
+			// current and free.
+			collected.push(...this.playwright().notes);
 			collected.push(...this.warnings);
 			return dedupeDiagnostics(collected)
 				.sort(
