@@ -805,8 +805,13 @@ export function handleGetTestIdTree(
 				),
 			},
 			{
+				// A lookup ignores `format`, `depth`, `followComponents`, `file` and
+				// `component` - it answers from the scan-wide inventory - so the hint
+				// the tree branch uses names five knobs this branch does not have.
+				// Exactly what `coverageShrinkHint` was written to stop, one branch
+				// over.
 				shrinkHint:
-					'Re-call with format:"outline", a lower depth, or scope the walk with `file` or `component`.',
+					"A testId lookup has no per-call size control: it answers from the whole scan, and `format`, `depth` and the `file` / `component` scope do not narrow it. Look up a more specific id, or restart the server with a narrower --src-dir / --project-root.",
 				onDelivered: warnings.delivered,
 			},
 		);
@@ -1171,6 +1176,8 @@ const BUCKET_ORDER: CoverageBucket[] = [...COVERAGE_BUCKETS];
 function selectedBuckets(
 	requested: CoverageBucket[] | undefined,
 	includeUnused: boolean,
+	/** Whether the caller actually wrote `includeUnused`, rather than defaulting. */
+	unusedWasGiven: boolean,
 ): { buckets: Set<CoverageBucket>; ignored?: string[] } {
 	if (requested !== undefined) {
 		// Two ways to say the same thing, so one of them has to win, and the
@@ -1181,7 +1188,13 @@ function selectedBuckets(
 		// and nothing else, which is the cheapest possible coverage call. Reading
 		// it as "no preference" returned all six lists — the opposite of what the
 		// schema promises, at the maximum response size.
-		return { buckets: new Set(requested), ignored: ["includeUnused"] };
+		// Only when there was something to overrule. `includeUnused` became
+		// optional, and reporting it as ignored on a call that never mentioned it
+		// tells the caller an argument of theirs was dropped when none was.
+		return {
+			buckets: new Set(requested),
+			...(unusedWasGiven ? { ignored: ["includeUnused"] } : {}),
+		};
 	}
 	const buckets = new Set(BUCKET_ORDER);
 	if (!includeUnused) {
@@ -1486,6 +1499,7 @@ export function handleMapCoverage(
 	const { buckets, ignored } = selectedBuckets(
 		args.buckets as CoverageBucket[] | undefined,
 		includeUnused,
+		args.includeUnused !== undefined,
 	);
 	const unusedDefaultedOff =
 		scoped && args.includeUnused === undefined && args.buckets === undefined;

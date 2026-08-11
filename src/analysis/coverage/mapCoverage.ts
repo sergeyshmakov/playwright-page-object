@@ -253,10 +253,15 @@ function collectSelectorUsages(
 
 		if (entry.rootSelector) {
 			usages.push(
-				toUsage(entry.key, prefix, entry.rootSelector, {
-					file: entry.file,
-					line: 0,
-				}),
+				// The decorator's own line, captured in discovery. It used to be
+				// hardcoded to 0, which is not a line: an agent following a matched
+				// root selector's location landed nowhere.
+				toUsage(
+					entry.key,
+					prefix,
+					entry.rootSelector,
+					entry.rootSelectorLoc ?? { file: entry.file, line: 1 },
+				),
 			);
 		}
 		for (const read of entry.members) {

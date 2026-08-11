@@ -7,6 +7,7 @@ import type {
 	PageObjectIndex,
 	PageObjectSummary,
 	SelectorInfo,
+	SourceLoc,
 } from "../types";
 import { isDefaultExported, isExported } from "../util/exports";
 import { docSummary } from "../util/jsdoc";
@@ -50,6 +51,8 @@ export interface DiscoveredClass {
 	evidence: Set<DiscoveryEvidence>;
 	classification: HostClassification;
 	rootSelector: SelectorInfo | null;
+	/** Where the root decorator is written. Absent when there is no root selector. */
+	rootSelectorLoc?: SourceLoc;
 	members: MemberRead[];
 	methods: MethodInfo[];
 	warnings: Diagnostic[];
@@ -339,6 +342,16 @@ export function runDiscovery(
 				ctx,
 			);
 			entry.rootSelector = read.selector;
+			// Coverage reports a matched root selector at this location. Without it
+			// the entry shipped `line: 0`, which is not a line — an agent following
+			// it lands nowhere.
+			entry.rootSelectorLoc = {
+				file: entry.file,
+				line: lineAt(
+					rootDecorator.decorator.getSourceFile(),
+					rootDecorator.decorator.getStart(),
+				),
+			};
 			entry.warnings.push(...read.warnings);
 		}
 		// Explicit, not defaulted: `counts.methods` here and the method list in

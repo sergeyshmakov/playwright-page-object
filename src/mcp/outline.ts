@@ -11,8 +11,11 @@ import type {
 } from "../analysis";
 
 /**
- * Token-lean plain-text renderers for the two tree shapes. Outline output is
- * for reading, not parsing — the JSON format stays the default.
+ * Token-lean plain-text renderers for the two tree shapes.
+ *
+ * Outline is for reading, not parsing, and it is what both tree tools return by
+ * default (`schemas.ts`); `format: "json"` is the complete, machine-parseable
+ * form. This header said the opposite for four commits after the flip.
  */
 
 function formatValue(value: MaybeStatic | undefined): string {

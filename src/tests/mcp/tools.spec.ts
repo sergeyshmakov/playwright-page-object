@@ -2484,14 +2484,24 @@ describe("MCP server over in-memory transport", () => {
 				const summary = data.summary as Record<string, number>;
 				expect(summary.uncoveredTestIds).toBe(1);
 				expect(summary.matchableUiTestIds).toBe(3);
-				expect(envelope.meta?.ignored).toEqual(["includeUnused"]);
+				// Nothing was overruled: this call never mentioned `includeUnused`, so
+				// saying it was ignored would report a dropped argument that was never
+				// passed.
+				expect(envelope.meta?.ignored).toBeUndefined();
+
+				// It is reported when there really was a conflict to resolve.
+				const both = await callTool(client, "map_coverage", {
+					buckets: ["deadSelectors"],
+					includeUnused: true,
+				});
+				expect(both.envelope.meta?.ignored).toEqual(["includeUnused"]);
 
 				// An empty list is a list: the cheapest coverage call there is, and
 				// the one that used to return all six buckets instead of none.
 				const none = await callTool(client, "map_coverage", { buckets: [] });
 				const bare = none.envelope.data as Record<string, unknown>;
 				expect(Object.keys(bare).sort()).toEqual(["scope", "summary"]);
-				expect(none.envelope.meta?.ignored).toEqual(["includeUnused"]);
+				expect(none.envelope.meta?.ignored).toBeUndefined();
 			},
 		);
 	}, 30_000);
