@@ -1,6 +1,6 @@
 ---
 title: "Why AI Agents Guess Playwright Selectors, and How MCP Helps"
-description: "Why AI agents invent Playwright selectors, and how four local MCP tools expose page-object graphs and JSX/TSX test IDs before coding."
+description: "Why AI agents invent Playwright selectors, and how five local MCP tools expose page-object graphs and JSX/TSX test IDs before coding."
 head:
   - tag: title
     content: "Why AI Agents Guess Playwright Selectors | POM MCP"
@@ -16,7 +16,7 @@ tags:
 
 *Last updated: 2026-08-07 · by Sergei Shmakov*
 
-AI agents guess Playwright selectors when they cannot see the Page Object Model (POM) relationships and test IDs already declared in a repository. The local `playwright-page-object` [MCP](https://modelcontextprotocol.io/) server exposes both through four read-only static-analysis tools. Run `npx playwright-page-object mcp` from a stdio MCP client to query page-object classes and JSX or TSX test IDs before editing a test.
+AI agents guess Playwright selectors when they cannot see the Page Object Model (POM) relationships and test IDs already declared in a repository. The local `playwright-page-object` [MCP](https://modelcontextprotocol.io/) server exposes both through five read-only static-analysis tools. Run `npx playwright-page-object mcp` from a stdio MCP client to query page-object classes and JSX or TSX test IDs before editing a test.
 
 The analyzer reads source with [ts-morph](https://ts-morph.com/). It does not launch a browser, execute project code, or make network requests. It returns compact results to your MCP client, which controls where those results are processed. The server ships in the same MIT-licensed package as the [page-object decorators](/getting-started/quick-start/).
 

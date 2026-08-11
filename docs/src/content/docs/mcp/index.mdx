@@ -3,7 +3,7 @@ title: Playwright Page Object MCP Server
 description: Give AI coding agents a read-only map of your Playwright page objects and test IDs with local static analysis over MCP.
 ---
 
-The `playwright-page-object` MCP server gives AI coding agents a searchable map of your page-object API and the test IDs declared in your JSX or TSX source. It exposes four read-only tools over the [Model Context Protocol](https://modelcontextprotocol.io/).
+The `playwright-page-object` MCP server gives AI coding agents a searchable map of your page-object API and the test IDs declared in your JSX or TSX source. It exposes five read-only tools over the [Model Context Protocol](https://modelcontextprotocol.io/).
 
 ```bash
 npx playwright-page-object mcp
@@ -31,8 +31,11 @@ Use the page-object tools to find an existing API, the test-ID tree before writi
 | `get_page_object_tree` | Before writing or editing a test that touches a page object | One class's selector tree up to the requested depth and budget, with members, resolved types, nested controls, and methods |
 | `get_testid_tree` | Before writing any selector | Test IDs found in the resolved component tree, with dynamic, conditional, and repeated flags |
 | `map_coverage` | After renaming test IDs, or when a locator times out | Matches between page-object test-ID selectors and UI source, plus uncovered IDs and unmatched selectors |
+| `query_coverage` | To read the rest of a long coverage list | One bucket of a report `map_coverage` already built, paged through an opaque handle |
 
-For most test-writing tasks, call `list_page_objects`, inspect the relevant class with `get_page_object_tree`, and check selectors with `get_testid_tree`. Use `map_coverage` after a test-ID rename or when a locator no longer matches.
+For most test-writing tasks, call `list_page_objects`, inspect the relevant class with `get_page_object_tree`, and check selectors with `get_testid_tree`. Use `map_coverage` after a test-ID rename or when a locator no longer matches, and `query_coverage` when one of its lists is longer than a single response.
+
+The selector tree also carries the runtime API of the base classes it uses, in `meta.apiHints`, so an agent gets the call syntax with the chain and does not have to read the package sources to write the test body.
 
 ## How is this different from Playwright MCP?
 

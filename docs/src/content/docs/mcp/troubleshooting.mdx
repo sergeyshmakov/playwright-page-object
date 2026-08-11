@@ -126,7 +126,7 @@ To settle one specific id regardless of the tree, use the lookup form: `{"testId
 
 ## How do I fix a `too_large` response?
 
-`too_large` means the serialized response exceeded the 40,000-character cap. Use the narrowing options that match the call mode:
+`too_large` means the serialized response exceeded the 200,000-character cap. Use the narrowing options that match the call mode:
 
 | Tool | Knobs, cheapest first |
 | --- | --- |
@@ -134,9 +134,34 @@ To settle one specific id regardless of the tree, use the lookup form: `{"testId
 | `get_page_object_tree` | `format: "outline"`, then a lower `depth`, then `includeMethods: false` |
 | `get_testid_tree` tree | `format: "outline"`, then a lower `depth`, then scope with `file` or `component` |
 | `get_testid_tree` lookup | No per-call size control; narrow the server scope with `--src-dir` or `--project-root` |
-| `map_coverage` | A lower `limit`, fewer `buckets`, or `includeUnused: false` |
 
-Switching to `outline` is often enough for a model-readable tree. The outline omits visibility, JSDoc, column numbers, and some structured fields, so keep JSON when another program will parse the response.
+Switching to `outline` is often enough for a model-readable tree. The outline omits visibility, JSDoc, column numbers, and some structured fields, so keep JSON when another program will parse the response. `meta` is unchanged by the format, so nothing diagnostic is lost.
+
+The `hint` on a `too_large` error names only knobs that call actually has. If you already narrowed to one `bucket`, it will not tell you to pass `includeUnused: false`, which `buckets` ignores.
+
+### Why don't the coverage tools raise it?
+
+`map_coverage` and `query_coverage` trim instead. An error is the one answer that costs a call and teaches nothing about the repository, so an oversized page comes back with `summary` and `scope` intact and as much of each bucket as fits:
+
+- `meta.truncatedBuckets` names the lists that were cut.
+- `meta.nextOffset` says where to resume.
+- `summary` reports every bucket's real size throughout.
+
+An empty bucket in such a response means "cut here", not "nothing found" — read `summary` before concluding a list is empty. If a bucket lost *everything*, its entries were too large for the bytes left over; request that bucket on its own so it gets the whole budget.
+
+## What does `expired_handle` mean?
+
+The `coverageId` you passed to `query_coverage` can no longer be spent. Three causes, and the message says which:
+
+| Message says | Cause |
+| --- | --- |
+| not known to this server | It came from a previous server process, or 8 newer handles evicted it |
+| has expired | It is older than 10 minutes |
+| the analysed sources changed | A file changed on disk since the id was issued |
+
+The last one is the interesting case, and it is deliberate. A report built before an edit describes a repository that no longer exists — every entry carries a file and a line, and those lines have moved. Continuing to answer from it would produce a page that is wrong in a way nothing in its shape reveals.
+
+Recover by re-calling `map_coverage` with the arguments that produced the id and using the new `meta.coverageId`. The id does not carry its own scope in a readable form, so you have to restate `class` / `file` / `attribute` / `includeRawLocators` yourself.
 
 ## Why can `deadSelectors` contain live selectors?
 

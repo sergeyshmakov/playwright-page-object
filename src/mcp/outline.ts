@@ -159,8 +159,16 @@ export function renderPageObjectOutline(tree: PageObjectTree): string {
 		const rootSelector = def.rootSelector
 			? `  ${selectorLabel(def.rootSelector)}`
 			: "";
+		// The one fact that decides the first line of the test. Without it an
+		// outline reader constructs `new CheckoutPage(page)` in a suite where the
+		// binding already exists and every other spec takes it as an argument; the
+		// JSON format has carried `fixtures` all along.
+		const fixtures =
+			def.fixtures && def.fixtures.length > 0
+				? `  fixture: ${def.fixtures.map((fixture) => fixture.name).join(", ")}`
+				: "";
 		lines.push(
-			`${indent}${def.className} (${def.hostKind})${rootSelector}  ${def.file}`,
+			`${indent}${def.className} (${def.hostKind})${rootSelector}  ${def.file}${fixtures}`,
 		);
 
 		for (const member of def.members) {

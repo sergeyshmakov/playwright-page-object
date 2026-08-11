@@ -116,9 +116,9 @@ If your repository is not the client's working directory, or the app you want an
 
 See [Configuration](/mcp/configuration/) for the rest of the flags.
 
-## 4. Confirm the four tools are available
+## 4. Confirm the five tools are available
 
-Reload the MCP configuration or start a new client session, then open the client's tool list. You should see `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, and `map_coverage`. If none appear, run the same command in a terminal and follow the [startup troubleshooting](/mcp/troubleshooting/#why-wont-the-mcp-server-start).
+Reload the MCP configuration or start a new client session, then open the client's tool list. You should see `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, `map_coverage`, and `query_coverage`. If none appear, run the same command in a terminal and follow the [startup troubleshooting](/mcp/troubleshooting/#why-wont-the-mcp-server-start).
 
 ## What should an agent call first?
 
@@ -167,7 +167,7 @@ The server found six classes in one call, so the agent does not have to open eac
 `get_page_object_tree` with `{"class": "CheckoutPage", "format": "outline"}` returns the selector tree as indented text, which costs fewer tokens than JSON:
 
 ```text
-CheckoutPage (rootPageObject)  @testId "CheckoutPage"  e2e/page-objects/CheckoutPage.ts
+CheckoutPage (rootPageObject)  @testId "CheckoutPage"  e2e/page-objects/CheckoutPage.ts  fixture: checkoutPage
   PromoCode -> PageObject  @testId "PromoCodeInput"
   PromoCodeInput -> Locator  @testId "PromoCodeInput"
   ApplyPromoButton -> ButtonControl  @role "button" {"name":"Apply"}
@@ -183,6 +183,18 @@ CheckoutPage (rootPageObject)  @testId "CheckoutPage"  e2e/page-objects/Checkout
 ```
 
 The response shows both `checkoutPage.CartItems.first().RemoveButton` and the existing `applyPromoCode(code)` method. The agent can reuse them instead of rebuilding either path.
+
+The same response's `meta.apiHints` supplies what the tree cannot: that `CartItems` is a `ListPageObject`, so it has `.first()`; that `RemoveButton` is a page object, so its raw locator is `.$`; and that `fixture: checkoutPage` means the class is taken as a test argument rather than constructed. Together they are enough to write the body:
+
+```ts
+test("removes the first cart item", async ({ checkoutPage }) => {
+	await checkoutPage.applyPromoCode("SAVE20");
+	await checkoutPage.CartItems.first().RemoveButton.$.click();
+	await checkoutPage.expectCartHasItemCount(2);
+});
+```
+
+No file was opened, and no method name was guessed.
 
 ### 3. Which test IDs does static analysis find?
 

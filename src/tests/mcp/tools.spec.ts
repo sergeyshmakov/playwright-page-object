@@ -252,6 +252,10 @@ describe("MCP server over in-memory transport", () => {
 		expect(
 			Object.keys(envelope.meta?.apiHints as Record<string, string>),
 		).toContain("ListPageObject");
+		// And the fact that decides the test's first line: this suite binds
+		// CheckoutPage as a fixture, so `new CheckoutPage(page)` is the wrong
+		// opening. JSON has always carried it; the outline used to drop it.
+		expect(envelope.data as string).toContain("fixture: checkoutPage");
 	}, 30_000);
 
 	/**
