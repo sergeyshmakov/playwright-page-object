@@ -1639,6 +1639,75 @@ describe("MCP server over in-memory transport", () => {
 	}, 30_000);
 
 	/**
+	 * The one true negative that reads like a bug. `@ListSelector("Row")` matches
+	 * `Row_1`, `Row_2`, … and coverage counts it matched, while looking up the
+	 * bare prefix is correctly empty — nothing renders `Row` itself. Saying only
+	 * "not found" invites the reader to delete a selector that works.
+	 */
+	it("explains a prefix that names an id family rather than an id", async () => {
+		await withProject(
+			"ppo-prefix-lookup-",
+			{
+				"src/List.tsx": [
+					"export function List({ items }: { items: string[] }) {",
+					"\treturn (",
+					"\t\t<ul>",
+					"\t\t\t{items.map((item) => (",
+					`\t\t\t\t<li key={item} data-testid={\`Row_${hole("item")}\`} />`,
+					"\t\t\t))}",
+					"\t\t</ul>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {
+					testId: "Row",
+				});
+
+				expect(
+					(envelope.data as { occurrences: unknown[] }).occurrences,
+				).toEqual([]);
+				const hint = String(envelope.meta?.hint ?? "");
+				expect(hint).toContain("Row_*");
+				expect(hint).toContain("is not dead");
+				expect(hint).toContain('"Row_0"');
+			},
+		);
+	}, 30_000);
+
+	it("does not promise suggestions it has none of", async () => {
+		await withProject(
+			"ppo-no-suggestions-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="AppRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope, isError } = await callTool(
+					client,
+					"get_testid_tree",
+					{
+						component: "Zzzzqqqxyzzy",
+					},
+				);
+
+				expect(isError).toBe(true);
+				expect(envelope.error?.suggestions ?? []).toEqual([]);
+				// The hint used to say "pass one of the suggested names" beside an
+				// empty list, sending the reader to look for something not sent.
+				expect(envelope.error?.hint).not.toContain("suggested names");
+				expect(envelope.error?.hint).toContain("Nothing in the scan resembles");
+			},
+		);
+	}, 30_000);
+
+	/**
 	 * The nodes are real; every one of them is id-less, because the run read an
 	 * attribute the sources do not use. 11 KB to say "you are reading the wrong
 	 * attribute", which the warning and the hint already say in full.

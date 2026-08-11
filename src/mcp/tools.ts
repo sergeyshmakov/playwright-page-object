@@ -132,6 +132,16 @@ export function environmentHint(
 		return `Dead selectors in this report are unverified: ${scope?.data?.tags} component tag(s) render from modules whose sources live at "${sourceRoot}", outside this server's --project-root. Restart with --project-root ${sourceRoot} to include them. Adding them with --src-dir will not work — a --src-dir outside the project root is refused at startup.`;
 	}
 
+	// Its sibling above names `--project-root` exactly and even pre-empts the
+	// wrong flag; this one said "re-run assuming forwarding" and named nothing,
+	// so the one piece of advice a reader could not act on was the one whose fix
+	// is a single flag. It is a startup flag, not a tool argument, which is the
+	// part a caller cannot guess and would waste a call discovering.
+	const forwarding = byCode("forwarding-unproven-widespread");
+	if (forwarding) {
+		return `${forwarding.data?.unproven} of ${forwarding.data?.selectors} test-id selector(s) match only ids written as component props, which is what a component library that forwards props as a matter of course looks like. If yours does, restart the server with --assume-forwarded to count them as matches; it is a server flag, not a tool argument, so it needs a restart. Every id and match it changes is labelled in the response.`;
+	}
+
 	return undefined;
 }
 
@@ -460,12 +470,21 @@ function lookupHint(
 	found: number,
 	catchAllSkipped: number,
 	propOnly: boolean,
+	families: string[] = [],
 ): string | undefined {
 	if (found === 0) {
 		const quarantined =
 			catchAllSkipped > 0
 				? ` ${catchAllSkipped} element(s) do write the attribute with a value built entirely at runtime, which would match any id and so proves nothing about this one; they are excluded.`
 				: "";
+		// The one true-negative that reads like a bug. A `@ListSelector("Row")`
+		// matches ids rendered as `Row_1`, `Row_2`, ... and coverage counts it
+		// matched, while looking the bare prefix up is correctly empty — nothing
+		// renders `Row` itself. Saying only "not found" invites the reader to
+		// conclude the selector is broken.
+		if (families.length > 0) {
+			return `No element renders the exact id "${needle}", but ${families.length === 1 ? "an id family" : "id families"} built on it ${families.length === 1 ? "does" : "do"}: ${families.join(", ")}. A prefix selector such as @ListSelector("${needle}") matches those and is not dead. Look up a concrete one (for example "${needle}_0"), or call get_testid_tree on the component to see them in place.`;
+		}
 		return `No rendered element with test id "${needle}" was found.${quarantined} Call get_testid_tree without testId to see the full tree, or map_coverage to check for renamed ids.`;
 	}
 	if (propOnly) {
@@ -558,16 +577,23 @@ function missingComponent(
 	}
 
 	if (!scopeFile) {
+		const suggestions = nearestNames(
+			wanted,
+			all.map((component) => component.name),
+			MAX_ERROR_LIST,
+		);
 		return new ToolError(
 			"file_not_found",
 			`No component named "${wanted}" was found in the scanned sources.`,
 			{
-				suggestions: nearestNames(
-					wanted,
-					all.map((component) => component.name),
-					MAX_ERROR_LIST,
-				),
-				hint: "Pass one of the suggested names, pass `file` with the component's path, or omit both to auto-detect the app entry.",
+				suggestions,
+				// Only when there are some. A name nothing resembles produced an empty
+				// list under a hint that said "pass one of the suggested names",
+				// sending the reader to look for something that was not sent.
+				hint:
+					suggestions.length > 0
+						? "Pass one of the suggested names, pass `file` with the component's path, or omit both to auto-detect the app entry."
+						: "Nothing in the scan resembles that name. Pass `file` with the component's path, omit both to auto-detect the app entry, or pass `testId` to find where a known id is rendered.",
 			},
 		);
 	}
@@ -642,6 +668,25 @@ export function handleGetTestIdTree(
 		const propOnly =
 			occurrences.length > 0 &&
 			occurrences.every((occurrence) => occurrence.reach === "component-prop");
+		// Pattern families the needle names the head of, for the empty-result hint.
+		const families =
+			occurrences.length > 0
+				? []
+				: [
+						...new Set(
+							tree.inventory
+								.filter(
+									(occurrence) =>
+										occurrence.value.kind === "pattern" &&
+										typeof occurrence.value.prefix === "string" &&
+										occurrence.value.prefix.startsWith(needle),
+								)
+								.map(
+									(occurrence) =>
+										`${(occurrence.value as { prefix?: string }).prefix ?? ""}*`,
+								),
+						),
+					].slice(0, 5);
 		// A lookup ships occurrences, never `roots`, so `tree-partial` here
 		// describes a tree the caller did not ask for and cannot see — and reads as
 		// a caveat on the inventory, which is the one thing that is always
@@ -660,7 +705,13 @@ export function handleGetTestIdTree(
 				warnings: warnings.shown,
 				hint: withEnvironmentHint(
 					full,
-					lookupHint(needle, occurrences.length, catchAllSkipped, propOnly),
+					lookupHint(
+						needle,
+						occurrences.length,
+						catchAllSkipped,
+						propOnly,
+						families,
+					),
 				),
 			},
 			{

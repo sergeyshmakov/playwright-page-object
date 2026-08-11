@@ -52,6 +52,29 @@ describe("environmentHint — an incomplete UI scope", () => {
 		).toBe(undefined);
 	});
 
+	/**
+	 * Its sibling names `--project-root` exactly and pre-empts the wrong flag,
+	 * while this one said "re-run assuming forwarding" and named nothing — so the
+	 * only advice in the report a reader could not act on was the one whose fix
+	 * is a single flag. That it needs a restart is the part a caller cannot guess
+	 * and would spend a call discovering.
+	 */
+	it("names the flag that acts on widespread unproven forwarding", () => {
+		const hint = environmentHint([
+			{
+				code: "forwarding-unproven-widespread",
+				severity: "info",
+				message: "most selectors match only ids written as component props",
+				data: { unproven: 13, selectors: 29 },
+			},
+		]);
+
+		expect(hint).toContain("--assume-forwarded");
+		expect(hint).toContain("13 of 29");
+		// A tool argument would be tried first and silently do nothing.
+		expect(hint).toContain("restart");
+	});
+
 	// It is last for a reason: an analysis reading the wrong attribute produces a
 	// wrong answer, and where to re-root is beside the point until that is fixed.
 	it("yields to a diagnosis that invalidates the whole answer", () => {

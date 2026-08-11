@@ -176,8 +176,24 @@ export class CoverageHandles {
 	}
 }
 
-/** The lifetime sentence every description and hint quotes, written once. */
+/**
+ * The lifetime sentence, in full, written once.
+ *
+ * Quoted where a reader first meets a handle — `map_coverage`'s description,
+ * which mints one, and the `expired_handle` hint, which is read by someone
+ * holding a dead one.
+ */
 export const HANDLE_LIFETIME_TEXT = `A coverageId stays valid for ${HANDLE_TTL_MS / 60_000} minutes after its last use, for this server process only, so paging never times out mid-walk; it is invalidated as soon as any analysed file changes on disk, however recently it was used (a stale page would report lines that have moved). Spending an invalid one returns error code expired_handle; re-call map_coverage to mint a fresh id.`;
+
+/**
+ * The same fact as a clause, for the two places that have already said it.
+ *
+ * `tools/list` plus the instructions are resident in the model's context for
+ * the whole session — measured at 15,899 B — and this sentence appeared in four
+ * of them, ~1.4 KB to say one thing four times. Nothing is dropped: the full
+ * text is one hop away in the tool that mints the handle.
+ */
+export const HANDLE_LIFETIME_CLAUSE = `A coverageId lasts ${HANDLE_TTL_MS / 60_000} minutes past its last use and dies the moment an analysed file changes; a dead one returns expired_handle, so re-call map_coverage for a fresh id.`;
 
 /** The message body for each way a handle can fail, plus its recovery. */
 export function handleFailureMessage(reason: HandleFailure): string {
