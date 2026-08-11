@@ -24,6 +24,15 @@ import { fileURLToPath } from "node:url";
  *   process (the dual-package hazard the Symbol.for hardening exists for)
  */
 
+/** Every tool the MCP server registers. Update deliberately, not by count. */
+const EXPECTED_TOOLS = [
+	"get_page_object_tree",
+	"get_testid_tree",
+	"list_page_objects",
+	"map_coverage",
+	"query_coverage",
+];
+
 const rootDir = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"..",
@@ -177,10 +186,23 @@ function smokeMcpHandshake(tempDir) {
 
 				if (message.id === 2) {
 					const tools = message.result?.tools;
-					if (!Array.isArray(tools) || tools.length !== 4) {
+					// By name, not by count. A count told us "expected 4, got 5" and
+					// left it to the reader to work out which tool that was; it also
+					// went stale the moment `query_coverage` was added, and this
+					// script gates `pr.yml` and `publish.yml`.
+					const names = Array.isArray(tools)
+						? tools.map((tool) => tool.name).sort()
+						: [];
+					const missing = EXPECTED_TOOLS.filter(
+						(name) => !names.includes(name),
+					);
+					const extra = names.filter((name) => !EXPECTED_TOOLS.includes(name));
+					if (missing.length > 0 || extra.length > 0) {
 						finish(
 							new Error(
-								`smoke-cli: tools/list returned ${Array.isArray(tools) ? tools.length : "no"} tools, expected 4`,
+								`smoke-cli: tools/list returned [${names.join(", ")}]${
+									missing.length > 0 ? `; missing ${missing.join(", ")}` : ""
+								}${extra.length > 0 ? `; unexpected ${extra.join(", ")}` : ""}`,
 							),
 						);
 						return;
