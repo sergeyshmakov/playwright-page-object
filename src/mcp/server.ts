@@ -8,7 +8,7 @@ import {
 	HANDLE_LIFETIME_TEXT,
 } from "./handles";
 import type { McpServerOptions } from "./options";
-import { safeHandler } from "./respond";
+import { MAX_RESPONSE_BYTES, safeHandler } from "./respond";
 import {
 	getPageObjectTreeInput,
 	getTestIdTreeInput,
@@ -43,9 +43,17 @@ const READ_ONLY = {
  * Only the tools that legitimately answer big get it: the two coverage tools
  * and a deep selector graph. The list and test-id tree tools page or narrow,
  * and a large answer from them means the caller should do that instead.
+ *
+ * Derived from the cap the server actually enforces, not written out. It said
+ * 400,000 while `MAX_RESPONSE_BYTES` was 200,000, so the annotation invited
+ * clients to accept twice what this server will ever send — and a client that
+ * raised its own ceiling on the strength of it got a `too_large` instead of the
+ * big answer it had just made room for. The unit differs (the annotation counts
+ * characters, the cap counts UTF-8 bytes) and that only ever errs safe: a
+ * character is never more than one byte's worth of allowance.
  */
 const LARGE_RESULT = {
-	"anthropic/maxResultSizeChars": 400_000,
+	"anthropic/maxResultSizeChars": MAX_RESPONSE_BYTES,
 } as const;
 
 /**

@@ -25,8 +25,26 @@ import { logger } from "./logger";
  *
  * A cap still exists so a runaway payload fails with a hint rather than
  * flooding a context window.
+ *
+ * Measured in UTF-8 bytes, which is what goes over stdio — see
+ * {@link responseBytes}. It used to be compared against `String.length`, and
+ * those are the same number only for ASCII: 40,000 CJK characters are 40,000
+ * code units and about 120,000 bytes, so a payload three times the cap passed
+ * the check that exists to stop it.
  */
 export const MAX_RESPONSE_BYTES = 200_000;
+
+/**
+ * What this payload actually costs on the wire.
+ *
+ * `String.length` counts UTF-16 code units. Every non-ASCII character in a test
+ * id, a JSDoc summary, a selector or a source snippet makes it an undercount,
+ * and this server's whole job on a real repository is to carry other people's
+ * identifiers — which, on the app that drove most of this work, are Russian.
+ */
+export function responseBytes(serialized: string): number {
+	return Buffer.byteLength(serialized, "utf8");
+}
 
 export interface ToolMeta {
 	[key: string]: unknown;
@@ -96,7 +114,8 @@ export function ok(
 	}
 
 	const serialized = JSON.stringify(payload);
-	if (serialized.length <= MAX_RESPONSE_BYTES) {
+	const bytes = responseBytes(serialized);
+	if (bytes <= MAX_RESPONSE_BYTES) {
 		options.onDelivered?.();
 		return { content: [{ type: "text", text: serialized }] };
 	}
@@ -104,7 +123,7 @@ export function ok(
 	return fail(
 		new ToolError(
 			"too_large",
-			`Response is ${serialized.length} bytes (cap ${MAX_RESPONSE_BYTES}).`,
+			`Response is ${bytes} bytes (cap ${MAX_RESPONSE_BYTES}).`,
 			{ hint: options.shrinkHint ?? GENERIC_SHRINK_HINT },
 		),
 	);
@@ -123,7 +142,7 @@ export function envelopeBytes(data: unknown, meta?: ToolMeta): number {
 	if (cleanedMeta) {
 		payload.meta = cleanedMeta;
 	}
-	return JSON.stringify(payload).length;
+	return responseBytes(JSON.stringify(payload));
 }
 
 /** One list a response would like to ship, and the entries it holds. */
@@ -157,7 +176,10 @@ export function fitBuckets(budget: number, slices: BucketSlice[]): BucketFit {
 		return fit;
 	}
 	const sizes = slices.map((slice) =>
-		slice.entries.map((entry) => JSON.stringify(entry).length + 1),
+		// Bytes, like the budget they are spent against: an entry sized in code
+		// units under-charges for every non-ASCII id it carries, and the fit then
+		// overshoots the cap it was computed to respect.
+		slice.entries.map((entry) => responseBytes(JSON.stringify(entry)) + 1),
 	);
 	const share = Math.floor(Math.max(budget, 0) / slices.length);
 	const kept = slices.map(() => 0);

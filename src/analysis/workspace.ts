@@ -1100,6 +1100,12 @@ export class Workspace {
 				: this.parsedTotal + 1;
 		if (this.parsedTotal > limit) {
 			this.enforceMaxFiles([added]);
+		} else {
+			// A narrowly scoped workspace can still cross the large-scan threshold
+			// through what the resolver drags in, and `enforceMaxFiles` — the only
+			// other caller — runs on the scan, not on these admissions. Without this
+			// the note never fires for exactly the scope that grew unexpectedly.
+			this.noteLargeScan(this.parsedTotal, limit);
 		}
 		if (this.analysable(added)) {
 			this.fileList = null;

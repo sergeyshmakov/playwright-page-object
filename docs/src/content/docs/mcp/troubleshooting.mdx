@@ -141,7 +141,7 @@ To settle one specific id regardless of the tree, use the lookup form: `{"testId
 
 ## How do I fix a `too_large` response?
 
-`too_large` means the serialized response exceeded the 200,000-character cap. Use the narrowing options that match the call mode:
+`too_large` means the serialized response exceeded the 200,000-**byte** cap (UTF-8 on the wire, so a non-ASCII test ID costs more than one character). Use the narrowing options that match the call mode:
 
 | Tool | Knobs, cheapest first |
 | --- | --- |

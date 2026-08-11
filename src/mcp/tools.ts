@@ -406,6 +406,14 @@ export function handleGetPageObjectTree(
 	const api = session.warnings
 		? session.warnings.planText("apiHints", apiHintsFor(tree))
 		: { shown: apiHintsFor(tree), delivered: () => {} };
+	// Two fields, each with one type, rather than one field that changes type
+	// between calls. `apiHints` is always the object of prose or absent; a repeat
+	// puts the base names in `apiHintsSent` instead. A consumer that reads the
+	// prose keeps a stable contract, and the repeat still costs a line.
+	const apiFull = Array.isArray(api.shown) ? undefined : api.shown;
+	const apiRepeated = Array.isArray(api.shown)
+		? (api.shown as string[])
+		: undefined;
 	const meta = {
 		root: tree.projectRoot,
 		attribute: tree.testIdAttribute,
@@ -416,7 +424,10 @@ export function handleGetPageObjectTree(
 		// In meta, so both formats carry it: `outline` ships a string as its data,
 		// and the call syntax is no less needed there. It describes how to *use*
 		// what the tree found rather than being part of the finding.
-		apiHints: api.shown,
+		apiHints: apiFull,
+		// Named for what it is: these bases were explained in full earlier this
+		// session, so the prose is not repeated.
+		apiHintsSent: apiRepeated,
 		warnings: warnings.shown,
 		hint: environmentHint(tree.warnings),
 	};
@@ -520,8 +531,14 @@ function idsNotPlaced(
 	const visit = (nodes: UiNode[]): void => {
 		for (const node of nodes) {
 			walkedFiles.add(node.file);
-			if (node.testId?.kind === "static" && node.testId.value !== undefined) {
-				placed.add(node.testId.value);
+			// Both halves of a static choice. `data-testid={flag ? "Main" : "Alt"}`
+			// keeps `Main` in `testId` and `Alt` in `testIdAlternatives`, and the
+			// inventory holds both — so counting only the first reported `Alt` as an
+			// id the tree failed to place while it was sitting on that very node.
+			for (const value of [node.testId, ...(node.testIdAlternatives ?? [])]) {
+				if (value?.kind === "static" && value.value !== undefined) {
+					placed.add(value.value);
+				}
 			}
 			visit(node.children);
 		}

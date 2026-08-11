@@ -18,6 +18,7 @@ interface Envelope {
 	ok: boolean;
 	error?: {
 		code: string;
+		message?: string;
 		hint?: string;
 		candidates?: string[];
 		suggestions?: string[];
@@ -62,6 +63,38 @@ describe("ok", () => {
 		const envelope = parse(ok(oversized()));
 		expect(envelope.error?.code).toBe("too_large");
 		expect(envelope.error?.hint).toContain("depth");
+	});
+
+	/**
+	 * The cap is bytes on the wire, and it was compared against `String.length`.
+	 * Those agree only for ASCII: a CJK character is one code unit and three
+	 * UTF-8 bytes, so a payload three times the cap used to pass the check that
+	 * exists to stop it. This server's job on a real repository is to carry other
+	 * people's identifiers, and plenty of them are not ASCII.
+	 */
+	it("measures the cap in bytes, not UTF-16 code units", () => {
+		// Comfortably under the cap by `.length`, comfortably over it by bytes.
+		const wide = { blob: "中".repeat(MAX_RESPONSE_BYTES / 2) };
+		expect(JSON.stringify(wide).length).toBeLessThan(MAX_RESPONSE_BYTES);
+
+		const envelope = parse(ok(wide));
+		expect(envelope.ok).toBe(false);
+		expect(envelope.error?.code).toBe("too_large");
+		// And the number it reports is the byte count, not the code-unit count.
+		expect(envelope.error?.message).toMatch(/Response is \d{6,} bytes/);
+	});
+
+	/**
+	 * `onDelivered` is the gate that stops the session warning ledger recording
+	 * warnings a refused response never carried. Both sides of the cap matter.
+	 */
+	it("runs onDelivered only when the response actually ships", () => {
+		let delivered = 0;
+		ok({ a: 1 }, undefined, { onDelivered: () => (delivered += 1) });
+		expect(delivered, "a response that shipped").toBe(1);
+
+		ok(oversized(), undefined, { onDelivered: () => (delivered += 1) });
+		expect(delivered, "a response refused for being too large").toBe(1);
 	});
 });
 

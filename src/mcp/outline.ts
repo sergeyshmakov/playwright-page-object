@@ -522,7 +522,11 @@ function renderUiBlock(
 	if (childLines.length < 2) {
 		return [own, ...childLines];
 	}
-	const key = childLines.join("\n");
+	// Keyed on the file too. The lines carry only `:line` once the path is
+	// elided, so two same-shaped subtrees in different files whose children sit
+	// on matching line numbers hashed identically, and the second collapsed into
+	// a back-reference pointing at the wrong file.
+	const key = `${node.file} ${childLines.join("\n")}`;
 	const first = ctx.seen.get(key);
 	if (first) {
 		return [own, `  (contents as at ${first})`];

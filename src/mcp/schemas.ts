@@ -105,7 +105,7 @@ export const getTestIdTreeInput = z.object({
  * of the lower ceiling is that the schema should not advertise a page size no
  * caller should reach.
  */
-const MAX_BUCKET_LIMIT = 200;
+export const MAX_BUCKET_LIMIT = 200;
 
 /** The six lists `map_coverage` can return, as a `buckets` enum. */
 export const COVERAGE_BUCKETS = [

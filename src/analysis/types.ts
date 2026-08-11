@@ -615,9 +615,11 @@ export interface TestIdTree {
 	 */
 	externalModuleCount: number;
 	/**
-	 * The subset of `externalModules` whose sources were found inside this
-	 * repository — the only ones {@link externalModuleRoot} is derived from, and
-	 * so the only ones anything may claim have sources here. Sorted, capped.
+	 * External specifiers whose sources were found inside this repository — the
+	 * only ones {@link externalModuleRoot} is derived from, and so the only ones
+	 * anything may claim have sources here. Sorted and capped independently, so
+	 * this is a subset of *all* external specifiers rather than of the
+	 * `externalModules` sample: either list can omit an entry the other shows.
 	 */
 	linkedExternalModules: string[];
 	/** How many are linked, for the same reason as {@link externalModuleCount}. */

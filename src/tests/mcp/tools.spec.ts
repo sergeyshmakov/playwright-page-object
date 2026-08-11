@@ -12,9 +12,10 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterAll, describe, expect, it } from "vitest";
 import type { McpServerOptions } from "../../mcp/options";
 import { MAX_RESPONSE_BYTES } from "../../mcp/respond";
+import { MAX_BUCKET_LIMIT } from "../../mcp/schemas";
 
-/** The schema ceiling on a coverage page; see `MAX_BUCKET_LIMIT`. */
-const MAX_BUCKET_PAGE = 200;
+/** The real schema ceiling, imported so the test cannot drift from it. */
+const MAX_BUCKET_PAGE = MAX_BUCKET_LIMIT;
 
 import { createMcpServer } from "../../mcp/server";
 import { coverageShrinkHint } from "../../mcp/tools";
@@ -265,8 +266,11 @@ describe("MCP server over in-memory transport", () => {
 			class: "CheckoutPage",
 			format: "outline",
 		});
-		// Same bases named, no prose.
-		expect(second.envelope.meta?.apiHints).toEqual([
+		// Same bases named, no prose — and in its own field, so `apiHints` is
+		// always an object of prose or absent. A field that changed type between
+		// calls would break a consumer that parses the values.
+		expect(second.envelope.meta?.apiHints).toBeUndefined();
+		expect(second.envelope.meta?.apiHintsSent).toEqual([
 			"members",
 			"RootPageObject",
 			"PageObject",

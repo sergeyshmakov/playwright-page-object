@@ -134,7 +134,7 @@ describe("Workspace.acquire", () => {
 			const root = scratch({ "src/a.ts": "export const a = 1;" });
 			const first = Workspace.acquire({ projectRoot: root });
 
-			// An hour of work, nine minutes between calls: never idle long enough.
+			// Fifty-four minutes of work, nine minutes apart: never idle long enough.
 			for (let call = 0; call < 6; call += 1) {
 				vi.advanceTimersByTime(9 * 60_000);
 				expect(Workspace.acquire({ projectRoot: root }), `call ${call}`).toBe(
