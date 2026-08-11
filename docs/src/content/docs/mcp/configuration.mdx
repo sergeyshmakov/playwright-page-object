@@ -223,6 +223,8 @@ Component libraries that forward props as a rule make that conservative. `--assu
 
 Nothing is silently upgraded, so you can always tell a proven match from an assumed one. It is a server-level flag rather than a tool argument so every `map_coverage` call from that server uses the same classification. Other tools still report the source evidence without applying the assumption.
 
+One number moves in the direction you may not expect: `summary.uiTestIds` **falls**. An id written as a prop and the host element it reaches are one id once forwarding is assumed, where before they were counted separately — on one production app, 1,571 → 1,287. Nothing was lost; two half-facts merged into one. `matched` rises sharply over the same call (627 → 1,430), and `coverage` barely moves, because the assumption grows the numerator and the denominator together.
+
 When the assumption would help, the server says so without being asked. `forwarding-unproven-widespread` fires when a large share of your test-ID selectors match only component props, which is the signature of a codebase that forwards as a matter of course.
 
 ## Related guides

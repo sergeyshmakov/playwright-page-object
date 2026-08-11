@@ -1608,7 +1608,15 @@ export function handleQueryCoverage(
 	const warnings = planWarnings(session.warnings, report.warnings);
 
 	return coverageResult({
-		base: { summary: report.summary, scope: report.scope },
+		// `summary` on every page is deliberate - it is what a capped list is read
+		// against. `scope` is not: it is byte-identical on every page of the same
+		// snapshot, and the handle guarantees the snapshot has not moved, so past
+		// the first page it is ~2 KB of prose the reader already has from the call
+		// that minted the id. The tool description says where to find it.
+		base:
+			args.offset > 0
+				? { summary: report.summary }
+				: { summary: report.summary, scope: report.scope },
 		slices: [slice],
 		offset: args.offset,
 		onDelivered: warnings.delivered,

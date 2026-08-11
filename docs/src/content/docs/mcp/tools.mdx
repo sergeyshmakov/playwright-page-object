@@ -69,10 +69,12 @@ That means `repeat` warnings of this code are still in force and their text has 
 | `scanned` | `list_page_objects`, `get_testid_tree` | Files parsed |
 | `warnings` | all | Environment diagnostics, worst-invalidating first, capped at 8. Repeats within a session are abbreviated, as above |
 | `apiHints` | `get_page_object_tree` | The runtime API of the base classes this tree uses, so the call syntax arrives with the selector chain |
+| `idsNotPlaced` | `get_testid_tree` | On a holed tree: test IDs the scan found **in files this tree walked** that did not end up in `roots`. This is how you tell "not rendered" from "not reached" |
+| `suppressed` | `get_testid_tree` | The nodes were omitted and why. Either the attribute is wrong, or the walk was cut and reached no ID at all — in both cases the tree could not have answered |
 | `hint` | all | What to do next, in the tool's own argument names. An environment problem is prepended, because no advice about the next call matters while the analysis reads the wrong attribute |
 | `total`, `offset`, `nextOffset` | `list_page_objects` | Unpaged count, the offset in effect, and the offset for the next page |
 | `note` | `get_page_object_tree`, `map_coverage` | An absolute `file` was accepted and relativized; says how it was read |
-| `truncated` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | A budget or a `limit` cut the payload |
+| `truncated` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | A budget or a `limit` cut the payload. Distinct from `truncatedBuckets`, which means the **size cap** cut a list below what `limit` had already selected |
 | `fidelity`, `fidelityReason` | `get_testid_tree` | Completeness of the node tree, and where the holes are |
 | `alsoIncluded` | `map_coverage` | Page objects analyzed alongside the one you named, because they share its file |
 | `ignored` | `map_coverage` | Arguments overruled by `buckets` |
@@ -174,7 +176,7 @@ An empty page gets a `hint` that distinguishes the three reasons it can be empty
 | `file` | string | optional | Path relative to the project root. An absolute path inside the root is accepted and relativized, and `meta.note` says so; one outside the root is rejected |
 | `depth` | integer 1 to 10 | `3` | Levels of nested control classes to expand |
 | `includeMethods` | boolean | `true` | |
-| `format` | `"json"` \| `"outline"` | `"json"` | |
+| `format` | `"json"` \| `"outline"` | `"outline"` | Outline is the default because it is 3.6× smaller on the same tree. Pass `"json"` when something parses fields |
 
 `file` alone resolves to the file's default-exported page object, else its first root one. When the file declares several and none is preferred, the call fails with `ambiguous_class` and `path.ts#ClassName` candidates.
 
@@ -183,6 +185,8 @@ An empty page gets a `hint` that distinguishes the three reasons it can be empty
 With `format: "json"`, `data` is `{ root, defs, stats }`. `root` is a key into `defs`, and `defs` is a flat map of `path.ts#ClassName` to node. Shared controls appear once and are referenced by id everywhere else, so a control used by ten members costs one definition.
 
 Each member carries `name`, `loc`, `visibility`, the full `selector` (decorator name, raw source text, and the parsed value), and a `result` describing what the accessor resolves to: `locator`, `pageObject`, `list` (with `itemClassName`), `control`, or `unknown` with the source text.
+
+Two things about addressing and locations, both deliberate. `class` is matched exactly, unlike `list_page_objects`' `filter`, which is a case-insensitive substring — a near miss comes back as `class_not_found` with the right name in `suggestions`, so it costs one extra call rather than a wrong answer. And a node's `loc` points at the **decorator** line, not at the `class` or `accessor` line, because the decorator is what made it a page object.
 
 With `format: "outline"`, `data` is an indented string. It costs far fewer tokens and is not machine-parseable. `(see above)` marks a definition already printed, and `(not expanded: depth limit)` or `(not expanded: node budget)` marks one the walk did not reach.
 
@@ -276,7 +280,7 @@ The tool has two modes. A tree call uses `file`, `component`, `depth`, `followCo
 | `depth` | integer 1 to 10 | `4` | |
 | `followComponents` | boolean | `true` | Inline the subtrees of child components imported from other files |
 | `attribute` | string | optional | Per-call override of the resolved test-ID attribute |
-| `format` | `"json"` \| `"outline"` | `"json"` | Tree mode only. Lookup mode always returns JSON occurrences |
+| `format` | `"json"` \| `"outline"` | `"outline"` | Outline is the default because it is 4.6× smaller on the same tree. Pass `"json"` when something parses fields. Tree mode only — lookup mode always returns JSON occurrences |
 
 With neither `file` nor `component`, the walk starts from the auto-detected app entry.
 
@@ -386,7 +390,7 @@ The same call with `followComponents: false` from the app entry shows the other 
 | `includeUnused` | boolean | `true`, or `false` when `class`/`file` is set | Include `uncoveredTestIds`. Ignored when `buckets` is given |
 | `includeRawLocators` | boolean | `false` | Also scan for direct `getByTestId` / `getItemByTestId` / `filterByItemTestId` / `filterByHasTestId` calls |
 | `buckets` | array | optional | Return only these lists. `[]` returns `summary` and `scope` alone. Wins over `includeUnused`, which is then echoed in `meta.ignored` |
-| `limit` | integer 1 to 1000 | `50` | Per bucket |
+| `limit` | integer 1 to 200 | `50` | Per bucket. A coverage entry averages ~800 bytes, so even 200 is a large response; the ceiling exists so the schema cannot advertise a page nobody should ask for |
 | `offset` | integer ≥ 0 | `0` | Applied to every returned bucket. To page one list, prefer `query_coverage` |
 
 Start with `buckets: []`. It returns the totals and the scope for a few hundred bytes, which is enough to see the shape of the answer before asking for a list — six buckets at `limit: 200` was 527 KB on a 4,924-file repository, past every client's ceiling.
@@ -490,7 +494,7 @@ The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by def
 | `coverageId` | string | required | `meta.coverageId` from a previous `map_coverage` call |
 | `bucket` | one of the six bucket names | required | One list at a time is what makes `offset` mean one thing |
 | `offset` | integer ≥ 0 | `0` | Pass `meta.nextOffset` from the previous page |
-| `limit` | integer 1 to 1000 | `50` | |
+| `limit` | integer 1 to 200 | `50` | |
 
 ### Reading a large report
 
@@ -505,7 +509,7 @@ query_coverage {"coverageId": "cov_9f3c…", "bucket": "deadSelectors", "offset"
 → 50 entries, meta.nextOffset = 100
 ```
 
-Copy `meta.nextOffset` into the next call's `offset` and stop when that key stops coming back. Every page also carries `summary` and `scope`, so a capped page always reports the bucket's real size.
+Copy `meta.nextOffset` into the next call's `offset` and stop when that key stops coming back. Every page carries `summary`, so a capped page always reports the bucket's real size. `scope` ships on the first page only: the handle pins one snapshot, so it is identical on every later page and `map_coverage` already gave it to you.
 
 ### Why the handle, when `map_coverage` can page too?
 

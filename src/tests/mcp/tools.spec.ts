@@ -12,6 +12,10 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterAll, describe, expect, it } from "vitest";
 import type { McpServerOptions } from "../../mcp/options";
 import { MAX_RESPONSE_BYTES } from "../../mcp/respond";
+
+/** The schema ceiling on a coverage page; see `MAX_BUCKET_LIMIT`. */
+const MAX_BUCKET_PAGE = 200;
+
 import { createMcpServer } from "../../mcp/server";
 import { coverageShrinkHint } from "../../mcp/tools";
 
@@ -188,7 +192,9 @@ describe("MCP server over in-memory transport", () => {
 		const { isError, envelope } = await callTool(
 			client,
 			"get_page_object_tree",
-			{ class: "CheckoutPage" },
+			// Explicit: this asserts the structured payload, which is what `json` is
+			// for. The default is `outline` because most callers only read it.
+			{ class: "CheckoutPage", format: "json" },
 		);
 
 		expect(isError).toBe(false);
@@ -270,6 +276,7 @@ describe("MCP server over in-memory transport", () => {
 			const { envelope } = await callTool(client, "get_page_object_tree", {
 				class: "CheckoutPage",
 				includeMethods,
+				format: "json",
 			});
 			const data = envelope.data as {
 				root: string;
@@ -426,6 +433,7 @@ describe("MCP server over in-memory transport", () => {
 					"get_testid_tree",
 					{
 						component: "Inner",
+						format: "json",
 					},
 				);
 
@@ -522,6 +530,7 @@ describe("MCP server over in-memory transport", () => {
 			const shallow = await callTool(client, "get_testid_tree", {
 				component: "Leaf",
 				depth: 1,
+				format: "json",
 			});
 
 			expect(shallow.isError).toBe(false);
@@ -685,6 +694,7 @@ describe("MCP server over in-memory transport", () => {
 
 				const json = await callTool(client, "get_testid_tree", {
 					component: "App",
+					format: "json",
 				});
 				expect(JSON.stringify(json.envelope.data)).toContain(
 					"testIdAlternatives",
@@ -761,6 +771,7 @@ describe("MCP server over in-memory transport", () => {
 
 				const whole = await callTool(client, "get_testid_tree", {
 					file: "src/Nested.tsx",
+					format: "json",
 				});
 				const wholeData = whole.envelope.data as Payload;
 				expect(wholeData.stats.nodes).toBe(countNodes(wholeData.roots));
@@ -769,6 +780,7 @@ describe("MCP server over in-memory transport", () => {
 
 				const rooted = await callTool(client, "get_testid_tree", {
 					component: "Inner",
+					format: "json",
 				});
 				const rootedData = rooted.envelope.data as Payload;
 				expect(rootedData.roots[0]).toMatchObject({ tag: "span" });
@@ -803,6 +815,7 @@ describe("MCP server over in-memory transport", () => {
 				const partial = await callTool(client, "get_testid_tree", {
 					component: "Shell",
 					followComponents: false,
+					format: "json",
 				});
 				const stats = (
 					partial.envelope.data as { stats: Record<string, unknown> }
@@ -818,6 +831,7 @@ describe("MCP server over in-memory transport", () => {
 				// than with an empty object nobody has to read.
 				const whole = await callTool(client, "get_testid_tree", {
 					component: "Shell",
+					format: "json",
 				});
 				const wholeStats = (
 					whole.envelope.data as { stats: Record<string, unknown> }
@@ -1772,6 +1786,62 @@ describe("MCP server over in-memory transport", () => {
 	}, 30_000);
 
 	/**
+	 * A walk of N pages repeated `scope` N times — byte-identical each time,
+	 * because the handle pins one snapshot. `summary` repeats on purpose (a
+	 * capped list is read against it); `scope` is prose the caller already has.
+	 */
+	it("ships scope on the first coverage page and not on the rest", async () => {
+		await withProject(
+			"ppo-page-scope-",
+			{
+				"e2e/Page.ts": [
+					'import type { Locator } from "@playwright/test";',
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"",
+					'@RootSelector("Root")',
+					"export class HomePage extends RootPageObject {",
+					...["A", "B", "C", "D"].flatMap((name) => [
+						`\t@Selector("Missing${name}")`,
+						`\taccessor ${name}!: Locator;`,
+					]),
+					"}",
+					"",
+				].join("\n"),
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="Root" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const created = await callTool(client, "map_coverage", { buckets: [] });
+				const coverageId = String(created.envelope.meta?.coverageId);
+
+				const first = await callTool(client, "query_coverage", {
+					coverageId,
+					bucket: "deadSelectors",
+					limit: 2,
+				});
+				const second = await callTool(client, "query_coverage", {
+					coverageId,
+					bucket: "deadSelectors",
+					offset: 2,
+					limit: 2,
+				});
+
+				const firstData = first.envelope.data as Record<string, unknown>;
+				const secondData = second.envelope.data as Record<string, unknown>;
+				expect(firstData.scope).toBeDefined();
+				expect(secondData.scope).toBeUndefined();
+				// The number every capped page is read against stays on both.
+				expect(firstData.summary).toBeDefined();
+				expect(secondData.summary).toBeDefined();
+			},
+		);
+	}, 30_000);
+
+	/**
 	 * "293 of 375 nodes were left unexpanded" is a count, not a list, so an agent
 	 * could not tell "this id does not exist" from "the walk did not reach it" —
 	 * and the whole promise of the tool is that absence means something. Measured
@@ -1979,6 +2049,7 @@ describe("MCP server over in-memory transport", () => {
 			async (client) => {
 				const { envelope } = await callTool(client, "get_testid_tree", {
 					component: "App",
+					format: "json",
 				});
 
 				expect(envelope.meta?.fidelity).toBe("full");
@@ -2055,6 +2126,7 @@ describe("MCP server over in-memory transport", () => {
 			async (client) => {
 				const { envelope } = await callTool(client, "get_testid_tree", {
 					component: "App",
+					format: "json",
 				});
 				expect(envelope.meta?.suppressed).toBeUndefined();
 				expect((envelope.data as { roots: unknown[] }).roots.length).toBe(1);
@@ -2808,8 +2880,14 @@ describe("MCP server over in-memory transport", () => {
 				'@RootSelector("FatPageRootSelectorThatIsRenderedNowhereAtAll")',
 				"export class FatPage extends RootPageObject {",
 			];
+			// Wide on purpose. A coverage entry repeats its id in the selector text,
+			// the member path and the decorator source, so the name is most of the
+			// entry — and a page is capped at 200 now, so an entry has to be around
+			// a kilobyte for a full page to overflow the response cap and exercise
+			// the trimming this block exists to test.
+			const padding = "AndThenSomeMoreWordsToMakeThisEntryWide".repeat(30);
 			for (let index = 0; index < count; index += 1) {
-				const name = `DeliberatelyDescriptiveDeadSelectorName${String(index).padStart(4, "0")}`;
+				const name = `DeliberatelyDescriptiveDeadSelectorName${padding}${String(index).padStart(4, "0")}`;
 				lines.push(`\t@Selector("${name}")`, `\taccessor ${name}!: Locator;`);
 			}
 			lines.push("}", "");
@@ -2817,7 +2895,7 @@ describe("MCP server over in-memory transport", () => {
 		}
 
 		const fatRepo = {
-			"e2e/Fat.ts": fatPageObject(1000),
+			"e2e/Fat.ts": fatPageObject(300),
 			"src/App.tsx": [
 				"export function App() {",
 				'\treturn <div data-testid="OnlyRendered" />;',
@@ -2831,7 +2909,7 @@ describe("MCP server over in-memory transport", () => {
 				const { isError, envelope, text } = await callTool(
 					client,
 					"map_coverage",
-					{ buckets: ["deadSelectors"], limit: 1000 },
+					{ buckets: ["deadSelectors"], limit: MAX_BUCKET_PAGE },
 				);
 
 				expect(
@@ -2847,10 +2925,10 @@ describe("MCP server over in-memory transport", () => {
 				};
 				// summary and scope always ship: they are what a trimmed list is read
 				// against, and without them an empty bucket reads as "nothing found".
-				expect(data.summary.deadSelectors).toBe(1001);
+				expect(data.summary.deadSelectors).toBe(301);
 				expect(data.scope).toBeDefined();
 				expect(data.deadSelectors.length).toBeGreaterThan(0);
-				expect(data.deadSelectors.length).toBeLessThan(1001);
+				expect(data.deadSelectors.length).toBeLessThan(200);
 
 				expect(envelope.meta?.truncatedBuckets).toEqual(["deadSelectors"]);
 				expect(envelope.meta?.nextOffset).toEqual({
@@ -2871,7 +2949,7 @@ describe("MCP server over in-memory transport", () => {
 						coverageId,
 						bucket: "deadSelectors",
 						offset,
-						limit: 1000,
+						limit: MAX_BUCKET_PAGE,
 					});
 					expect(page.isError, JSON.stringify(page.envelope.error)).toBe(false);
 					expect(page.text.length).toBeLessThanOrEqual(MAX_RESPONSE_BYTES);
@@ -2891,10 +2969,10 @@ describe("MCP server over in-memory transport", () => {
 					calls += 1;
 					expect(calls, "the walk must terminate").toBeLessThan(10);
 				}
-				expect(everTrimmed, "a 1001-entry page cannot have fit whole").toBe(
+				expect(everTrimmed, "a full page of wide entries cannot have fit").toBe(
 					true,
 				);
-				expect(seen).toHaveLength(1001);
+				expect(seen).toHaveLength(301);
 			});
 		}, 120_000);
 
@@ -2908,7 +2986,7 @@ describe("MCP server over in-memory transport", () => {
 				const { isError, envelope, text } = await callTool(
 					client,
 					"map_coverage",
-					{ limit: 1000 },
+					{ limit: MAX_BUCKET_PAGE },
 				);
 
 				expect(isError).toBe(false);

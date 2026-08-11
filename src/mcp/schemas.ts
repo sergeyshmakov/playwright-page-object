@@ -43,11 +43,15 @@ export const getPageObjectTreeInput = z.object({
 		.default(3)
 		.describe("How many levels of nested control classes to expand."),
 	includeMethods: z.boolean().default(true),
+	// Outline by default because the descriptions tell every caller to prefer it
+	// and it measured 3.6x smaller on the same query - a default that contradicts
+	// its own advice just taxes whoever skims. Pass "json" for the complete,
+	// machine-parseable form.
 	format: z
 		.enum(["json", "outline"])
-		.default("json")
+		.default("outline")
 		.describe(
-			'"outline" returns an indented text tree (fewer tokens, not machine-parseable).',
+			'"outline" (the default) is an indented text tree: far fewer tokens, summarises repeats and holes, not machine-parseable. Pass "json" when something has to parse fields.',
 		),
 });
 
@@ -81,8 +85,27 @@ export const getTestIdTreeInput = z.object({
 		.describe(
 			'Test-id attribute name, e.g. "data-tid". Defaults to the server-resolved attribute.',
 		),
-	format: z.enum(["json", "outline"]).default("json"),
+	// Outline by default: measured 4.6x smaller than json on the same component
+	// tree, and it is what this tool's description tells you to read with.
+	format: z
+		.enum(["json", "outline"])
+		.default("outline")
+		.describe(
+			'"outline" (the default) is an indented text tree: far fewer tokens, summarises repeats and holes, not machine-parseable. Pass "json" when something has to parse fields. Tree mode only - a testId lookup always returns JSON occurrences.',
+		),
 });
+
+/**
+ * Most entries either coverage tool will put in one page.
+ *
+ * A coverage entry averages ~800 bytes, so the old ceiling of 1000 let a
+ * schema-legal call land at 199,475 bytes - roughly 50k tokens in a single tool
+ * result, enough to swamp most agents' context, with nothing warning them
+ * first. The response cap and the trimming still exist behind this; the point
+ * of the lower ceiling is that the schema should not advertise a page size no
+ * caller should reach.
+ */
+const MAX_BUCKET_LIMIT = 200;
 
 /** The six lists `map_coverage` can return, as a `buckets` enum. */
 export const COVERAGE_BUCKETS = [
@@ -140,10 +163,10 @@ export const mapCoverageInput = z.object({
 		.number()
 		.int()
 		.min(1)
-		.max(1000)
+		.max(MAX_BUCKET_LIMIT)
 		.default(50)
 		.describe(
-			"Entries per returned bucket. Bucket totals always ship in summary, so a capped list still tells you how much it is hiding; page the rest with offset.",
+			`Entries per returned bucket, at most ${MAX_BUCKET_LIMIT}. A coverage entry averages around 800 bytes, so even the maximum is a large response; the ceiling exists so the schema cannot advertise a page nobody should ask for. Bucket totals always ship in summary, so a capped list still tells you how much it is hiding; page the rest with offset.`,
 		),
 	offset: z
 		.number()
@@ -179,9 +202,9 @@ export const queryCoverageInput = z.object({
 		.number()
 		.int()
 		.min(1)
-		.max(1000)
+		.max(MAX_BUCKET_LIMIT)
 		.default(50)
 		.describe(
-			"Entries to return. A page that would still exceed the response cap is cut further and meta.truncatedBuckets says so.",
+			`Entries to return, at most ${MAX_BUCKET_LIMIT}. A page that would still exceed the response cap is cut further and meta.truncatedBuckets says so.`,
 		),
 });

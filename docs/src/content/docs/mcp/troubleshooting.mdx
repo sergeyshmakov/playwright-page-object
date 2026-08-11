@@ -110,7 +110,14 @@ It is the only error a gap in the walk produces. A tree that is merely missing s
 
 A partial tree means the walk found a root but could not place or expand every subtree. `meta.fidelityReason` counts the gaps and names their codes.
 
-Absence from a partial tree is not proof that a test ID cannot reach a host element. `meta.hint` says which argument may close the gap.
+Absence from a partial tree is not proof that a test ID cannot reach a host element. Two fields turn that from a caveat into an answer:
+
+- **`meta.idsNotPlaced`** lists IDs the scan found in files this tree walked that did not end up in `roots` — the difference between "does not exist" and "not reached", for the files you were actually looking at.
+- **`meta.hint`** names the fix for whichever gap accounts for most of the tree, not the first one found. A handful of depth-limited nodes will not send you chasing `depth` when the real wall is a hundred unscanned modules.
+
+`meta.fidelityReason` carries exact per-reason counts. The individual per-site entries in `meta.warnings` are a **sample** — a deep page hits the depth limit at dozens of places, and repeating that once per site cost a third of the response — and `tree-partial` says so and gives the true totals.
+
+A partial tree that reached **no** ID at all is not sent: `roots` comes back empty with `meta.suppressed` explaining, because a cut walk that found nothing proves nothing about what renders there. Use `testId` to look an ID up across the whole scan, which is complete whatever the walk did.
 
 | `fidelityReason` mentions | Next call |
 | --- | --- |
