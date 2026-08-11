@@ -382,41 +382,44 @@ function sweepRawLocators(
 				continue;
 			}
 
-			const [value] = readExpressionValue(argument).values;
-			if (!value) {
-				continue;
-			}
-			if (value.kind === "static" && value.value !== undefined) {
+			// Every branch, not just the first. `getByTestId(big ? "A" : "B")`
+			// selects one of two ids and the reader kept only "A", so "B" came back
+			// uncovered even though a locator names it — and a typo'd branch never
+			// reached deadSelectors, because the sweep never saw it. The JSX side of
+			// the same reader has always handled a static choice this way.
+			for (const value of readExpressionValue(argument).values) {
+				if (value.kind === "static" && value.value !== undefined) {
+					usages.push({
+						...base,
+						kind: "testId",
+						testId: value.value,
+						dynamic: false,
+					});
+					continue;
+				}
+				if (value.kind === "pattern" && value.regex) {
+					usages.push({
+						...base,
+						kind: "testIdPattern",
+						pattern: {
+							source: value.regex.source,
+							flags: value.regex.flags,
+							origin: "string",
+							matchMode: "regex",
+							literalPrefix:
+								value.prefix ?? literalPrefixOf(value.regex.source) ?? null,
+						},
+						dynamic: false,
+					});
+					continue;
+				}
 				usages.push({
 					...base,
 					kind: "testId",
-					testId: value.value,
-					dynamic: false,
+					dynamic: true,
+					reason: value.reason ?? "computed-expression",
 				});
-				continue;
 			}
-			if (value.kind === "pattern" && value.regex) {
-				usages.push({
-					...base,
-					kind: "testIdPattern",
-					pattern: {
-						source: value.regex.source,
-						flags: value.regex.flags,
-						origin: "string",
-						matchMode: "regex",
-						literalPrefix:
-							value.prefix ?? literalPrefixOf(value.regex.source) ?? null,
-					},
-					dynamic: false,
-				});
-				continue;
-			}
-			usages.push({
-				...base,
-				kind: "testId",
-				dynamic: true,
-				reason: value.reason ?? "computed-expression",
-			});
 		}
 	}
 	return usages;
@@ -593,6 +596,7 @@ function computeCoverageReport(
 		const classification = classifySelector(selector, sides);
 
 		if (classification.verdict === "matched") {
+			const unproven = alsoUnproven(classification.alsoUnproven);
 			for (const match of classification.matches) {
 				coveredUi.add(match.ui);
 				matched.push({
@@ -614,7 +618,7 @@ function computeCoverageReport(
 					confidence: match.outcome.confidence,
 					...(match.outcome.probe ? { probe: match.outcome.probe } : {}),
 					...(match.ui.assumed ? { forwarding: "assumed" as const } : {}),
-					...alsoUnproven(match.ui.id, sides),
+					...unproven,
 				});
 			}
 			continue;
@@ -1078,22 +1082,21 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
  * the whole story is. So the entry now says the id has other, unproven sites,
  * and how many.
  */
-function alsoUnproven(
-	id: string | null,
-	sides: ClassifySides,
-): { unprovenOccurrences?: number; unprovenAt?: SourceLoc } {
-	if (id === null) {
-		return {};
+function alsoUnproven(matches: Match[]): {
+	unprovenOccurrences?: number;
+	unprovenAt?: SourceLoc;
+} {
+	let count = 0;
+	let first: SourceLoc | undefined;
+	for (const match of matches) {
+		count += match.ui.occurrences.length;
+		if (!first) {
+			first = match.ui.occurrences[0]?.loc;
+		}
 	}
-	const group = sides.propById.get(id);
-	const first = group?.occurrences[0];
-	if (!group || !first) {
-		return {};
-	}
-	return {
-		unprovenOccurrences: group.occurrences.length,
-		unprovenAt: first.loc,
-	};
+	return count > 0 && first
+		? { unprovenOccurrences: count, unprovenAt: first }
+		: {};
 }
 
 export interface ScopeEvidence {

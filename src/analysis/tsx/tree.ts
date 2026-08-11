@@ -141,8 +141,17 @@ const DEFAULT_SCOPE: WalkScope = {
 };
 
 interface ExpandState {
-	/** Prop name to the static value the call site passed, by callee-local name. */
-	bindings: Map<string, TestIdValue>;
+	/**
+	 * Prop name to the static value the call site passed, by callee-local name.
+	 *
+	 * A list, non-empty, because a call site may write a static choice:
+	 * `<Row rowId={big ? "A" : "B"}/>` passes two ids and both really can render.
+	 * Keeping only the first made `B` vanish from the tree *and* from the
+	 * inventory, so a selector for it read dead. `[0]` is the one reported as the
+	 * id; the rest ride along as `testIdAlternatives`, which is exactly what the
+	 * direct (unforwarded) path already does with the same shape.
+	 */
+	bindings: Map<string, TestIdValue[]>;
 	/**
 	 * Every prop name the call site wrote, dynamic and value-less ones included,
 	 * by callee-local name. This is the evidence of *absence*: a name that is not
@@ -177,6 +186,8 @@ const EMPTY_STATE: ExpandState = {
 const FIELD = "\u0000";
 const ITEM = "\u0001";
 const PART = "\u0002";
+/** Between the branches of one binding, which is itself an `ITEM`. */
+const ALT = "\u0003";
 
 function valueSignature(value: TestIdValue): string {
 	return [value.kind, value.value ?? "", value.prefix ?? "", value.raw].join(
@@ -210,7 +221,7 @@ function valueSignature(value: TestIdValue): string {
  */
 function expansionKey(componentRef: string, state: ExpandState): string {
 	const bindings = [...state.bindings]
-		.map(([name, value]) => `${name}=${valueSignature(value)}`)
+		.map(([name, values]) => `${name}=${values.map(valueSignature).join(ALT)}`)
 		.sort()
 		.join(ITEM);
 	return [
@@ -935,37 +946,44 @@ function mergeResolvedOccurrences(
 		if (node.testId && (node.viaProp || node.viaSpread || node.viaDefault)) {
 			const key = at;
 			resolvedLocs.add(key);
-			const occurrence: TestIdOccurrence = {
-				value: node.testId,
-				file: node.file,
-				loc: node.loc,
-				tag: node.tag,
-				component: node.component,
-				// One hop of forwarding proven, but when the id landed on another
-				// component rather than on a host element it is still a prop, and
-				// still unproven.
-				reach: node.nodeType === "component" ? "component-prop" : "forwarded",
-			};
-			if (node.conditional) {
-				occurrence.conditional = true;
-			}
-			if (node.repeated) {
-				occurrence.repeated = true;
-			}
-			if (node.viaProp) {
-				occurrence.viaProp = node.viaProp;
-			}
-			const identity = [
-				key,
-				valueSignature(node.testId),
-				occurrence.conditional ? "conditional" : "",
-				occurrence.repeated ? "repeated" : "",
-				occurrence.viaProp ?? "",
-				node.viaDefault ? "default" : "",
-			].join(PART);
-			if (!seen.has(identity)) {
-				seen.add(identity);
-				resolved.push(occurrence);
+			// Every branch of a static choice the call site wrote, not only the one
+			// reported as `testId`. This list is what coverage matches selectors
+			// against, and a branch missing from it comes back as a dead selector
+			// for an id that renders — while the placeholder that would have said
+			// "unknown" was just deleted a few lines below.
+			for (const value of [node.testId, ...(node.testIdAlternatives ?? [])]) {
+				const occurrence: TestIdOccurrence = {
+					value,
+					file: node.file,
+					loc: node.loc,
+					tag: node.tag,
+					component: node.component,
+					// One hop of forwarding proven, but when the id landed on another
+					// component rather than on a host element it is still a prop, and
+					// still unproven.
+					reach: node.nodeType === "component" ? "component-prop" : "forwarded",
+				};
+				if (node.conditional) {
+					occurrence.conditional = true;
+				}
+				if (node.repeated) {
+					occurrence.repeated = true;
+				}
+				if (node.viaProp) {
+					occurrence.viaProp = node.viaProp;
+				}
+				const identity = [
+					key,
+					valueSignature(value),
+					occurrence.conditional ? "conditional" : "",
+					occurrence.repeated ? "repeated" : "",
+					occurrence.viaProp ?? "",
+					node.viaDefault ? "default" : "",
+				].join(PART);
+				if (!seen.has(identity)) {
+					seen.add(identity);
+					resolved.push(occurrence);
+				}
 			}
 		} else if (node.testId?.kind === "dynamic") {
 			// This site was reached and stayed unreadable, so the placeholder at
@@ -998,7 +1016,14 @@ function mergeResolvedOccurrences(
 
 /** What the walk decided one render site's test-id expression resolves to. */
 type SiteValue =
-	| { kind: "value"; value: TestIdValue; viaProp?: string; viaDefault?: true }
+	| {
+			kind: "value";
+			value: TestIdValue;
+			/** The other branches of a static choice, when the call site wrote one. */
+			alternatives?: TestIdValue[];
+			viaProp?: string;
+			viaDefault?: true;
+	  }
 	/** The attribute is written but provably renders nothing at this site. */
 	| { kind: "absent" }
 	/** Not knowable from here: report it dynamic, as before. */
@@ -2073,15 +2098,20 @@ class TreeBuilder {
 	private callSiteBindings(
 		scanned: ScannedElement | undefined,
 		definition: ComponentDefinition,
-	): Map<string, TestIdValue> {
-		const bindings = new Map<string, TestIdValue>();
+	): Map<string, TestIdValue[]> {
+		const bindings = new Map<string, TestIdValue[]>();
 		if (!scanned) {
 			return bindings;
 		}
 		for (const [name, values] of scanned.attributes) {
 			const [first] = values;
 			if (first && first.kind !== "dynamic") {
-				bindings.set(name, first);
+				// Every readable branch, not just the one that sorted first. The gate
+				// stays on `first` so nothing that used to bind stops binding.
+				bindings.set(
+					name,
+					values.filter((value) => value.kind !== "dynamic"),
+				);
 			}
 		}
 		for (const [local, propName] of definition.propAliases) {
@@ -2160,6 +2190,13 @@ class TreeBuilder {
 			const site = this.resolveSiteValue(value, scanned, owner, state);
 			if (site.kind === "value") {
 				node.testId = site.value;
+				// The direct path has always shipped every branch of a static choice.
+				// The forwarded path dropped all but the first, so `<Row rowId={big ?
+				// "A" : "B"}/>` lost `B` from the tree and from the inventory, and a
+				// selector written for it came back dead.
+				if (site.alternatives && site.alternatives.length > 0) {
+					node.testIdAlternatives = site.alternatives;
+				}
 				if (site.viaProp) {
 					node.viaProp = site.viaProp;
 				}
@@ -2226,8 +2263,14 @@ class TreeBuilder {
 				return { kind: "unknown" };
 			}
 			const bound = state.bindings.get(reference.name);
-			if (bound) {
-				return { kind: "value", value: bound, viaProp: reference.name };
+			const [primary, ...alternatives] = bound ?? [];
+			if (primary) {
+				return {
+					kind: "value",
+					value: primary,
+					...(alternatives.length > 0 ? { alternatives } : {}),
+					viaProp: reference.name,
+				};
 			}
 			if (this.provablyAbsent(reference, owner, state)) {
 				const declared = owner.propDefaults.get(reference.name);
@@ -2259,7 +2302,8 @@ class TreeBuilder {
 		if (!declaresProp(fallback.reference, owner)) {
 			return { kind: "unknown" };
 		}
-		const bound = state.bindings.get(fallback.reference.name);
+		const [bound, ...boundRest] =
+			state.bindings.get(fallback.reference.name) ?? [];
 		if (bound) {
 			// The call site passed a readable value, so the operator decides. A
 			// ternary decides on its *condition*, and what it renders when the
@@ -2267,15 +2311,26 @@ class TreeBuilder {
 			if (fallback.form === "ternary") {
 				return { kind: "unknown" };
 			}
-			const truthy = bound.kind !== "static" || (bound.value ?? "") !== "";
-			return fallback.form === "nullish" || truthy
-				? { kind: "value", value: bound, viaProp: fallback.reference.name }
-				: {
-						kind: "value",
-						value: fallback.value,
-						viaProp: fallback.reference.name,
-						viaDefault: true,
-					};
+			// A static choice at the call site puts each branch through the operator
+			// separately, and an empty one falls back — so the branches can disagree
+			// about which value renders. Both readings ship, primary first.
+			const resolveOne = (branch: TestIdValue): TestIdValue =>
+				fallback.form === "nullish" ||
+				branch.kind !== "static" ||
+				(branch.value ?? "") !== ""
+					? branch
+					: fallback.value;
+			const primary = resolveOne(bound);
+			const alternatives = boundRest
+				.map(resolveOne)
+				.filter((value) => value !== primary);
+			return {
+				kind: "value",
+				value: primary,
+				...(alternatives.length > 0 ? { alternatives } : {}),
+				viaProp: fallback.reference.name,
+				...(primary === fallback.value ? { viaDefault: true as const } : {}),
+			};
 		}
 		if (this.provablyAbsent(fallback.reference, owner, state)) {
 			return {

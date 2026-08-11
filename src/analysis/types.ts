@@ -879,14 +879,20 @@ export interface CoverageReport {
 		/** The id only counts as rendered because `assumeForwarded` was on. */
 		forwarding?: "assumed";
 		/**
-		 * The same id is *also* written this many times as a component prop that
-		 * nothing proved reaches the DOM.
+		 * This selector *also* reaches this many component-prop sites that nothing
+		 * proved reach the DOM.
 		 *
 		 * A match is only ever made against proven elements, so `occurrences` above
-		 * is sound. This says the id has a second life the match did not consider —
-		 * and on a real repository that is where a broken selector hides: the entry
-		 * looks clean because some *other* component renders the same id, while the
-		 * site the page object was written for forwards a prop nobody can follow.
+		 * is sound. This says the selector has a second life the match did not
+		 * consider — and on a real repository that is where a broken selector hides:
+		 * the entry looks clean because some *other* component renders a matching
+		 * id, while the site the page object was written for forwards a prop nobody
+		 * can follow.
+		 *
+		 * Judged against the selector rather than against the id it matched on,
+		 * because a pattern, probe or prefix match has no id at all — keying on one
+		 * silently skipped every speculative match, which is the set least able to
+		 * speak for itself.
 		 */
 		unprovenOccurrences?: number;
 		/** First of those sites, so the caller can go and look. */

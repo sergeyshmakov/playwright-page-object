@@ -91,7 +91,21 @@ export interface ClassifySides {
 }
 
 export type SelectorClassification =
-	| { stage: "A" | "C"; verdict: "matched"; matches: Match[] }
+	| {
+			stage: "A" | "C";
+			verdict: "matched";
+			matches: Match[];
+			/**
+			 * Unproven component-prop sites this same selector also reaches.
+			 *
+			 * Computed from the *selector*, not from the id it happened to match on.
+			 * The caller used to key this off `match.ui.id`, which is `null` for
+			 * every pattern, probe and prefix match by construction — so the whole
+			 * disclosure was dead code for stage C, exactly the speculative matches
+			 * least able to speak for themselves.
+			 */
+			alsoUnproven: Match[];
+	  }
 	| {
 			stage: "B" | "D";
 			verdict: "forwarding-unproven";
@@ -247,6 +261,15 @@ export function classifySelector(
 ): SelectorClassification {
 	const regex = selector.pattern ? compilePattern(selector.pattern) : null;
 
+	// The unproven half of the UI, judged against this selector. Only computed on
+	// the two rungs that answer "matched", where it is the disclosure that keeps a
+	// clean-looking entry honest; B and D already report the prop side as their
+	// verdict.
+	const alsoUnproven = (): Match[] => [
+		...directMatches(selector, regex, sides.propById, sides.propStatic),
+		...speculativeMatches(selector, regex, sides.propPatterns),
+	];
+
 	const direct = directMatches(
 		selector,
 		regex,
@@ -254,7 +277,12 @@ export function classifySelector(
 		sides.renderedStatic,
 	);
 	if (direct.length > 0) {
-		return { stage: "A", verdict: "matched", matches: direct };
+		return {
+			stage: "A",
+			verdict: "matched",
+			matches: direct,
+			alsoUnproven: alsoUnproven(),
+		};
 	}
 
 	const directProp = directMatches(
@@ -281,7 +309,12 @@ export function classifySelector(
 		sides.renderedPatterns,
 	);
 	if (speculative.length > 0) {
-		return { stage: "C", verdict: "matched", matches: speculative };
+		return {
+			stage: "C",
+			verdict: "matched",
+			matches: speculative,
+			alsoUnproven: alsoUnproven(),
+		};
 	}
 
 	const speculativeProp = speculativeMatches(
