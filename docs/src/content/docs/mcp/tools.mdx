@@ -94,7 +94,7 @@ That means `repeat` warnings of this code are still in force and their text has 
 | `ambiguous_component` | `get_testid_tree` | Several files declare that component name, or `file` named only a trailing segment that fits more than one scanned file. `candidates` lists them; re-call with the full project-relative `file` |
 | `incomplete_tree` | `get_testid_tree` | The named component could not be rooted. `candidates` lists the other components in that file; or pass `testId` to look the id up across the whole scan |
 | `file_not_found` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | The path or component name selects nothing. Use `suggestions` / `candidates`, or drop the argument to widen the search |
-| `expired_handle` | `query_coverage` | The `coverageId` is unknown, older than 10 minutes, or was invalidated because an analysed file changed. Re-call `map_coverage` with the arguments that produced it — the scope is not recoverable from the id — and use the new `meta.coverageId` |
+| `expired_handle` | `query_coverage` | The `coverageId` is unknown, unused for 10 minutes, or was invalidated because an analysed file changed. Re-call `map_coverage` with the arguments that produced it — the scope is not recoverable from the id — and use the new `meta.coverageId` |
 | `too_large` | `list_page_objects`, `get_page_object_tree`, `get_testid_tree` | Apply the `hint`; it names the knobs that tool has. The coverage tools trim instead of raising this |
 | `max_files_exceeded` | all | Restart the server with a higher `--max-files`, or narrow the scan as described in [Configuration](/mcp/configuration/#how-do-i-control-the-scanned-files) |
 | `internal_error` | all | An unexpected failure, returned in-band rather than as a transport error. The message is the thrown error's; the server also logs it to stderr |
@@ -513,7 +513,7 @@ Copy `meta.nextOffset` into the next call's `offset` and stop when that key stop
 
 A handle turns that into a reported failure. The id is bound to the exact report it was minted from, and the same edit invalidates it:
 
-- It is valid for **10 minutes**, for that server process only.
+- It stays valid for **10 minutes after its last use**, for that server process only. Paging keeps it alive, so a long walk cannot time out half way through it.
 - It is invalidated as soon as any analysed file changes on disk.
 - Spending an invalid one fails with `expired_handle`. Re-call `map_coverage` with the arguments that produced it — the scope is not recoverable from the id — and use the new `meta.coverageId`.
 - At most 8 handles live at once; older ones are evicted.

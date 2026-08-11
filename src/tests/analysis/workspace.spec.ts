@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Project } from "ts-morph";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONFIG_CANDIDATES } from "../../analysis/config/configDiscovery";
 import { AnalysisLimitError } from "../../analysis/diagnostics";
 import { toPosix } from "../../analysis/util/paths";
@@ -101,6 +101,49 @@ describe("Workspace.acquire", () => {
 		Workspace.acquire({ projectRoot: c });
 		expect(Workspace.cacheSize).toBe(2);
 		expect(Workspace.acquire({ projectRoot: a })).not.toBe(first);
+	});
+
+	/**
+	 * The LRU bounds how many workspaces are held, never how long. A stdio
+	 * server is one process holding one workspace while the editor is open, so a
+	 * ts-morph Project measured at 645 MB stayed resident all day whether or not
+	 * another call ever came.
+	 */
+	it("drops a workspace nobody has asked anything for ten minutes", () => {
+		vi.useFakeTimers();
+		try {
+			const root = scratch({ "src/a.ts": "export const a = 1;" });
+			const first = Workspace.acquire({ projectRoot: root });
+			expect(Workspace.cacheSize).toBe(1);
+
+			vi.advanceTimersByTime(10 * 60_000 + 1);
+			expect(Workspace.cacheSize, "idle for the whole window").toBe(0);
+
+			// The next call answers; it simply pays to rebuild.
+			const rebuilt = Workspace.acquire({ projectRoot: root });
+			expect(rebuilt).not.toBe(first);
+			expect(Workspace.cacheSize).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a workspace alive while calls keep arriving", () => {
+		vi.useFakeTimers();
+		try {
+			const root = scratch({ "src/a.ts": "export const a = 1;" });
+			const first = Workspace.acquire({ projectRoot: root });
+
+			// An hour of work, nine minutes between calls: never idle long enough.
+			for (let call = 0; call < 6; call += 1) {
+				vi.advanceTimersByTime(9 * 60_000);
+				expect(Workspace.acquire({ projectRoot: root }), `call ${call}`).toBe(
+					first,
+				);
+			}
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("treats different include globs as different workspaces", () => {

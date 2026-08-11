@@ -54,6 +54,27 @@ export const DEFAULT_TEST_ID_ATTRIBUTE = "data-testid";
 const DEFAULT_MAX_FILES = 2000;
 const DEFAULT_STALE_AFTER_MS = 1000;
 const LRU_SIZE = 2;
+
+/**
+ * How long a cached workspace survives with nobody asking it anything.
+ *
+ * The LRU bounds how *many* workspaces are held, never how long. A stdio server
+ * is one process holding one workspace for as long as the editor is open, so a
+ * ts-morph `Project` over a large monorepo — measured at 645 MB on a 4,924-file
+ * app and 867 MB at its repository root — stayed resident all day whether or
+ * not another call ever came.
+ *
+ * Ten minutes of silence is an agent that has moved on. The cost of being wrong
+ * is one cold rebuild (~2.3 s) on the next call; the cost of not doing it is
+ * half a gigabyte held against a developer's machine indefinitely.
+ *
+ * It matches {@link HANDLE_TTL_MS} in the MCP layer deliberately: both are idle
+ * timers over the same activity, so an idle session releases its workspace and
+ * its coverage handles together instead of one outliving the other. Eviction is
+ * safe for a live handle in any case — the store compares workspace identity
+ * and returns a recoverable `expired_handle`.
+ */
+const IDLE_EVICT_AFTER_MS = 10 * 60_000;
 /** Sentinel for "the running file total has to be recounted". */
 const UNKNOWN_TOTAL = -1;
 /**
@@ -194,6 +215,12 @@ export class Workspace {
 	private staleAfterMs: number;
 	/** Set once the workspace is in the LRU, so it can evict itself. */
 	private cacheKey: string | null = null;
+	/**
+	 * Fires if nothing acquires this workspace for {@link IDLE_EVICT_AFTER_MS}.
+	 * `unref`ed, so a pending eviction never holds the process open — a CLI that
+	 * has answered its one question still exits immediately.
+	 */
+	private idleTimer: ReturnType<typeof setTimeout> | null = null;
 	private playwrightInfo: {
 		epoch: number;
 		value: PlaywrightConfigInfo;
@@ -259,6 +286,7 @@ export class Workspace {
 				existing.revalidate();
 			}
 			existing.noteMissingScope(missing);
+			existing.touch();
 			return existing;
 		}
 
@@ -266,19 +294,52 @@ export class Workspace {
 		created.cacheKey = key;
 		created.noteMissingScope(missing);
 		Workspace.cache.set(key, created);
+		created.touch();
 		while (Workspace.cache.size > LRU_SIZE) {
-			const oldest = Workspace.cache.keys().next();
+			const oldest = Workspace.cache.entries().next();
 			if (oldest.done) {
 				break;
 			}
-			Workspace.cache.delete(oldest.value);
+			oldest.value[1].clearIdleTimer();
+			Workspace.cache.delete(oldest.value[0]);
 		}
 		return created;
 	}
 
 	/** Drops every cached workspace. Tests use this to stay hermetic. */
 	static reset(): void {
+		for (const workspace of Workspace.cache.values()) {
+			workspace.clearIdleTimer();
+		}
 		Workspace.cache.clear();
+	}
+
+	/**
+	 * Restarts the idle countdown. Called on every acquire, so the timer measures
+	 * silence rather than age — a session in continuous use never evicts.
+	 */
+	private touch(idleMs: number = IDLE_EVICT_AFTER_MS): void {
+		this.clearIdleTimer();
+		if (this.cacheKey === null) {
+			return;
+		}
+		const key = this.cacheKey;
+		this.idleTimer = setTimeout(() => {
+			// Only if this exact instance is still the cached one: a rebuild under
+			// the same key must not be evicted by its predecessor's timer.
+			if (Workspace.cache.get(key) === this) {
+				Workspace.cache.delete(key);
+			}
+			this.idleTimer = null;
+		}, idleMs);
+		this.idleTimer.unref?.();
+	}
+
+	private clearIdleTimer(): void {
+		if (this.idleTimer !== null) {
+			clearTimeout(this.idleTimer);
+			this.idleTimer = null;
+		}
 	}
 
 	static get cacheSize(): number {

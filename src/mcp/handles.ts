@@ -18,7 +18,19 @@ import type { CoverageReport, Workspace } from "../analysis";
  */
 
 /**
- * How long a handle stays valid, absent any file change.
+ * How long a handle stays valid after its last use, absent any file change.
+ *
+ * Idle time, not age. Paging a 981-entry bucket at 50 a page is twenty calls,
+ * and twenty calls at the pace an agent actually works crosses ten minutes —
+ * so an absolute lifetime expired handles in the middle of exactly the walk
+ * they exist to support. Refreshing on use is also what the policy always
+ * meant: the TTL is a resource bound whose job is to release an *abandoned*
+ * report, and a handle being spent is not abandoned.
+ *
+ * This is not the correctness guard and never was. That is the epoch check in
+ * `resolve`, which refuses the handle the moment any analysed file changes,
+ * however recently it was used — a handle can slide forever and still never
+ * answer from a report that no longer describes the repository.
  *
  * The spec requires the creation tool to state the lifetime, so this number is
  * quoted in `map_coverage`'s description and in the server instructions — it
@@ -55,7 +67,8 @@ interface HandleEntry {
 	 */
 	workspace: Workspace;
 	epoch: number;
-	createdAt: number;
+	/** Refreshed by every successful `resolve`, so the TTL measures idleness. */
+	lastUsedAt: number;
 }
 
 /** Why a handle could not be spent. Each gets its own message. */
@@ -93,7 +106,7 @@ export class CoverageHandles {
 			snapshot,
 			workspace,
 			epoch: workspace.currentEpoch,
-			createdAt: this.now(),
+			lastUsedAt: this.now(),
 		});
 		return id;
 	}
@@ -121,7 +134,7 @@ export class CoverageHandles {
 		if (!entry) {
 			return { ok: false, reason: "unknown" };
 		}
-		if (this.now() - entry.createdAt > this.ttlMs) {
+		if (this.now() - entry.lastUsedAt > this.ttlMs) {
 			this.entries.delete(id);
 			return { ok: false, reason: "expired" };
 		}
@@ -132,7 +145,9 @@ export class CoverageHandles {
 			this.entries.delete(id);
 			return { ok: false, reason: "stale" };
 		}
-		// Refresh the LRU position: a handle being walked is the last one to evict.
+		// Refresh both clocks: a handle being walked is the last one to evict, and
+		// its idle timer starts again from here.
+		entry.lastUsedAt = this.now();
 		this.entries.delete(id);
 		this.entries.set(id, entry);
 		return { ok: true, snapshot: entry.snapshot };
@@ -151,7 +166,7 @@ export class CoverageHandles {
 		const now = this.now();
 		for (const [id, entry] of this.entries) {
 			const dead =
-				now - entry.createdAt > this.ttlMs ||
+				now - entry.lastUsedAt > this.ttlMs ||
 				entry.workspace !== workspace ||
 				entry.epoch !== workspace.currentEpoch;
 			if (dead) {
@@ -162,12 +177,12 @@ export class CoverageHandles {
 }
 
 /** The lifetime sentence every description and hint quotes, written once. */
-export const HANDLE_LIFETIME_TEXT = `A coverageId is valid for ${HANDLE_TTL_MS / 60_000} minutes, for this server process only, and is invalidated as soon as any analysed file changes on disk (a stale page would report lines that have moved). Spending an invalid one returns error code expired_handle; re-call map_coverage to mint a fresh id.`;
+export const HANDLE_LIFETIME_TEXT = `A coverageId stays valid for ${HANDLE_TTL_MS / 60_000} minutes after its last use, for this server process only, so paging never times out mid-walk; it is invalidated as soon as any analysed file changes on disk, however recently it was used (a stale page would report lines that have moved). Spending an invalid one returns error code expired_handle; re-call map_coverage to mint a fresh id.`;
 
 /** The message body for each way a handle can fail, plus its recovery. */
 export function handleFailureMessage(reason: HandleFailure): string {
 	if (reason === "expired") {
-		return `That coverageId has expired (handles live ${HANDLE_TTL_MS / 60_000} minutes).`;
+		return `That coverageId has expired (handles live ${HANDLE_TTL_MS / 60_000} minutes past their last use, and this one was not used in that time).`;
 	}
 	if (reason === "stale") {
 		return "The analysed sources changed on disk since that coverageId was issued, so the report it points at no longer describes the repository.";

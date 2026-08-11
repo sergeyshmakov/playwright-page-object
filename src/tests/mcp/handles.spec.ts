@@ -82,7 +82,26 @@ describe("CoverageHandles", () => {
 		});
 	});
 
-	it("expires a handle once the advertised TTL has passed", () => {
+	it("expires a handle once the advertised TTL has passed unused", () => {
+		const workspace = emptyProject();
+		let clock = 1_000;
+		const handles = new CoverageHandles(
+			HANDLE_TTL_MS,
+			MAX_HANDLES,
+			() => clock,
+		);
+		const id = handles.create(workspace, snapshot("aging"));
+
+		// Deliberately not resolved in between: the clock the TTL reads is idle
+		// time since the last use, and touching the handle here would restart it.
+		clock += HANDLE_TTL_MS + 1;
+		expect(handles.resolve(id, workspace)).toEqual({
+			ok: false,
+			reason: "expired",
+		});
+	});
+
+	it("counts the TTL from the last use, not from the mint", () => {
 		const workspace = emptyProject();
 		let clock = 1_000;
 		const handles = new CoverageHandles(
@@ -93,14 +112,70 @@ describe("CoverageHandles", () => {
 		const id = handles.create(workspace, snapshot("aging"));
 
 		clock += HANDLE_TTL_MS;
-		expect(handles.resolve(id, workspace).ok, "still inside the TTL").toBe(
+		expect(handles.resolve(id, workspace).ok, "just inside the TTL").toBe(true);
+
+		// One past the TTL measured from the *mint*, and a millisecond past the
+		// last use: the old absolute clock refused this, the idle clock allows it.
+		clock += 1;
+		expect(handles.resolve(id, workspace).ok, "refreshed by that use").toBe(
 			true,
 		);
+	});
 
-		clock += 1;
+	/**
+	 * The TTL measures idleness, not age. Twenty pages of a long bucket at the
+	 * pace an agent works crosses ten minutes, and an absolute lifetime expired
+	 * the handle in the middle of the walk it exists to support.
+	 */
+	it("keeps a handle alive as long as it is being used", () => {
+		const workspace = emptyProject();
+		let clock = 1_000;
+		const handles = new CoverageHandles(
+			HANDLE_TTL_MS,
+			MAX_HANDLES,
+			() => clock,
+		);
+		const id = handles.create(workspace, snapshot("walking"));
+
+		// Twenty pages, nine minutes apart: three hours of wall clock, none of it
+		// idle for longer than the TTL.
+		for (let page = 0; page < 20; page += 1) {
+			clock += HANDLE_TTL_MS - 60_000;
+			expect(handles.resolve(id, workspace).ok, `page ${page}`).toBe(true);
+		}
+
+		// Abandoning it still expires it, from the last use rather than the mint.
+		clock += HANDLE_TTL_MS + 1;
 		expect(handles.resolve(id, workspace)).toEqual({
 			ok: false,
 			reason: "expired",
+		});
+	});
+
+	/**
+	 * The guard that stops the sliding TTL becoming a licence to serve stale
+	 * reports. Freshness is the epoch's job, not the clock's: a handle used one
+	 * millisecond ago is refused the moment the sources move, because every
+	 * entry in the report it points at carries a line number that has shifted.
+	 */
+	it("refuses a handle whose sources changed, however recently it was used", () => {
+		const workspace = emptyProject();
+		let clock = 1_000;
+		const handles = new CoverageHandles(
+			HANDLE_TTL_MS,
+			MAX_HANDLES,
+			() => clock,
+		);
+		const id = handles.create(workspace, snapshot("fresh"));
+
+		clock += 1;
+		expect(handles.resolve(id, workspace).ok).toBe(true);
+
+		workspace.bumpEpoch();
+		clock += 1;
+		expect(handles.resolve(id, workspace)).toEqual({
+			ok: false,
+			reason: "stale",
 		});
 	});
 
