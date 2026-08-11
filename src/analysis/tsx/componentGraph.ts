@@ -449,6 +449,28 @@ function nonRelativeImportBindings(
 export interface ExternalModuleEvidence {
 	/** Sorted, capped list of specifiers supplying component tags. */
 	modules: string[];
+	/**
+	 * How many distinct specifiers there really are.
+	 *
+	 * Separate from `modules.length` because that is the length of a *display
+	 * sample*. Reporting the sample's length as the count made the warning say
+	 * "10 module(s)" on every repository with ten or more — saturating silently,
+	 * so a reader sizing their blind spot on a 44-module app underestimated it
+	 * more than four-fold. A capped list is fine; a capped number is a false
+	 * statement.
+	 */
+	moduleCount: number;
+	/**
+	 * The subset of `modules` whose sources were found inside this repository,
+	 * reached through a `node_modules` link — sorted and capped like `modules`.
+	 *
+	 * `sourceRoot` is computed from exactly these, so only these can be said to
+	 * have sources here. The remedy sentence used to be written about every
+	 * named module, which claimed an in-repo source for `@sentry/react`.
+	 */
+	linkedModules: string[];
+	/** How many specifiers are linked, for the same reason as `moduleCount`. */
+	linkedCount: number;
 	/** Component tags whose head resolved to one of those modules. */
 	tags: number;
 	/**
@@ -515,6 +537,8 @@ export class ExternalModuleCensus {
 	private readonly outside: Map<string, ModulePlacement>;
 	/** Real paths of external modules whose sources sit outside the root. */
 	private readonly sourcePaths = new Set<string>();
+	/** Specifiers behind those paths, so the remedy can name only them. */
+	private readonly linked = new Set<string>();
 	/** One importing directory per specifier that resolved to no source. */
 	private readonly sampleDirs = new Map<string, string>();
 	private tagCount = 0;
@@ -550,6 +574,7 @@ export class ExternalModuleCensus {
 			this.modules.add(specifier);
 			if (placement.sourcePath) {
 				this.sourcePaths.add(placement.sourcePath);
+				this.linked.add(specifier);
 			} else if (!this.sampleDirs.has(specifier)) {
 				// One importer per specifier is enough to walk up from later; keeping
 				// them all would be a map the size of the repository.
@@ -560,6 +585,7 @@ export class ExternalModuleCensus {
 
 	evidence(): ExternalModuleEvidence {
 		const sources = new Set(this.sourcePaths);
+		const linked = new Set(this.linked);
 		// Deferred to here on purpose. This is the only filesystem walk the census
 		// does, and doing it per (file, specifier) in `add` would run it thousands
 		// of times on a monorepo; the answer it produces is one directory name for
@@ -586,10 +612,14 @@ export class ExternalModuleCensus {
 			}
 			if (placement.sourcePath) {
 				sources.add(placement.sourcePath);
+				linked.add(specifier);
 			}
 		}
 		return {
 			modules: [...this.modules].sort().slice(0, MAX_EXTERNAL_MODULES),
+			moduleCount: this.modules.size,
+			linkedModules: [...linked].sort().slice(0, MAX_EXTERNAL_MODULES),
+			linkedCount: linked.size,
 			tags: this.tagCount,
 			sourceRoot:
 				sources.size === 0

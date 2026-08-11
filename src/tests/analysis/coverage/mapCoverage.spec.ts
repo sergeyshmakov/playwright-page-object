@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildCoverageReport } from "../../../analysis/coverage/mapCoverage";
+import {
+	buildCoverageReport,
+	scopeMessage,
+} from "../../../analysis/coverage/mapCoverage";
 import { libImport, makeWorkspace } from "../helpers/inMemory";
 
 const UI = {
@@ -766,6 +769,45 @@ describe("buildCoverageReport — component tags from outside the scan", () => {
 		expect(result.scope.pageObjectFilesScanned).toBeGreaterThan(0);
 	});
 
+	/**
+	 * The list of modules is capped at ten for display. The *count* beside it was
+	 * read off that capped array, so every repository with ten or more external
+	 * modules was told it had exactly ten — the number saturated silently, and a
+	 * reader sizing their blind spot on a 44-module app underestimated it more
+	 * than four-fold. A capped list is fine; a capped number is a false claim.
+	 */
+	it("reports how many modules there are, not how many it printed", () => {
+		const tags = Array.from({ length: 25 }, (_, index) => `<C${index} />`).join(
+			"",
+		);
+		const imports = Array.from(
+			{ length: 25 },
+			(_, index) => `import { C${index} } from "@design/pkg${index}";`,
+		).join("\n");
+		const result = buildCoverageReport(
+			makeWorkspace({
+				"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+				"src/App.tsx": [
+					imports,
+					"export default function App() {",
+					`  return <main>${tags}<div data-testid="Local" /></main>;`,
+					"}",
+				].join("\n"),
+				...pageObject("Local"),
+			}),
+		);
+
+		expect(result.scope.externalComponentModules).toHaveLength(10);
+		const scope = result.warnings.find(
+			(entry) => entry.code === "ui-scope-incomplete",
+		);
+		expect(scope?.data?.modules).toBe(25);
+		expect(scope?.message).toContain("25 module(s)");
+		// And it must admit the list is a sample rather than let the reader take
+		// ten names as the whole set next to a count of 25.
+		expect(scope?.message).toContain("first 10 by name");
+	});
+
 	it("stays informational while nothing looks broken", () => {
 		const result = buildCoverageReport(
 			makeWorkspace({ ...EXTERNAL, ...pageObject("Local") }),
@@ -1107,5 +1149,75 @@ describe("buildCoverageReport — member paths", () => {
 		expect(result.matched.map((entry) => entry.selector.memberPath)).toContain(
 			"HomePage.Rows[item].Cell",
 		);
+	});
+});
+
+/**
+ * Deciding a module is *linked* means resolving a real `node_modules` symlink on
+ * disk, which an in-memory fixture cannot produce — so the message is exercised
+ * directly. It is the sentence that tells a reader where to re-root, and it was
+ * asserting an in-repo source for every module it had just named.
+ */
+describe("scopeMessage — who is claimed to have sources here", () => {
+	const BASE = {
+		tags: 40,
+		modules: ["@design/ui", "@sentry/react"],
+		moduleCount: 2,
+		deadCount: 3,
+	};
+
+	it("names only the linked modules, and accounts for the rest", () => {
+		const message = scopeMessage({
+			...BASE,
+			linkedModules: ["@design/ui"],
+			linkedCount: 1,
+			sourceRoot: "C:/repo",
+		});
+
+		expect(message).toContain("1 of them (@design/ui)");
+		expect(message).toContain('rooted at "C:/repo"');
+		// The claim that must not spread to the installed package.
+		expect(message).not.toContain("@sentry/react) resolve through");
+		expect(message).toContain(
+			"The other 1 resolve to installed packages or do not resolve at all",
+		);
+	});
+
+	it("promises no re-rooting when nothing is linked", () => {
+		const message = scopeMessage({
+			...BASE,
+			linkedModules: [],
+			linkedCount: 0,
+		});
+
+		expect(message).not.toContain("node_modules link");
+		expect(message).not.toContain("re-run with the analysis rooted");
+		expect(message).toContain("They resolve to installed packages");
+	});
+
+	it("does not present a capped list as the whole set", () => {
+		const ten = Array.from({ length: 10 }, (_, index) => `@pkg/m${index}`);
+		const message = scopeMessage({
+			tags: 500,
+			modules: ten,
+			moduleCount: 44,
+			linkedModules: [],
+			linkedCount: 0,
+			deadCount: 0,
+		});
+
+		expect(message).toContain("44 module(s)");
+		expect(message).toContain("first 10 by name");
+	});
+
+	it("says nothing about a sample when the list is complete", () => {
+		const message = scopeMessage({
+			...BASE,
+			linkedModules: [],
+			linkedCount: 0,
+		});
+
+		expect(message).toContain("2 module(s)");
+		expect(message).not.toContain("first 2 by name");
 	});
 });

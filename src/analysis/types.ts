@@ -607,6 +607,20 @@ export interface TestIdTree {
 	 */
 	externalModules: string[];
 	/**
+	 * How many distinct such specifiers there are, which is **not**
+	 * `externalModules.length` once there are more than ten of them: that array
+	 * is a display sample. Anything reporting a count must read this.
+	 */
+	externalModuleCount: number;
+	/**
+	 * The subset of `externalModules` whose sources were found inside this
+	 * repository — the only ones {@link externalModuleRoot} is derived from, and
+	 * so the only ones anything may claim have sources here. Sorted, capped.
+	 */
+	linkedExternalModules: string[];
+	/** How many are linked, for the same reason as {@link externalModuleCount}. */
+	linkedExternalModuleCount: number;
+	/**
 	 * Directory to root an analysis at so those modules' sources come into scope,
 	 * present only when at least one of them *has* sources here: a package linked
 	 * into `node_modules` from elsewhere in the repository, which is the workspace

@@ -795,6 +795,9 @@ function computeTestIdTree(
 		inventory,
 		components,
 		externalModules: externals.modules,
+		externalModuleCount: externals.moduleCount,
+		linkedExternalModules: externals.linkedModules,
+		linkedExternalModuleCount: externals.linkedCount,
 		warnings: dedupeDiagnostics(warnings),
 		stats: {
 			files: files.length + extraFiles,

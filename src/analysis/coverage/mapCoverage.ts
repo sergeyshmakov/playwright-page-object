@@ -982,12 +982,24 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 		// as a substring of an English sentence.
 		const data = {
 			tags: inputs.uiTree.stats.externalComponentTags,
-			modules: modules.length,
+			// The real total, not `modules.length` — that array is capped at ten for
+			// display, so reading its length reported "10" for every repository with
+			// ten or more and told a reader on a 44-module app their blind spot was
+			// a quarter of its actual size.
+			modules: inputs.uiTree.externalModuleCount,
 			...(inputs.uiTree.externalModuleRoot
 				? { sourceRoot: inputs.uiTree.externalModuleRoot }
 				: {}),
 		};
-		const message = scopeMessage(inputs, modules);
+		const message = scopeMessage({
+			tags: inputs.uiTree.stats.externalComponentTags,
+			modules,
+			moduleCount: inputs.uiTree.externalModuleCount,
+			linkedModules: inputs.uiTree.linkedExternalModules,
+			linkedCount: inputs.uiTree.linkedExternalModuleCount,
+			sourceRoot: inputs.uiTree.externalModuleRoot,
+			deadCount: inputs.deadCount,
+		});
 		out.push(
 			inputs.deadCount > 0
 				? warn("ui-scope-incomplete", message, undefined, data)
@@ -1036,20 +1048,68 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
  * at all. Re-rooting is the only one of the two that reaches them, and when
  * the modules resolve to source it can even be named exactly.
  */
-function scopeMessage(inputs: WarningInputs, modules: string[]): string {
-	const named = modules.length > 0 ? modules.join(", ") : "unresolved modules";
+export interface ScopeEvidence {
+	tags: number;
+	/** Display sample of the specifiers, capped. */
+	modules: string[];
+	/** How many there really are. Never `modules.length`. */
+	moduleCount: number;
+	/** Display sample of those with sources in this repository, capped. */
+	linkedModules: string[];
+	linkedCount: number;
+	sourceRoot?: string;
+	deadCount: number;
+}
+
+/**
+ * Exported for tests: the linked/installed split cannot be reached through
+ * `buildCoverageReport` from an in-memory fixture, because deciding a module is
+ * *linked* means resolving a real `node_modules` symlink on disk. Taking the
+ * evidence as a value rather than reaching into `WarningInputs` also keeps this
+ * function honest about the handful of fields it actually reads.
+ */
+export function scopeMessage(evidence: ScopeEvidence): string {
+	const {
+		modules,
+		moduleCount: total,
+		linkedModules: linked,
+		linkedCount,
+		sourceRoot: root,
+		deadCount,
+	} = evidence;
+	// Say when the list is a sample. `modules` is capped at ten; presenting it
+	// as the whole set alongside a larger count would read as a contradiction.
+	const named =
+		modules.length === 0
+			? "unresolved modules"
+			: modules.length < total
+				? `first ${modules.length} by name: ${modules.join(", ")}`
+				: modules.join(", ");
 	// Only when there are entries to have been stamped: promising a flag on an
 	// empty list sends a reader looking for something that is not there.
 	const flagged =
-		inputs.deadCount > 0
-			? ` All ${inputs.deadCount} entr${inputs.deadCount === 1 ? "y" : "ies"} in deadSelectors carry scopeIncomplete for this reason — read them as unverified. Triage by nearestTestIds: a non-empty list is the actionable case, because an id one edit away is what a rename leaves behind. An empty list here more often means the id is rendered inside one of the modules above than that the selector is wrong.`
+		deadCount > 0
+			? ` All ${deadCount} entr${deadCount === 1 ? "y" : "ies"} in deadSelectors carry scopeIncomplete for this reason — read them as unverified. Triage by nearestTestIds: a non-empty list is the actionable case, because an id one edit away is what a rename leaves behind. An empty list here more often means the id is rendered inside one of the modules above than that the selector is wrong.`
 			: "";
-	const root = inputs.uiTree.externalModuleRoot;
+	// Only the modules that actually resolved to in-repo source may be said to
+	// have any: `root` is the common ancestor of *those*, and the sentence used
+	// to generalise it to every module named above — asserting that
+	// `@sentry/react` ships its sources from this repository. The rest are
+	// installed packages, and the two halves take different advice, so both are
+	// stated.
+	const linkedNames =
+		linked.length < linkedCount
+			? `${linked.join(", ")}, and ${linkedCount - linked.length} more`
+			: linked.join(", ");
+	const rest =
+		linkedCount < total
+			? ` The other ${total - linkedCount} resolve to installed packages or do not resolve at all; nothing in scope reaches those, and the ids inside them can only be confirmed from the packages themselves.`
+			: "";
 	const remedy = root
-		? `Their sources are in this repository, at or under "${root}", reached through a node_modules link from outside the analysed root — re-run with the analysis rooted at "${root}" to bring them into scope. Widening the scanned directories cannot: a directory outside the root is dropped before anything is counted.`
+		? `${linkedCount} of them (${linkedNames}) resolve through a node_modules link onto sources in this repository, at or under "${root}" — re-run with the analysis rooted at "${root}" to bring those into scope. Widening the scanned directories cannot: a directory outside the root is dropped before anything is counted.${rest}`
 		: "They resolve to installed packages, or do not resolve at all, so no scanning scope reaches their sources; the ids inside them can only be confirmed from the packages themselves.";
 	return (
-		`${inputs.uiTree.stats.externalComponentTags} component tag(s) come from ${modules.length} module(s) outside the scanned sources (${named}). ` +
+		`${evidence.tags} component tag(s) come from ${total} module(s) outside the scanned sources (${named}). ` +
 		"Test ids rendered inside them are invisible here, so an id may exist without appearing in this report and a selector for one reads as dead. " +
 		remedy +
 		flagged
