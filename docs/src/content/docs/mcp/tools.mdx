@@ -314,6 +314,17 @@ Two things the walk resolves that are easy to assume it does not. A same-file fu
 
 In the outline format the same flags appear in parentheses, and `-` stands for a node with no test ID.
 
+The outline also summarises where repeating itself would cost more than it says. Four rules, none of which can drop an ID or a hole:
+
+| You see | It means |
+| --- | --- |
+| `:106` with no path | The file is the nearest one named above it. Paths are printed only where they change — on one production page that was 40% of the outline |
+| `(contents as at src/Modal.tsx:10)` | This node's children are the ones already printed at that location. The call site and its own ID are still shown |
+| `... 12 boundaries not expanded (external module: Modal, Button, +3 more)` | Twelve sibling holes with the same reason, as one line. `meta.fidelityReason` still counts them exactly |
+| A provider or layout wrapper is missing | A node with no ID, no hole and no flags is spliced out and its children move up. Nesting in an outline means "renders inside", not "is a direct DOM child" |
+
+None of this applies to `format: "json"`, which stays complete: every node, every `loc`, every field. Measured on one production page component, the four rules together took the response from 74,763 to 43,388 bytes.
+
 A `testId` lookup returns `{ occurrences }`, each with the source location, the enclosing component, and `reach`:
 
 | `reach` | Meaning |
@@ -372,7 +383,7 @@ The same call with `followComponents: false` from the app entry shows the other 
 | `class` | string | optional | Narrow the page-object side to the file declaring this class |
 | `file` | string | optional | Limit the page-object side to one file, spelled as `list_page_objects` reports it. A leading `./` and Windows separators are accepted |
 | `attribute` | string | optional | Per-call override of the test-ID attribute |
-| `includeUnused` | boolean | `true` | Include `uncoveredTestIds`. Ignored when `buckets` is given |
+| `includeUnused` | boolean | `true`, or `false` when `class`/`file` is set | Include `uncoveredTestIds`. Ignored when `buckets` is given |
 | `includeRawLocators` | boolean | `false` | Also scan for direct `getByTestId` / `getItemByTestId` / `filterByItemTestId` / `filterByHasTestId` calls |
 | `buckets` | array | optional | Return only these lists. `[]` returns `summary` and `scope` alone. Wins over `includeUnused`, which is then echoed in `meta.ignored` |
 | `limit` | integer 1 to 1000 | `50` | Per bucket |
@@ -396,6 +407,8 @@ Omit `class` and `file` to scan the whole project. Scoping happens by path, so `
 | `unknownTestIds` | Test-ID occurrences the scanner cannot place on a rendered host element: `dynamic-value`, `forwarding-unproven`, or `unanchored-pattern` |
 
 `summary.coverage` is `coveredUiTestIds / matchableUiTestIds`, or **`null`** when nothing was matchable. It is never `1` for a scan that found nothing, which is the failure mode that used to make a misconfigured server look healthy. `scope` reports what the two sides were drawn from, including component tags coming from modules outside the scanned sources.
+
+The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by default. Scoping narrows the selectors, so that list is still every uncovered ID in the application — mostly IDs the page objects you did not name already cover, and 61,788 bytes of them on a real app. `summary.uncoveredTestIds` still counts them, and `includeUnused: true` or `buckets: ["uncoveredTestIds"]` still returns the list.
 
 `coverage` is also `null` when you scope the call with `class` or `file`, with a `coverage-scope-narrowed` warning. Scoping narrows the selectors but not the rendered ids they are compared against, and there is no honest way to narrow the second half: nothing statically ties a page object to a subset of the UI. The two counts still ship in `summary`, so you can read them; the ratio between them would answer a question nobody asked.
 
@@ -516,11 +529,14 @@ Results always reflect the files on disk at the moment of the call, so a stale p
 | | `json` | `outline` |
 | --- | --- | --- |
 | Shape | Structured objects, stable field names | Indented plain text |
-| Tokens | Usually higher on deep trees | Usually lower |
+| Tokens | Usually higher on deep trees | 3–5× lower; measured at 4.7× on one production component tree |
 | Machine-parseable | Yes | No |
-| Carries locations | Yes, `loc` with line and column | Yes, `file:line` |
+| Carries locations | Yes, `loc` with line and column | Yes, `file:line` — the path only where it changes |
+| Carries every node | Yes | No: identical repeated subtrees, runs of sibling holes and flagless wrappers are summarised |
 | Carries every field | Yes | No: visibility, JSDoc and column numbers are dropped |
 
 Use `outline` when an agent only has to read the shape, which is most of the time, and `json` when something downstream has to parse it. A `too_large` error on a JSON call is usually solved by switching format before touching `depth`.
+
+What `outline` never summarises away is a test ID or a hole. Every ID the analysis found, and every place it could not see past, has its own line in both formats — the summarising only ever removes a repeat or a node that carried neither.
 
 `meta` is identical in both formats, so switching to `outline` costs you no warning, hint, or `apiHints`.

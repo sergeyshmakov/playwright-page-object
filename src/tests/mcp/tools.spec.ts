@@ -1201,6 +1201,85 @@ describe("MCP server over in-memory transport", () => {
 		);
 	}, 30_000);
 
+	/**
+	 * Scoping narrows the selectors and cannot narrow the ids they are compared
+	 * against, so `uncoveredTestIds` on a scoped call is every id in the
+	 * application — 61,788 bytes of them on a real app, nearly all covered by
+	 * page objects the caller did not ask about. The report explained this in a
+	 * warning you had to buy the whole list to read.
+	 */
+	it("map_coverage leaves the project-wide list out of a scoped call", async () => {
+		const files = {
+			"e2e/AlphaPage.ts": [
+				'import type { Locator } from "@playwright/test";',
+				'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+				"",
+				'@RootSelector("AlphaRoot")',
+				"export class AlphaPage extends RootPageObject {",
+				'\t@Selector("AlphaInput")',
+				"\taccessor Input!: Locator;",
+				"}",
+				"",
+			].join("\n"),
+			"src/App.tsx": [
+				"export function App() {",
+				"\treturn (",
+				"\t\t<div>",
+				'\t\t\t<input data-testid="AlphaInput" />',
+				'\t\t\t<span data-testid="SomebodyElsesId" />',
+				'\t\t\t<span data-testid="AnotherStrangersId" />',
+				"\t\t</div>",
+				"\t);",
+				"}",
+				"",
+			].join("\n"),
+		};
+
+		await withProject("ppo-scoped-unused-", files, async (client) => {
+			const scoped = await callTool(client, "map_coverage", {
+				class: "AlphaPage",
+			});
+			const data = scoped.envelope.data as {
+				uncoveredTestIds?: unknown[];
+				summary: { uncoveredTestIds: number };
+			};
+
+			expect(data.uncoveredTestIds).toBeUndefined();
+			// Left out of the payload, never out of the accounting.
+			expect(data.summary.uncoveredTestIds).toBe(2);
+			expect(String(scoped.envelope.meta?.hint ?? "")).toContain(
+				'buckets:["uncoveredTestIds"]',
+			);
+
+			// Asking still works, both ways.
+			const asked = await callTool(client, "map_coverage", {
+				class: "AlphaPage",
+				includeUnused: true,
+			});
+			expect(
+				(asked.envelope.data as { uncoveredTestIds: unknown[] })
+					.uncoveredTestIds,
+			).toHaveLength(2);
+
+			const byBucket = await callTool(client, "map_coverage", {
+				class: "AlphaPage",
+				buckets: ["uncoveredTestIds"],
+			});
+			expect(
+				(byBucket.envelope.data as { uncoveredTestIds: unknown[] })
+					.uncoveredTestIds,
+			).toHaveLength(2);
+		});
+
+		// An unscoped call is unchanged: there the list is the answer.
+		await withProject("ppo-unscoped-unused-", files, async (client) => {
+			const { envelope } = await callTool(client, "map_coverage", {});
+			expect(
+				(envelope.data as { uncoveredTestIds: unknown[] }).uncoveredTestIds,
+			).toHaveLength(2);
+		});
+	}, 30_000);
+
 	// The default report advises `includeRawLocators`; advice a caller cannot act
 	// on is worse than none, so the option has to exist on the tool itself.
 	it("map_coverage can act on its own includeRawLocators advice", async () => {
@@ -1555,6 +1634,78 @@ describe("MCP server over in-memory transport", () => {
 						`${name} must say which flag fixes it`,
 					).toContain("--attribute data-tid");
 				}
+			},
+		);
+	}, 30_000);
+
+	/**
+	 * The nodes are real; every one of them is id-less, because the run read an
+	 * attribute the sources do not use. 11 KB to say "you are reading the wrong
+	 * attribute", which the warning and the hint already say in full.
+	 */
+	it("omits a tree the wrong attribute has emptied of every id", async () => {
+		await withProject(
+			"ppo-blind-tree-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					"\treturn (",
+					'\t\t<div data-tid="AppRoot">',
+					'\t\t\t<input data-tid="EmailInput" />',
+					'\t\t\t<button data-tid="SubmitButton" />',
+					"\t\t</div>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { isError, envelope } = await callTool(
+					client,
+					"get_testid_tree",
+					{ component: "App" },
+				);
+
+				expect(isError, "it must still answer").toBe(false);
+				const data = envelope.data as { roots: unknown[] };
+				expect(data.roots).toEqual([]);
+				expect(String(envelope.meta?.suppressed ?? "")).toContain(
+					"attribute-mismatch",
+				);
+				// The half that must survive: the reason, and the flag that fixes it.
+				expect(String(envelope.meta?.hint ?? "")).toContain(
+					"--attribute data-tid",
+				);
+			},
+		);
+	}, 30_000);
+
+	/**
+	 * A tree with even one id is shipped whole — the reader then has something to
+	 * check the warning against, and suppressing it would hide a real answer.
+	 */
+	it("still ships a tree that found an id despite the warning", async () => {
+		await withProject(
+			"ppo-blind-partial-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					"\treturn (",
+					'\t\t<div data-tid="AppRoot">',
+					'\t\t\t<input data-tid="EmailInput" />',
+					'\t\t\t<span data-testid="TheOddOneOut" />',
+					"\t\t</div>",
+					"\t);",
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "get_testid_tree", {
+					component: "App",
+				});
+				expect(envelope.meta?.suppressed).toBeUndefined();
+				expect((envelope.data as { roots: unknown[] }).roots.length).toBe(1);
 			},
 		);
 	}, 30_000);

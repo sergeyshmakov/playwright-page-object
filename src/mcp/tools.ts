@@ -420,6 +420,40 @@ export function handleGetPageObjectTree(
 	);
 }
 
+/**
+ * Why a tree is not worth sending, or `undefined` when it is.
+ *
+ * A run whose attribute does not appear in the sources builds a real tree of
+ * real components in which *every* node is id-less — 11 KB, on a repository
+ * where the answer is "you are reading the wrong attribute". The environment
+ * warning and `meta.hint` already say that, in full, and they are what the
+ * caller has to act on; the nodes add nothing to them.
+ *
+ * Deliberately narrow. It fires only when the analysis has *proven* the payload
+ * is empty of answers: an environment diagnostic that invalidates the whole
+ * scan, and not one id anywhere in the tree. A tree with a single id is shipped
+ * whole, because then the reader has something to check the warning against.
+ */
+function blindScan(
+	warnings: Diagnostic[],
+	roots: UiNode[],
+): string | undefined {
+	const blinding = warnings.find(
+		(warning) =>
+			warning.code === "attribute-mismatch" ||
+			warning.code === "attribute-no-evidence",
+	);
+	if (!blinding) {
+		return undefined;
+	}
+	const hasId = (nodes: UiNode[]): boolean =>
+		nodes.some((node) => node.testId !== undefined || hasId(node.children));
+	if (hasId(roots)) {
+		return undefined;
+	}
+	return `Not one node in this tree carries a test id, because ${blinding.code}: this run read an attribute the sources do not use. The nodes were omitted rather than sent as an id-less shell - read the warning and the hint, fix the attribute, and re-call.`;
+}
+
 /** What a `testId` lookup should say beyond the occurrence list itself. */
 function lookupHint(
 	needle: string,
@@ -709,6 +743,7 @@ export function handleGetTestIdTree(
 	const roots = tree.roots;
 	const gap = traversalGap(roots, tree.truncated === true);
 	const warnings = planWarnings(session.warnings, tree.warnings);
+	const blind = blindScan(tree.warnings, roots);
 	const meta: Record<string, unknown> = {
 		attribute: tree.attribute,
 		attributeSource: tree.attributeSource,
@@ -718,6 +753,7 @@ export function handleGetTestIdTree(
 		fidelityReason: tree.fidelityReason,
 		truncated: tree.truncated,
 		scanned: tree.stats.files,
+		suppressed: blind,
 		warnings: warnings.shown,
 		// A partial tree is the normal answer for any real app, so the useful
 		// thing is not the word but what to do about it. "Absent from this tree"
@@ -732,6 +768,19 @@ export function handleGetTestIdTree(
 		shrinkHint: `Re-call with format:"outline", a lower depth (this call used ${depth}), or scope the walk with \`file\` or \`component\`.`,
 		onDelivered: warnings.delivered,
 	};
+
+	// Nothing to read, so nothing to send. The nodes are real, but every one of
+	// them is id-less because the attribute this run searched for is not the one
+	// the sources write - the analysis has already proven the payload carries no
+	// answer, and shipping it costs 11 KB to say so. The warning and the hint,
+	// which are the actual answer, ship as always.
+	if (blind) {
+		return ok(
+			{ fidelity: tree.fidelity, roots: [], stats: subtreeStats([]) },
+			meta,
+			shrink,
+		);
+	}
 
 	if (args.format === "outline") {
 		return ok(renderTestIdOutline(tree), meta, shrink);
@@ -1234,10 +1283,20 @@ export function handleMapCoverage(
 		assumeForwarded: options.assumeForwarded,
 	});
 
+	// A scoped call narrows the selectors and cannot narrow the ids they are
+	// compared against, so `uncoveredTestIds` is still every id in the
+	// application - measured at 61,788 bytes on a real app, to answer a question
+	// about one class. The report says so in a warning, but the caller pays the
+	// whole list to read it. So the list is off by default exactly when it is
+	// least likely to be what was meant, and the caller can still ask.
+	const scoped = poInclude !== undefined;
+	const includeUnused = args.includeUnused ?? !scoped;
 	const { buckets, ignored } = selectedBuckets(
 		args.buckets as CoverageBucket[] | undefined,
-		args.includeUnused,
+		includeUnused,
 	);
+	const unusedDefaultedOff =
+		scoped && args.includeUnused === undefined && args.buckets === undefined;
 	// One `offset` across every returned bucket, rather than one per bucket: the
 	// way an agent actually pages is to ask for a single bucket and walk it
 	// (`query_coverage`, or `buckets:["unknownTestIds"]`), and a map of offsets
@@ -1321,7 +1380,10 @@ export function handleMapCoverage(
 			hint: withEnvironmentHint(
 				report.warnings,
 				degradeHint(paging, slices, coverageId) ??
-					pagingHint(offset, slices.length, paging.returned, largest),
+					pagingHint(offset, slices.length, paging.returned, largest) ??
+					(unusedDefaultedOff
+						? `uncoveredTestIds was left out: this call is scoped to a page object, and that list is project-wide whatever the scope, so it would mostly be ids other page objects cover (summary.uncoveredTestIds still counts them). Ask for it with buckets:["uncoveredTestIds"] or includeUnused:true.`
+						: undefined),
 			),
 		}),
 	});

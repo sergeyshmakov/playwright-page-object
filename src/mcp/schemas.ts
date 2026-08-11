@@ -108,11 +108,16 @@ export const mapCoverageInput = z.object({
 			"Limit the page-object side to one file, path relative to the project root exactly as list_page_objects reports it (a leading ./ and Windows separators are accepted). A path that declares no page object fails with file_not_found rather than reporting everything as uncovered.",
 		),
 	attribute: z.string().optional(),
+	// Optional rather than `.default(true)`, because the useful default depends
+	// on the call: scoping with class/file narrows the selectors and cannot
+	// narrow the rendered ids they are compared against, so uncoveredTestIds
+	// stays project-wide and is mostly ids other page objects cover - 61,788
+	// bytes of them on a real app, to answer a question about one class.
 	includeUnused: z
 		.boolean()
-		.default(true)
+		.optional()
 		.describe(
-			"Include uncoveredTestIds (rendered ids no page object uses). Set false for a shorter response. Ignored when buckets is given.",
+			"Include uncoveredTestIds (rendered ids no page object uses). Defaults to true for a whole-project scan and to false when class or file is set, because that list stays project-wide however the page-object side is scoped; pass true to override, or ask for the bucket by name. Ignored when buckets is given.",
 		),
 	includeRawLocators: z
 		.boolean()
