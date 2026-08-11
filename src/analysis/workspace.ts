@@ -18,6 +18,7 @@ import {
 	locateTsConfig,
 	SCAN_GLOB,
 	synthesizedCompilerOptions,
+	tsConfigChain,
 	tsConfigFileNames,
 } from "./config/tsconfig";
 import {
@@ -189,6 +190,15 @@ interface MemoEntry {
 	value: unknown;
 }
 
+/** A file's mtime as a comparable string, or a stable marker when it is gone. */
+function mtimeOf(filePath: string): string {
+	try {
+		return String(fs.statSync(filePath).mtimeMs);
+	} catch {
+		return "missing";
+	}
+}
+
 function normalizeRoot(projectRoot: string): string {
 	return path.resolve(projectRoot);
 }
@@ -284,6 +294,16 @@ export class Workspace {
 	private identity: string | null = null;
 	/** Summed lockfile mtimes as of the last sweep. See {@link lockfileChanged}. */
 	private lockfileStamp: number | null = null;
+	/**
+	 * The located tsconfig's `extends` chain, cached against the root's own mtime
+	 * so {@link projectIdentity} stats the chain per acquire but only re-reads it
+	 * when the root changes.
+	 */
+	private tsconfigChain: {
+		root: string;
+		rootStamp: string;
+		paths: string[];
+	} | null = null;
 
 	private constructor(
 		project: Project,
@@ -452,14 +472,30 @@ export class Workspace {
 			const located = locateTsConfig(this.root, this.options.tsconfig, testDir);
 			// The tsconfig's mtime as well as its path: `include`, `exclude` and
 			// `paths` all decide the file set, and editing them in place leaves the
-			// path identical.
+			// path identical. And the whole `extends` chain, not just the located
+			// file — a shared base is where a monorepo keeps `paths` and half its
+			// `include`, so watching only the leaf left an edit to the base
+			// invisible.
+			//
+			// The chain itself is only re-read when the root's own mtime moves;
+			// every other acquire just stats the paths it already knows. Re-parsing
+			// a config stack on the hot path would be a real cost, and the root's
+			// mtime is exactly what changes when its `extends` list does.
 			let stamp = "";
 			if (located.path) {
-				try {
-					stamp = String(fs.statSync(located.path).mtimeMs);
-				} catch {
-					stamp = "missing";
+				const rootStamp = mtimeOf(located.path);
+				if (
+					this.tsconfigChain === null ||
+					this.tsconfigChain.root !== located.path ||
+					this.tsconfigChain.rootStamp !== rootStamp
+				) {
+					this.tsconfigChain = {
+						root: located.path,
+						rootStamp,
+						paths: tsConfigChain(located.path),
+					};
 				}
+				stamp = this.tsconfigChain.paths.map(mtimeOf).join(",");
 			}
 			return [testDir ?? "", located.path ?? "", stamp].join("::");
 		} catch {

@@ -91,6 +91,32 @@ describe("what survives a config edit", () => {
 		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
 	});
 
+	it("rebuilds when a tsconfig the located one extends is edited", () => {
+		// A shared base is where a monorepo keeps `paths` and half its `include`,
+		// so watching only the leaf left an edit to the base invisible - later
+		// calls analysing files under compiler options that no longer exist.
+		const root = scratch({
+			"tsconfig.base.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+			"tsconfig.json": JSON.stringify({
+				extends: "./tsconfig.base.json",
+				include: ["src/**/*.ts"],
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		Workspace.reset();
+		const first = Workspace.acquire({ projectRoot: root });
+		write(
+			root,
+			"tsconfig.base.json",
+			JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true, strict: true },
+			}),
+		);
+		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
+	});
+
 	it("keeps the same project when an ordinary source file changes", () => {
 		// The guard has to be stable, or every call pays for a rebuild. An
 		// unstable comparison here costs ~2.3 s per tool call on a large repo.

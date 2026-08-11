@@ -318,7 +318,7 @@ Two things the walk resolves that are easy to assume it does not. A same-file fu
 | `expandedAt` | This component's subtree was already expanded at an earlier render site; read it there. Only set when the two sites render identical subtrees |
 | `viaDefault` | The id came from the component's own fallback, because the call site provably passed nothing |
 | `testIdAbsent` | The element writes the attribute, but at this site the value provably resolves to nothing. Do not write a selector for it |
-| `unresolved` | A hole. `reason` is one of `external-module`, `identifier-unresolved`, `namespaced-component`, `not-a-function-component`, `recursive`, `not-followed`, `depth-limit-reached`, `node-budget-reached`, `local-render-function`, `unresolved-jsx`, `opaque-expression`, `spread-props`. `raw` carries the source expression where there is one to name |
+| `unresolved` | A hole. `reason` is one of `external-module`, `identifier-unresolved`, `namespaced-component`, `not-a-function-component`, `recursive`, `not-followed`, `depth-limit-reached`, `node-budget-reached`, `local-render-function`, `imported-render-function`, `unresolved-jsx`, `opaque-expression`, `spread-props`. `raw` carries the source expression where there is one to name |
 
 In the outline format the same flags appear in parentheses, and `-` stands for a node with no test ID.
 

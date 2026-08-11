@@ -6,7 +6,7 @@ import * as path from "node:path";
 // belongs to the matcher that will read the pattern next. `util/paths` imports
 // `node:path` and `picomatch`, nothing else — `src/tests/analysis/
 // no-runtime-import.spec.ts` holds that shut.
-import { globStaticBase, isGlobPattern } from "../analysis/util/paths";
+import { globStaticBase, isGlobPattern, toPosix } from "../analysis/util/paths";
 
 /** Runtime options resolved from CLI flags (see src/cli.ts). */
 export interface McpServerOptions {
@@ -91,6 +91,17 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 		const containment = isGlobPattern(dir) ? globStaticBase(dir) : dir;
 		if (containment && !isInside(root, resolveAgainst(root, containment))) {
 			problems.push(`--src-dir is outside --project-root: ${dir}`);
+			continue;
+		}
+		// A pattern can also climb out *after* its first magic segment —
+		// `src/**/../../../other/*.tsx` has a static base of `src`, which is inside
+		// the root, and reaches well outside it. `..` is never useful in a scope
+		// pattern and its only effect here is to escape, so it is refused as a
+		// whole segment wherever it appears.
+		if (toPosix(dir).split("/").includes("..")) {
+			problems.push(
+				`--src-dir must not contain a ".." segment: ${dir} (write the directory you mean, relative to --project-root)`,
+			);
 			continue;
 		}
 		// Existence is only meaningful for a plain path. The verdict comes from

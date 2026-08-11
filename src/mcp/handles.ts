@@ -211,7 +211,7 @@ export function handleFailureMessage(reason: HandleFailure): string {
 		return "The analysed sources changed on disk since that coverageId was issued, so the report it points at no longer describes the repository.";
 	}
 	if (reason === "rebuilt") {
-		return "The analysis was rebuilt since that coverageId was issued - the workspace was released after an idle period, or this call analyses a different scope - so the report it points at is no longer held. Nothing in your sources necessarily changed.";
+		return "The analysis was rebuilt since that coverageId was issued - the workspace was released after an idle period, this call analyses a different scope, or a Playwright testDir / tsconfig edit changed which files the project holds - so the report it points at is no longer held. Nothing in your test-id sources necessarily changed.";
 	}
 	return `That coverageId is not known to this server (it may have expired, been evicted after ${MAX_HANDLES} newer handles, or come from a previous session).`;
 }

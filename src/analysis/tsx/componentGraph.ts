@@ -156,16 +156,53 @@ function asComponentFunction(node: Node): ComponentFunction | null {
 		: null;
 }
 
+/**
+ * The same-file function an identifier names.
+ *
+ * `memo(Foo)` is as ordinary as `memo(() => …)`, and unwrapping the call only
+ * to find an identifier left it resolving as `not-a-function-component` — the
+ * exact gap the unwrap was added to close, for the spelling that names its
+ * component instead of inlining it. Same file only: crossing a module boundary
+ * here would attribute the definition to the wrong file, which
+ * `resolveComponentRef` exists to do properly.
+ */
+function sameFileFunction(identifier: Node): Node | null {
+	const name = identifier.getText();
+	const sourceFile = identifier.getSourceFile();
+	for (const declaration of sourceFile.getFunctions()) {
+		if (declaration.getName() === name) {
+			return declaration;
+		}
+	}
+	for (const declaration of sourceFile.getVariableDeclarations()) {
+		if (declaration.getName() === name) {
+			return declaration.getInitializer() ?? null;
+		}
+	}
+	return null;
+}
+
 function componentFunctionOf(node: Node): ComponentFunction | null {
-	const direct = asComponentFunction(unwrapComponentWrapper(node));
+	const unwrapped = unwrapComponentWrapper(node);
+	const direct = asComponentFunction(unwrapped);
 	if (direct) {
 		return direct;
 	}
+	// One hop, and only when the wrapper actually peeled something off: an
+	// identifier that *is* the declaration under inspection would otherwise
+	// resolve to itself.
+	if (Node.isIdentifier(unwrapped) && unwrapped !== node) {
+		const target = sameFileFunction(unwrapped);
+		if (target) {
+			const resolved = asComponentFunction(unwrapComponentWrapper(target));
+			if (resolved) {
+				return resolved;
+			}
+		}
+	}
 	if (Node.isVariableDeclaration(node)) {
 		const initializer = node.getInitializer();
-		return initializer
-			? asComponentFunction(unwrapComponentWrapper(initializer))
-			: null;
+		return initializer ? componentFunctionOf(initializer) : null;
 	}
 	return null;
 }

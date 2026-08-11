@@ -132,6 +132,50 @@ describe("gaps the tree has to admit to", () => {
 		expect(nodes.map((node) => node.testId?.value)).toContain("InputBody");
 	});
 
+	it("enters a component wrapped as `memo(Foo)` by identifier", () => {
+		// `memo(Foo)` is as ordinary as `memo(() => ...)`, and unwrapping the call
+		// only to find an identifier left it resolving as
+		// `not-a-function-component` - the exact gap the unwrap closes, for the
+		// spelling that names its component instead of inlining it.
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Badge from "./Badge";',
+				"export default function App() { return <Badge />; }",
+			].join("\n"),
+			"src/Badge.tsx": [
+				'import { memo } from "react";',
+				'function BadgeBase() { return <span data-testid="BadgeBody" />; }',
+				"const Badge = memo(BadgeBase);",
+				"export default Badge;",
+			].join("\n"),
+		});
+		expect(nodes.map((node) => node.testId?.value)).toContain("BadgeBody");
+	});
+
+	it("keeps a module helper that a block-scoped local only looks like", () => {
+		// `const` is block-scoped, so one declared inside an `if` shadows nothing
+		// at a call written outside that block. Deleting the helper entry for it
+		// threw away a valid module-scope helper, and the ids it renders, over a
+		// name collision the language does not have.
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Panel from "./Panel";',
+				"export default function App() { return <Panel />; }",
+			].join("\n"),
+			"src/Panel.tsx": [
+				'function renderTitle() { return <h1 data-testid="PanelTitle" />; }',
+				"export default function Panel({ compact }: { compact?: boolean }) {",
+				"  if (compact) {",
+				"    const renderTitle = 1;",
+				"    void renderTitle;",
+				"  }",
+				"  return <section>{renderTitle()}</section>;",
+				"}",
+			].join("\n"),
+		});
+		expect(nodes.map((node) => node.testId?.value)).toContain("PanelTitle");
+	});
+
 	it("still forwards props through a memo wrapper", () => {
 		// `forwardRef`'s callback takes `(props, ref)` and the props reader takes
 		// the first parameter, so unwrapping must not disturb the binding path.

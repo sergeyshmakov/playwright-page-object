@@ -130,6 +130,18 @@ describe("scope validated wrongly", () => {
 		expect(problems.join("\n")).toContain("outside --project-root");
 	});
 
+	it("refuses a glob that climbs out after its first magic segment", () => {
+		// The static base is `src`, which is inside the root, and the pattern
+		// reaches well outside it. `..` is never useful in a scope pattern and its
+		// only effect here is to escape.
+		const root = scratch({ "src/.keep": "" });
+		const problems = validateServerOptions({
+			projectRoot: root,
+			srcDirs: ["src/**/../../../other/*.tsx"],
+		});
+		expect(problems.join("\n")).toContain("..");
+	});
+
 	it("still accepts a glob inside the root", () => {
 		const root = scratch({ "src/.keep": "" });
 		expect(

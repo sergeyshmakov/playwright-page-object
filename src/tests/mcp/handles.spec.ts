@@ -89,7 +89,7 @@ describe("CoverageHandles", () => {
 	it("tells a rebuild apart from a source change, in the message too", () => {
 		expect(handleFailureMessage("rebuilt")).toContain("rebuilt");
 		expect(handleFailureMessage("rebuilt")).toContain(
-			"Nothing in your sources necessarily changed",
+			"Nothing in your test-id sources necessarily changed",
 		);
 		// The claim that must only be made when it is true.
 		expect(handleFailureMessage("rebuilt")).not.toContain("changed on disk");

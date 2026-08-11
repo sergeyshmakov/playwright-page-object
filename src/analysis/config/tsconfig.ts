@@ -83,6 +83,60 @@ export function locateTsConfig(
 	return { path: null, source: "none" };
 }
 
+/** `extends` hops followed when fingerprinting a config for freshness. */
+const MAX_EXTENDS_HOPS = 8;
+
+/**
+ * Every tsconfig whose contents decide this one's effective options: the file
+ * itself, then whatever it `extends`, transitively.
+ *
+ * A shared base is where a monorepo keeps `paths`, `jsx` and half its
+ * `include` — so watching only the located config meant editing the base left
+ * every later call analysing files under compiler options that no longer exist,
+ * with nothing saying so. Returned as a list for the caller to stat rather than
+ * stat'ed here, because the caller does that once per acquire and only re-reads
+ * this when the root's own mtime moves.
+ *
+ * Bounded and cycle-safe: `extends` chains are short in practice, and a config
+ * that extends itself is a real thing to find on disk.
+ */
+export function tsConfigChain(tsConfigFilePath: string): string[] {
+	const chain: string[] = [];
+	const seen = new Set<string>();
+	const queue = [tsConfigFilePath];
+	while (queue.length > 0 && chain.length < MAX_EXTENDS_HOPS) {
+		const current = queue.shift();
+		if (current === undefined) {
+			break;
+		}
+		const key = toPosix(current);
+		if (seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+		chain.push(current);
+		const read = ts.readConfigFile(current, (file) => ts.sys.readFile(file));
+		const extended: unknown = read.config?.extends;
+		const specifiers =
+			typeof extended === "string"
+				? [extended]
+				: Array.isArray(extended)
+					? extended.filter((one): one is string => typeof one === "string")
+					: [];
+		for (const specifier of specifiers) {
+			// Relative and rooted forms only. A package specifier resolves through
+			// `node_modules`, which an install changes rather than an edit — that is
+			// the lockfile stat's job, not this one's.
+			if (!specifier.startsWith(".") && !path.isAbsolute(specifier)) {
+				continue;
+			}
+			const resolved = path.resolve(path.dirname(current), specifier);
+			queue.push(existsFile(resolved) ? resolved : `${resolved}.json`);
+		}
+	}
+	return chain;
+}
+
 /**
  * The files a tsconfig selects, without building a project for them.
  *

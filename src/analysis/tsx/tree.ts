@@ -4,6 +4,7 @@ import {
 	type SourceFile,
 	SyntaxKind,
 	type VariableDeclaration,
+	VariableDeclarationKind,
 } from "ts-morph";
 import { dedupeDiagnostics, info } from "../diagnostics";
 import type {
@@ -1594,13 +1595,19 @@ class TreeBuilder {
 			const initializer = declaration.getInitializer();
 			if (initializer && isInlineFunction(initializer)) {
 				index.set(name, unwrapExpression(initializer));
-			} else {
+			} else if (shadowsWholeBody(declaration, owner.fn)) {
 				// A local that is *not* a function written here still shadows the
 				// module-scope one of the same name — `const renderIcon =
 				// props.renderIcon ?? fallback` is the caller's function or the
 				// module's, and the call site cannot say which. Leaving the module
 				// entry in place inlined a subtree this render may never produce,
 				// with `fidelity: "full"` over the top.
+				//
+				// Only when it really shadows the whole body, though. `const` is
+				// block-scoped, so one declared inside an `if` shadows nothing at the
+				// call sites outside that block — and deleting the entry for it threw
+				// away a valid module-scope helper, and the ids it renders, over a
+				// name collision the language does not have.
 				index.delete(name);
 			}
 		}
@@ -2643,6 +2650,32 @@ function detachFromCallSite(state: ExpandState): ExpandState {
 		callSiteKnown: false,
 		directAttribute: null,
 	};
+}
+
+/**
+ * Whether a variable declaration shadows its name across the whole function
+ * body, rather than inside one block of it.
+ *
+ * `const` and `let` are block-scoped: a declaration nested in an `if` or a loop
+ * is invisible to the statements around it, so it cannot be what a call written
+ * outside that block resolves to. `var` is function-scoped and does shadow the
+ * body, which is why the kind is checked rather than assumed.
+ */
+function shadowsWholeBody(declaration: VariableDeclaration, fn: Node): boolean {
+	const statement = declaration.getVariableStatement();
+	if (!statement) {
+		return false;
+	}
+	if (statement.getDeclarationKind() === VariableDeclarationKind.Var) {
+		return true;
+	}
+	const body =
+		Node.isFunctionDeclaration(fn) ||
+		Node.isFunctionExpression(fn) ||
+		Node.isArrowFunction(fn)
+			? fn.getBody()
+			: undefined;
+	return body !== undefined && statement.getParent() === body;
 }
 
 /** Whether `node` is written somewhere inside `container`. */

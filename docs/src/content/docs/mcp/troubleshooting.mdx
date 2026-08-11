@@ -131,6 +131,7 @@ A partial tree that reached **no** ID at all is not sent: `roots` comes back emp
 | `node-budget-reached` | Root the walk narrower with `file` or `component` |
 | `external-module` | Those components ship from outside the scanned sources. Restart with a `--project-root` that contains them — **not** a wider `--src-dir`, which is refused when it points outside the project root. The `ui-scope-incomplete` warning names the directory to use |
 | `local-render-function` | A same-file function returning JSX that could not be inlined, usually because it recurses. `raw` names the call, so read that function directly |
+| `imported-render-function` | A JSX-returning function imported from another file in this repository, called here. Its elements belong to that file, so root a tree there rather than expecting them inline |
 | `identifier-unresolved`, `namespaced-component`, `not-a-function-component` | The tag does not resolve to a function component the walk can enter. Root a tree at the component itself with `component`, if it is one |
 | `recursive` | The component renders itself; the walk cut the cycle. Nothing to change |
 | `unresolved-jsx`, `opaque-expression` | Nothing to change. The walk saw content it could not place |
@@ -166,13 +167,13 @@ An empty bucket in such a response means "cut here", not "nothing found" — rea
 
 ## What does `expired_handle` mean?
 
-The `coverageId` you passed to `query_coverage` can no longer be spent. Three causes, and the message says which:
+The `coverageId` you passed to `query_coverage` can no longer be spent. Four causes, and the message says which:
 
 | Message says | Cause |
 | --- | --- |
 | not known to this server | It came from a previous server process, or 8 newer handles evicted it |
 | has expired | Nothing spent it for 10 minutes. The clock runs from the last use, so this means the walk was abandoned, not that it was slow |
-| was rebuilt | The workspace was released after an idle period, or this call analyses a different scope. **Nothing in your sources changed** — re-mint and carry on |
+| was rebuilt | The workspace was released after an idle period, this call analyses a different scope, or a `testDir` / tsconfig edit changed which files the project holds. **Nothing in your test-id sources changed** — re-mint and carry on |
 | the analysed sources changed | A file changed on disk since the id was issued |
 
 The last one is the interesting case, and it is deliberate. A report built before an edit describes a repository that no longer exists — every entry carries a file and a line, and those lines have moved. Continuing to answer from it would produce a page that is wrong in a way nothing in its shape reveals.
