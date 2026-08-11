@@ -162,6 +162,8 @@ Plain `.js` is not swept, because it would pull in build output and tooling conf
 
 A `--src-dir` naming a directory that is not on disk stops the server at startup. A glob matching nothing does not, since that is indistinguishable from a legitimately empty directory; the census reports it as `scope-empty` instead.
 
+`--src-dir` can only ever narrow. A path resolving outside `--project-root` is refused at startup, so it is not the way to reach a shared UI package in a sibling directory — re-root the server instead, as described under [monorepos](#how-do-i-configure-a-monorepo). When component tags resolve to sources outside the root, the `ui-scope-incomplete` warning names the directory to pass to `--project-root`.
+
 Narrowing the scope usually means fewer files are parsed, and so a lower count against `--max-files`, but the two are not the same set: see below. It does not narrow Playwright config discovery, which always searches the whole root.
 
 ### Limiting the scan with `--max-files`

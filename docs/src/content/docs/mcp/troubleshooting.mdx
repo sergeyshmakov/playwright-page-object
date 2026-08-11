@@ -117,7 +117,10 @@ Absence from a partial tree is not proof that a test ID cannot reach a host elem
 | `not-followed` | `followComponents: true` |
 | `depth-limit-reached` | A larger `depth`, up to 10 |
 | `node-budget-reached` | Root the walk narrower with `file` or `component` |
-| `external-module` | Those components ship from outside the scanned sources. Widen `--src-dir`, or accept the gap |
+| `external-module` | Those components ship from outside the scanned sources. Restart with a `--project-root` that contains them — **not** a wider `--src-dir`, which is refused when it points outside the project root. The `ui-scope-incomplete` warning names the directory to use |
+| `local-render-function` | A same-file function returning JSX that could not be inlined, usually because it recurses. `raw` names the call, so read that function directly |
+| `identifier-unresolved`, `namespaced-component`, `not-a-function-component` | The tag does not resolve to a function component the walk can enter. Root a tree at the component itself with `component`, if it is one |
+| `recursive` | The component renders itself; the walk cut the cycle. Nothing to change |
 | `unresolved-jsx`, `opaque-expression` | Nothing to change. The walk saw content it could not place |
 
 To settle one specific id regardless of the tree, use the lookup form: `{"testId": "CartItemName"}`.
@@ -167,7 +170,7 @@ Recover by re-calling `map_coverage` with the arguments that produced the id and
 
 `deadSelectors` means no host-element test ID in the scanned source matched the page-object test-ID selector. Check the evidence before deleting it because the scan can still be incomplete.
 
-- Scope: the component lives outside the scanned sources. Look for `ui-scope-incomplete` in `meta.warnings` and for `scope.externalComponentModules`, which names modules supplying component tags the scan could not resolve. A shared UI package in a monorepo can cause this.
+- Scope: the component lives outside the scanned sources. Look for `ui-scope-incomplete` in `meta.warnings` and for `scope.externalComponentModules`, which names modules supplying component tags the scan could not resolve. A shared UI package in a monorepo is the usual cause, and the warning resolves the package to the directory its sources actually live in, so `meta.hint` names a concrete `--project-root` to restart with. Widening `--src-dir` is not the fix: a `--src-dir` outside the project root is refused at startup.
 - Dynamic IDs: the element builds its ID at runtime, so it lands in `unknownTestIds` with reason `dynamic-value`. A selector whose literal appears inside that expression is reported as unknown, not dead.
 - Forwarding: the ID is written on a component tag and nothing proved it reaches a host element. Check for `testid-forwarding-unproven` and `forwarding-unproven-widespread`. If your components forward as a rule, restart with [`--assume-forwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding).
 - Attribute: a wrong attribute makes every test-ID selector look dead at once. Check the resolved attribute and its source first.

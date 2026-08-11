@@ -148,7 +148,7 @@ The full documentation site covers every guide, the API reference, and the v1 �
 claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
 ```
 
-Four read-only tools: `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, `map_coverage`. See [MCP Server](https://pom.shmakov.tools/mcp/) in the docs — [quick start](https://pom.shmakov.tools/mcp/quick-start/), [tool reference](https://pom.shmakov.tools/mcp/tools/), [configuration](https://pom.shmakov.tools/mcp/configuration/), [troubleshooting](https://pom.shmakov.tools/mcp/troubleshooting/).
+Five read-only tools: `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, `map_coverage`, and `query_coverage` for paging a long coverage report. See [MCP Server](https://pom.shmakov.tools/mcp/) in the docs — [quick start](https://pom.shmakov.tools/mcp/quick-start/), [tool reference](https://pom.shmakov.tools/mcp/tools/), [configuration](https://pom.shmakov.tools/mcp/configuration/), [troubleshooting](https://pom.shmakov.tools/mcp/troubleshooting/).
 
 This package also ships an [Agent Skills](https://agentskills.io/)-compatible skill so AI assistants load library-specific guidance on demand:
 
