@@ -400,6 +400,12 @@ export function handleGetPageObjectTree(
 			};
 
 	const warnings = planWarnings(session.warnings, tree.warnings);
+	// The same once-per-session rule the warnings beside it follow. It was 52% of
+	// a small tree response and identical on every call; a repeat keeps the keys,
+	// which name the bases in play, and drops the prose.
+	const api = session.warnings
+		? session.warnings.planText("apiHints", apiHintsFor(tree))
+		: { shown: apiHintsFor(tree), delivered: () => {} };
 	const meta = {
 		root: tree.projectRoot,
 		attribute: tree.testIdAttribute,
@@ -410,14 +416,17 @@ export function handleGetPageObjectTree(
 		// In meta, so both formats carry it: `outline` ships a string as its data,
 		// and the call syntax is no less needed there. It describes how to *use*
 		// what the tree found rather than being part of the finding.
-		apiHints: apiHintsFor(tree),
+		apiHints: api.shown,
 		warnings: warnings.shown,
 		hint: environmentHint(tree.warnings),
 	};
 
 	const shrink = {
 		shrinkHint: `Re-call with format:"outline", a lower depth (this call used ${args.depth}), or includeMethods:false.`,
-		onDelivered: warnings.delivered,
+		onDelivered: () => {
+			warnings.delivered();
+			api.delivered();
+		},
 	};
 
 	if (args.format === "outline") {

@@ -733,12 +733,21 @@ export interface PlaywrightConfigInfo {
 /* Coverage                                                                   */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * *How* a selector's test id matched a rendered one — not how likely the
+ * selector is to work.
+ *
+ * The distinction matters and the name does not carry it. `"exact"` means the
+ * two strings were equal, and nothing more: coverage compares ids across the
+ * whole application, because nothing statically ties a page object to a DOM
+ * subtree, so an `Info` selector matches every rendered `Info` anywhere. A
+ * reader who takes `"exact"` for "this selector resolves to this element" has
+ * been told something the analysis never claimed — see `unprovenOccurrences` on
+ * the match entry, which names the ambiguity the label cannot.
+ */
 export type MatchConfidence =
-	| "exact"
-	| "pattern"
-	| "regex"
-	| "probe"
-	| "prefix";
+	/** The two id strings are equal. Says nothing about which element is hit. */
+	"exact" | "pattern" | "regex" | "probe" | "prefix";
 
 export interface SelectorUsage {
 	defId: string;
@@ -865,6 +874,19 @@ export interface CoverageReport {
 		probe?: string;
 		/** The id only counts as rendered because `assumeForwarded` was on. */
 		forwarding?: "assumed";
+		/**
+		 * The same id is *also* written this many times as a component prop that
+		 * nothing proved reaches the DOM.
+		 *
+		 * A match is only ever made against proven elements, so `occurrences` above
+		 * is sound. This says the id has a second life the match did not consider —
+		 * and on a real repository that is where a broken selector hides: the entry
+		 * looks clean because some *other* component renders the same id, while the
+		 * site the page object was written for forwards a prop nobody can follow.
+		 */
+		unprovenOccurrences?: number;
+		/** First of those sites, so the caller can go and look. */
+		unprovenAt?: SourceLoc;
 	}>;
 	uncoveredTestIds: Array<{
 		id: string | null;

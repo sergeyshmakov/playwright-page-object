@@ -403,12 +403,25 @@ Omit `class` and `file` to scan the whole project. Scoping happens by path, so `
 
 | Bucket | Contents |
 | --- | --- |
-| `matched` | Selector/id pairs with a `confidence` of `exact`, `pattern`, `regex`, `probe`, or `prefix` |
+| `matched` | Selector/id pairs with a `confidence` of `exact`, `pattern`, `regex`, `probe`, or `prefix` — see below, `confidence` is not certainty |
 | `uncoveredTestIds` | Host-element test IDs that no page-object test-ID selector covers, each with a ready-to-paste decorator `suggestion` |
 | `deadSelectors` | Page-object test-ID selectors with no match among visible host-element IDs, with `nearestTestIds` suggestions |
 | `nonTestIdSelectors` | Role, text, label, placeholder, alt and title selectors. Reported for awareness and never counted as dead |
 | `unknownSelectors` | Selectors that could be neither matched nor called dead, with the evidence that was found |
 | `unknownTestIds` | Test-ID occurrences the scanner cannot place on a rendered host element: `dynamic-value`, `forwarding-unproven`, or `unanchored-pattern` |
+
+### `confidence` is how the string matched, not whether the selector works
+
+`confidence: "exact"` means the selector's test ID and a rendered test ID were **equal as strings**. It is not a claim that your selector resolves to that element. Coverage compares IDs across the whole application, because nothing statically ties a page object to a DOM subtree — so an `Info` selector matches every rendered `Info` anywhere in the app, and the entry names whichever one the scan proved renders.
+
+That matters when the same ID lives on both sides of the forwarding line. Two fields say so:
+
+| Field | Meaning |
+| --- | --- |
+| `unprovenOccurrences` | The same ID is also written this many times as a component prop that nothing proved reaches the DOM |
+| `unprovenAt` | The first of those sites, so you can go and look |
+
+A real example from a production repository: `GuestsPageObject.GuestItems[item].Info` came back `confidence: "exact"` against `HistoryEventItem.tsx:48`, an unrelated component, while the `<WithIcon data-tid="Info">` the page object was actually written for is a prop that never reaches the DOM — a genuinely broken selector that read as a clean match. The match is not wrong; it was the whole story that was missing. The entry now carries `unprovenOccurrences: 1` and points at `GuestItemInfo.tsx:94`.
 
 `summary.coverage` is `coveredUiTestIds / matchableUiTestIds`, or **`null`** when nothing was matchable. It is never `1` for a scan that found nothing, which is the failure mode that used to make a misconfigured server look healthy. `scope` reports what the two sides were drawn from, including component tags coming from modules outside the scanned sources.
 

@@ -1153,6 +1153,113 @@ describe("buildCoverageReport — member paths", () => {
 });
 
 /**
+ * A match is made against the ids the scan proved reach the DOM, which is
+ * right, and on its own misleads: the same id can also be written as a
+ * component prop nobody proved. On a production repository that is exactly
+ * where a broken selector hid — an entry came back `confidence: "exact"`
+ * against an unrelated component while the site the page object was written
+ * for was an unproven prop, and the report looked clean.
+ */
+describe("buildCoverageReport — an id that is both rendered and forwarded", () => {
+	const files = {
+		"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+		// One real element with the id, and one component tag carrying it as a
+		// prop that nothing proves is forwarded.
+		"src/App.tsx": [
+			'import { Card } from "./Card";',
+			"export default function App() {",
+			'  return <main><span data-testid="Info" /><Card data-testid="Info" /></main>;',
+			"}",
+		].join("\n"),
+		"src/Card.tsx": [
+			"export function Card(props: { title?: string }) {",
+			"  return <section>{props.title}</section>;",
+			"}",
+		].join("\n"),
+		"e2e/AppPage.ts": [
+			'import type { Locator } from "@playwright/test";',
+			libImport("RootPageObject", "RootSelector", "Selector"),
+			"@RootSelector()",
+			"export class AppPage extends RootPageObject {",
+			'  @Selector("Info")',
+			"  accessor Info!: Locator;",
+			"}",
+		].join("\n"),
+	};
+
+	it("says the id has unproven sites the match did not consider", () => {
+		const result = buildCoverageReport(makeWorkspace(files));
+		const entry = result.matched.find(
+			(one) => one.selector.memberPath === "AppPage.Info",
+		);
+
+		expect(entry?.confidence).toBe("exact");
+		// The match itself is sound: it names the element that provably renders.
+		expect(entry?.ui.occurrences[0]?.file).toBe("src/App.tsx");
+		// And it no longer hides the other half of the story.
+		expect(entry?.unprovenOccurrences).toBe(1);
+		expect(entry?.unprovenAt?.file).toBe("src/App.tsx");
+	});
+
+	it("says nothing when every occurrence of the id is proven", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({
+				...files,
+				"src/App.tsx": [
+					"export default function App() {",
+					'  return <main><span data-testid="Info" /></main>;',
+					"}",
+				].join("\n"),
+			}),
+		);
+		const entry = result.matched.find(
+			(one) => one.selector.memberPath === "AppPage.Info",
+		);
+		expect(entry?.unprovenOccurrences).toBeUndefined();
+	});
+});
+
+/**
+ * `pageObjectFilesScanned` counted the include list, not the run. Scoping to a
+ * class pulls in every page object nested under it, so a report drawn from
+ * several files reported one — and the scope-narrowed warning said so in prose.
+ */
+describe("buildCoverageReport — how many page-object files contributed", () => {
+	it("counts the files the selectors came from", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({
+				"src/main.tsx": 'import App from "./App";\nexport const x = <App />;',
+				"src/App.tsx": [
+					"export default function App() {",
+					'  return <main><span data-testid="Row" /><b data-testid="Cell" /></main>;',
+					"}",
+				].join("\n"),
+				"e2e/Row.ts": [
+					'import type { Locator } from "@playwright/test";',
+					libImport("PageObject", "Selector"),
+					"export class Row extends PageObject {",
+					'  @Selector("Cell")',
+					"  accessor Cell!: Locator;",
+					"}",
+				].join("\n"),
+				"e2e/HomePage.ts": [
+					libImport("RootPageObject", "RootSelector", "Selector"),
+					'import { Row } from "./Row";',
+					"@RootSelector()",
+					"export class HomePage extends RootPageObject {",
+					'  @Selector("Row")',
+					"  accessor Row = new Row();",
+					"}",
+				].join("\n"),
+			}),
+		);
+
+		// Two files declare the selectors this report matched, and it says two.
+		expect(result.scope.pageObjectFilesScanned).toBe(2);
+	});
+});
+
+/**
  * Deciding a module is *linked* means resolving a real `node_modules` symlink on
  * disk, which an in-memory fixture cannot produce — so the message is exercised
  * directly. It is the sentence that tells a reader where to re-root, and it was

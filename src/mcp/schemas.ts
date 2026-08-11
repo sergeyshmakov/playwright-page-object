@@ -174,7 +174,7 @@ export const mapCoverageInput = z.object({
 		.min(0)
 		.default(0)
 		.describe(
-			'Index of the first entry to return, applied to every returned bucket. To page a long list, prefer query_coverage with meta.coverageId; buckets:["unknownTestIds"] + offset works too but is not checked against the snapshot the first page came from. Bucket totals are always in summary, whatever this call returns.',
+			'Index of the first entry to return, applied to every returned bucket. Because it applies to all of them at once, meta.nextOffset comes back as an object keyed by bucket rather than a single number - read the bucket you care about. To page a long list, prefer query_coverage with meta.coverageId, whose nextOffset is one number; buckets:["unknownTestIds"] + offset works too but is not checked against the snapshot the first page came from. Bucket totals are always in summary, whatever this call returns.',
 		),
 });
 

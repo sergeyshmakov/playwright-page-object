@@ -245,6 +245,36 @@ describe("MCP server over in-memory transport", () => {
 		expect(hints.ListPageObject).toContain(".first()");
 	}, 30_000);
 
+	/**
+	 * The block is invaluable once and identical after: measured at 1,405 B of a
+	 * 2,690 B response, 52% of it, re-sent on every call while the warnings
+	 * beside it deduplicated. A repeat keeps the keys — they name which bases
+	 * this tree uses, which is the part that varies — and drops the prose.
+	 */
+	it("sends the API prose once a session and the base names every time", async () => {
+		const { client } = await connect(exampleRoot);
+
+		const first = await callTool(client, "get_page_object_tree", {
+			class: "CheckoutPage",
+			format: "outline",
+		});
+		const firstHints = first.envelope.meta?.apiHints as Record<string, string>;
+		expect(firstHints.ListPageObject).toContain(".first()");
+
+		const second = await callTool(client, "get_page_object_tree", {
+			class: "CheckoutPage",
+			format: "outline",
+		});
+		// Same bases named, no prose.
+		expect(second.envelope.meta?.apiHints).toEqual([
+			"members",
+			"RootPageObject",
+			"PageObject",
+			"ListPageObject",
+		]);
+		expect(second.text.length).toBeLessThan(first.text.length);
+	}, 30_000);
+
 	it("ships the same API block with the outline format", async () => {
 		const { client } = await connect(exampleRoot);
 		const { envelope } = await callTool(client, "get_page_object_tree", {

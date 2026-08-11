@@ -609,6 +609,7 @@ function computeCoverageReport(
 					confidence: match.outcome.confidence,
 					...(match.outcome.probe ? { probe: match.outcome.probe } : {}),
 					...(match.ui.assumed ? { forwarding: "assumed" as const } : {}),
+					...alsoUnproven(match.ui.id, sides),
 				});
 			}
 			continue;
@@ -806,7 +807,14 @@ function computeCoverageReport(
 		},
 		scope: {
 			uiFilesScanned: uiTree.stats.files,
-			pageObjectFilesScanned: discovery.index.stats.filesScanned,
+			// Files that actually contributed a selector, not the size of the
+			// include list. A `class` scope pulls in every page object nested under
+			// it, so a report drawn from seven files reported "1" — and the
+			// scope-narrowed warning repeated it in prose. Same defect as counting a
+			// display-capped array: a number derived from the input rather than from
+			// what the run did.
+			pageObjectFilesScanned: new Set(usages.map((usage) => usage.loc.file))
+				.size,
 			externalComponentModules: uiTree.externalModules,
 			externalComponentTags: uiTree.stats.externalComponentTags,
 		},
@@ -1048,6 +1056,41 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
  * at all. Re-rooting is the only one of the two that reaches them, and when
  * the modules resolve to source it can even be named exactly.
  */
+/**
+ * The same id, also written somewhere as a component prop nobody proved.
+ *
+ * A match is made against the *rendered* side, so an entry only ever names
+ * elements the scan proved reach the DOM. That is right, and on its own it
+ * misleads: an id can exist on both sides, and then a confident-looking entry
+ * points at the one place that matched while the site the caller's page object
+ * actually targets sits in the unproven partition, unmentioned.
+ *
+ * Measured on a production repository: `GuestsPageObject…Info` came back
+ * `confidence: "exact"` against `HistoryEventItem.tsx`, an unrelated component,
+ * while the `<WithIcon data-tid="Info">` the page object was written for is a
+ * component prop that never reaches the DOM — a genuinely broken selector the
+ * report presented as a clean match. The match is not wrong; presenting it as
+ * the whole story is. So the entry now says the id has other, unproven sites,
+ * and how many.
+ */
+function alsoUnproven(
+	id: string | null,
+	sides: ClassifySides,
+): { unprovenOccurrences?: number; unprovenAt?: SourceLoc } {
+	if (id === null) {
+		return {};
+	}
+	const group = sides.propById.get(id);
+	const first = group?.occurrences[0];
+	if (!group || !first) {
+		return {};
+	}
+	return {
+		unprovenOccurrences: group.occurrences.length,
+		unprovenAt: first.loc,
+	};
+}
+
 export interface ScopeEvidence {
 	tags: number;
 	/** Display sample of the specifiers, capped. */
