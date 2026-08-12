@@ -31,13 +31,43 @@ describe("redirectConsoleToStderr", () => {
 		expect(snapshot()).toEqual(before);
 	});
 
-	it("survives being applied twice without capturing itself", () => {
+	it("survives being applied twice and closed innermost-first", () => {
 		// The second call must not record the *redirected* functions as the
 		// originals, or the outer restore reinstates a redirect nobody can undo.
 		const before = snapshot();
 		const first = redirectConsoleToStderr();
 		const second = redirectConsoleToStderr();
 		second();
+		first();
+		expect(snapshot()).toEqual(before);
+	});
+
+	it("survives being closed outermost-first", () => {
+		// The order the previous test does *not* cover, and the one the first
+		// version of this got wrong: two servers in a host process close whenever
+		// their own work is done, not in the order they opened. Capturing the
+		// originals per activation makes the second capture record the first
+		// redirect, so closing first-then-second reinstalls a redirect over a dead
+		// transport instead of handing the host its console back.
+		const before = snapshot();
+		const first = redirectConsoleToStderr();
+		const second = redirectConsoleToStderr();
+		first();
+		expect(snapshot(), "the second server is still serving").not.toEqual(
+			before,
+		);
+		second();
+		expect(snapshot()).toEqual(before);
+	});
+
+	it("keeps the redirect up while any server is still serving", () => {
+		const before = snapshot();
+		const first = redirectConsoleToStderr();
+		const second = redirectConsoleToStderr();
+		const third = redirectConsoleToStderr();
+		second();
+		third();
+		expect(snapshot(), "one is still up").not.toEqual(before);
 		first();
 		expect(snapshot()).toEqual(before);
 	});
