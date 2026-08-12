@@ -238,8 +238,6 @@ function workspaceKey(options: WorkspaceOptions): string {
  * unreliable.
  */
 export class Workspace {
-	private static cache = new Map<string, Workspace>();
-
 	readonly project: Project;
 	readonly root: string;
 	readonly options: WorkspaceOptions;
@@ -263,16 +261,17 @@ export class Workspace {
 	 */
 	private parsedTotal = UNKNOWN_TOTAL;
 	private lastGlobAt = 0;
-	/** Per-call freshness policy; the latest caller's value wins (see `acquire`). */
-	private staleAfterMs: number;
-	/** Set once the workspace is in the LRU, so it can evict itself. */
-	private cacheKey: string | null = null;
 	/**
-	 * Fires if nothing acquires this workspace for {@link IDLE_EVICT_AFTER_MS}.
-	 * `unref`ed, so a pending eviction never holds the process open — a CLI that
-	 * has answered its one question still exits immediately.
+	 * Per-call freshness policy; the latest caller's value wins. See
+	 * {@link WorkspacePool.acquire}.
 	 */
-	private idleTimer: ReturnType<typeof setTimeout> | null = null;
+	private staleAfterMs: number;
+	/**
+	 * Drops this workspace from whatever is holding it, if anything is. Armed by
+	 * {@link WorkspacePool.acquire}; called by {@link enforceMaxFiles}, which is
+	 * the one place a workspace decides it must not be handed out again.
+	 */
+	private evictSelf: (() => void) | null = null;
 	/** So the large-scan note is stated once, not on every revalidation sweep. */
 	private largeScanNoted = false;
 	private playwrightInfo: {
@@ -346,46 +345,55 @@ export class Workspace {
 		});
 	}
 
-	/** LRU of 2, keyed by root + tsconfig + include/exclude. */
-	static acquire(rawOptions: WorkspaceOptions): Workspace {
-		const { options, missing } = withNormalizedScope(rawOptions);
-		const key = workspaceKey(options);
-		const existing = Workspace.cache.get(key);
-		if (existing) {
-			// Refresh recency.
-			Workspace.cache.delete(key);
-			Workspace.cache.set(key, existing);
-			// Latest caller wins. `staleAfterMs` is a freshness policy, not part of
-			// the workspace's identity, so a caller asking for immediate rescans
-			// gets them even though an earlier caller built the workspace with a
-			// long interval — and an omitted value means this caller wants the
-			// default, not whatever the first one happened to pass.
-			existing.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
-			let reusable = true;
-			if (options.revalidate !== false) {
-				existing.revalidate();
-				// After the sweep, so the config read behind this is the edited one.
-				reusable = !existing.projectIdentityChanged();
-			}
-			if (reusable) {
-				existing.noteMissingScope(missing);
-				existing.touch();
-				return existing;
-			}
+	/**
+	 * Whether this workspace can still answer for `options`, after bringing it
+	 * up to date. Only {@link WorkspacePool} calls this.
+	 *
+	 * A pair with {@link build}: between them they are everything a cache has to
+	 * do to a workspace, which is why the two of them are the whole opening this
+	 * class makes for one. A pool that had to reach for `revalidate`,
+	 * `projectIdentityChanged` and four seeding calls in the right order would be
+	 * holding this class's invariants on its behalf.
+	 */
+	reuseFor(options: WorkspaceOptions, missing: string[]): boolean {
+		// Latest caller wins. `staleAfterMs` is a freshness policy, not part of
+		// the workspace's identity, so a caller asking for immediate rescans
+		// gets them even though an earlier caller built the workspace with a
+		// long interval — and an omitted value means this caller wants the
+		// default, not whatever the first one happened to pass.
+		this.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+		if (options.revalidate !== false) {
+			this.revalidate();
+			// After the sweep, so the config read behind this is the edited one.
+			//
 			// `testDir` or the tsconfig moved, so this project holds the wrong files
 			// under the wrong compiler options and no sweep can fix that — the file
 			// set was decided when it was built. Rebuilding is the only correct
-			// answer, and it happens here rather than inside a method because a
-			// method cannot replace `this`.
-			existing.clearIdleTimer();
-			Workspace.cache.delete(key);
+			// answer, and it happens in the pool rather than here because a method
+			// cannot replace `this`.
+			if (this.projectIdentityChanged()) {
+				return false;
+			}
 		}
+		this.noteMissingScope(missing);
+		return true;
+	}
 
+	/**
+	 * Tells this workspace how to remove itself from the cache holding it. Only
+	 * {@link WorkspacePool} calls this. See {@link evictSelf}.
+	 */
+	heldBy(evict: () => void): void {
+		this.evictSelf = evict;
+	}
+
+	/**
+	 * A new workspace, seeded so that the first comparison against it is
+	 * meaningful. Only {@link WorkspacePool} calls this.
+	 */
+	static build(options: WorkspaceOptions, missing: string[]): Workspace {
 		const created = Workspace.create(options);
-		created.cacheKey = key;
 		created.noteMissingScope(missing);
-		Workspace.cache.set(key, created);
-		created.touch();
 		// Seeded from the real workspace, not from the throwaway probe `create`
 		// used: the probe carries no tsconfig, so a base config reached through a
 		// `paths` alias reads differently there. Comparing the two would find a
@@ -403,51 +411,7 @@ export class Workspace {
 		// so a file created between construction and the second acquire is a
 		// difference rather than the baseline.
 		created.scanDirsChanged();
-		while (Workspace.cache.size > LRU_SIZE) {
-			const oldest = Workspace.cache.entries().next();
-			if (oldest.done) {
-				break;
-			}
-			oldest.value[1].clearIdleTimer();
-			Workspace.cache.delete(oldest.value[0]);
-		}
 		return created;
-	}
-
-	/** Drops every cached workspace. Tests use this to stay hermetic. */
-	static reset(): void {
-		for (const workspace of Workspace.cache.values()) {
-			workspace.clearIdleTimer();
-		}
-		Workspace.cache.clear();
-	}
-
-	/**
-	 * Restarts the idle countdown. Called on every acquire, so the timer measures
-	 * silence rather than age — a session in continuous use never evicts.
-	 */
-	private touch(idleMs: number = IDLE_EVICT_AFTER_MS): void {
-		this.clearIdleTimer();
-		if (this.cacheKey === null) {
-			return;
-		}
-		const key = this.cacheKey;
-		this.idleTimer = setTimeout(() => {
-			// Only if this exact instance is still the cached one: a rebuild under
-			// the same key must not be evicted by its predecessor's timer.
-			if (Workspace.cache.get(key) === this) {
-				Workspace.cache.delete(key);
-			}
-			this.idleTimer = null;
-		}, idleMs);
-		this.idleTimer.unref?.();
-	}
-
-	private clearIdleTimer(): void {
-		if (this.idleTimer !== null) {
-			clearTimeout(this.idleTimer);
-			this.idleTimer = null;
-		}
 	}
 
 	/**
@@ -660,10 +624,6 @@ export class Workspace {
 		}
 		this.identity = current;
 		return true;
-	}
-
-	static get cacheSize(): number {
-		return Workspace.cache.size;
 	}
 
 	/**
@@ -1368,11 +1328,10 @@ export class Workspace {
 		// throttle window would skip the re-glob, see nothing added and quietly
 		// analyse the truncated project it was just left with.
 		this.lastGlobAt = 0;
-		if (evictOnFailure && this.cacheKey !== null) {
-			if (Workspace.cache.get(this.cacheKey) === this) {
-				Workspace.cache.delete(this.cacheKey);
-			}
-			this.cacheKey = null;
+		if (evictOnFailure) {
+			this.evictSelf?.();
+			// Once, and only once: a second failure has nothing left to evict.
+			this.evictSelf = null;
 		}
 		throw new AnalysisLimitError(limit, count);
 	}
@@ -1753,4 +1712,114 @@ function absoluteGlob(root: string, glob: string): string {
 
 export function isJsxFile(filePath: string): boolean {
 	return /\.[jt]sx$/.test(filePath);
+}
+
+/**
+ * Which workspaces are kept, and for how long.
+ *
+ * Split off {@link Workspace} because it is policy about a *set* of workspaces,
+ * not state of one, and because the previous home for it was a static cache —
+ * a process-wide global serving a single production caller. It matches
+ * `CoverageHandles` in the MCP layer, which is constructed per server for the
+ * same reason and with the same injected bounds; the two idle timers are meant
+ * to be read together (see {@link IDLE_EVICT_AFTER_MS}).
+ *
+ * One pool per server means a second server in the same process — the in-memory
+ * transport every MCP test boots — shares nothing with the first, so hermeticity
+ * is a property of construction rather than of remembering to call a reset.
+ */
+export class WorkspacePool {
+	/** Insertion-ordered, refreshed on a hit: iteration order is the LRU order. */
+	private readonly cache = new Map<string, Workspace>();
+	/** Keyed like {@link cache}, so eviction and the timer cannot disagree. */
+	private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+	constructor(
+		private readonly maxSize: number = LRU_SIZE,
+		private readonly idleMs: number = IDLE_EVICT_AFTER_MS,
+	) {}
+
+	/** Keyed by root + tsconfig + include/exclude. See {@link workspaceKey}. */
+	acquire(rawOptions: WorkspaceOptions): Workspace {
+		const { options, missing } = withNormalizedScope(rawOptions);
+		const key = workspaceKey(options);
+		const existing = this.cache.get(key);
+		if (existing) {
+			// Refresh recency.
+			this.cache.delete(key);
+			this.cache.set(key, existing);
+			if (existing.reuseFor(options, missing)) {
+				this.hold(key, existing);
+				return existing;
+			}
+			this.drop(key);
+		}
+
+		const created = Workspace.build(options, missing);
+		this.cache.set(key, created);
+		this.hold(key, created);
+		while (this.cache.size > this.maxSize) {
+			const oldest = this.cache.keys().next();
+			if (oldest.done) {
+				break;
+			}
+			this.drop(oldest.value);
+		}
+		return created;
+	}
+
+	/** Drops every cached workspace, and every pending eviction with it. */
+	clear(): void {
+		for (const key of [...this.cache.keys()]) {
+			this.drop(key);
+		}
+	}
+
+	get size(): number {
+		return this.cache.size;
+	}
+
+	/**
+	 * Everything this pool does to a workspace it is about to hand out: restart
+	 * the idle countdown, and re-arm the escape hatch the workspace uses if it
+	 * discovers mid-call that it must not be handed out again.
+	 *
+	 * The countdown restarts on every acquire, so the timer measures silence
+	 * rather than age — a session in continuous use never evicts.
+	 */
+	private hold(key: string, workspace: Workspace): void {
+		workspace.heldBy(() => {
+			// Only this exact instance: a rebuild under the same key must not be
+			// dropped by its predecessor.
+			if (this.cache.get(key) === workspace) {
+				this.drop(key);
+			}
+		});
+		this.clearTimer(key);
+		const timer = setTimeout(() => {
+			this.timers.delete(key);
+			// Only if this exact instance is still the cached one: a rebuild under
+			// the same key must not be evicted by its predecessor's timer.
+			if (this.cache.get(key) === workspace) {
+				this.cache.delete(key);
+			}
+		}, this.idleMs);
+		// `unref`ed, so a pending eviction never holds the process open — a CLI
+		// that has answered its one question still exits immediately.
+		timer.unref?.();
+		this.timers.set(key, timer);
+	}
+
+	private drop(key: string): void {
+		this.clearTimer(key);
+		this.cache.delete(key);
+	}
+
+	private clearTimer(key: string): void {
+		const timer = this.timers.get(key);
+		if (timer !== undefined) {
+			clearTimeout(timer);
+			this.timers.delete(key);
+		}
+	}
 }

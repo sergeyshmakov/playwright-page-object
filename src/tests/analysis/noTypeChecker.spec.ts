@@ -4,7 +4,7 @@ import { buildCoverageReport } from "../../analysis/coverage/mapCoverage";
 import { discoverPageObjects } from "../../analysis/page-objects/discover";
 import { buildPageObjectTree } from "../../analysis/page-objects/tree";
 import { buildTestIdTree } from "../../analysis/tsx/tree";
-import { Workspace } from "../../analysis/workspace";
+import { WorkspacePool } from "../../analysis/workspace";
 import { EXAMPLE_ROOT } from "./helpers/example";
 import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
 
@@ -24,6 +24,9 @@ import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
  * walk from one that quietly typechecks the world.
  */
 
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
+
 /** ts-morph's internal "has the compiler program been built" flag. */
 function programCreated(project: Project): boolean {
 	const context = (
@@ -39,13 +42,13 @@ function scratch(files: Record<string, string>): string {
 }
 
 afterEach(() => {
-	Workspace.reset();
+	pool.clear();
 	cleanupScratchRoots();
 });
 
 describe("no type checker on the default path", () => {
 	it("stays syntactic across all four tools on the example app", () => {
-		const ws = Workspace.acquire({ projectRoot: EXAMPLE_ROOT });
+		const ws = pool.acquire({ projectRoot: EXAMPLE_ROOT });
 		expect(programCreated(ws.project)).toBe(false);
 
 		discoverPageObjects(ws);
@@ -108,7 +111,7 @@ describe("no type checker on the default path", () => {
 			].join("\n"),
 		});
 
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		discoverPageObjects(ws);
 		buildPageObjectTree(ws, "AppPage");
 		buildTestIdTree(ws);
@@ -152,7 +155,7 @@ describe("no type checker on the default path", () => {
 			].join("\n"),
 		});
 
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const index = discoverPageObjects(ws);
 		const byName = new Map(
 			index.pageObjects.map((entry) => [entry.className, entry]),

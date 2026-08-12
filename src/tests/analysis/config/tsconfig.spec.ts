@@ -12,8 +12,11 @@ import {
 } from "../../../analysis/config/tsconfig";
 import { AnalysisLimitError } from "../../../analysis/diagnostics";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
-import { Workspace } from "../../../analysis/workspace";
+import { WorkspacePool } from "../../../analysis/workspace";
 import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
 
 function scratch(files: Record<string, string>): string {
 	return scratchRepo(files, { prefix: "ppo-tscfg-" });
@@ -21,7 +24,7 @@ function scratch(files: Record<string, string>): string {
 
 afterAll(() => {
 	cleanupScratchRoots();
-	Workspace.reset();
+	pool.clear();
 });
 
 describe("locateTsConfig", () => {
@@ -106,8 +109,8 @@ describe("Workspace file discovery", () => {
 			"src/b.tsx": "export const B = () => null;",
 			"node_modules/pkg/index.ts": "export const x = 1;",
 		});
-		Workspace.reset();
-		const ws = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
 		expect(ws.tsconfigPath).toBeNull();
 		expect(ws.warnings.map((diagnostic) => diagnostic.code)).toContain(
 			"no-tsconfig",
@@ -121,8 +124,8 @@ describe("Workspace file discovery", () => {
 	// were in fact analysed.
 	it("names the extensions it really scanned in the no-tsconfig warning", () => {
 		const root = scratch({ "src/App.jsx": "export const App = () => null;" });
-		Workspace.reset();
-		const ws = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
 		const warning = ws.warnings.find(
 			(diagnostic) => diagnostic.code === "no-tsconfig",
 		);
@@ -139,8 +142,8 @@ describe("Workspace file discovery", () => {
 			"src/a.ts": "export const a = 1;",
 			"other/b.ts": "export const b = 1;",
 		});
-		Workspace.reset();
-		const ws = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
 		expect(ws.tsconfigPath).toBe(path.join(root, "tsconfig.json"));
 		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
 			"src/a.ts",
@@ -162,8 +165,8 @@ describe("Workspace file discovery", () => {
 			"e2e/Home.ts": "export const a = 1;",
 			"src/ignored.ts": "export const b = 2;",
 		});
-		Workspace.reset();
-		const ws = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
 		expect(ws.tsconfigPath).toBe(path.join(root, "e2e/tsconfig.json"));
 		expect(
 			ws.sourceFiles().map((file) => ws.rel(file.getFilePath())),
@@ -186,8 +189,8 @@ describe("Workspace file discovery", () => {
 			"e2e/Home.ts": "export const a = 1;",
 			"src/app.ts": "export const b = 2;",
 		});
-		Workspace.reset();
-		const ws = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
 		expect(ws.tsconfigPath).toBeNull();
 		expect(
 			ws.sourceFiles().map((file) => ws.rel(file.getFilePath())),
@@ -204,8 +207,8 @@ describe("Workspace file discovery", () => {
 			files[`src/f${index}.ts`] = `export const f${index} = ${index};`;
 		}
 		const root = scratch(files);
-		Workspace.reset();
-		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 2 })).toThrow(
+		pool.clear();
+		expect(() => pool.acquire({ projectRoot: root, maxFiles: 2 })).toThrow(
 			AnalysisLimitError,
 		);
 	});
@@ -251,8 +254,8 @@ describe("tsConfigFileNames", () => {
 			"tsconfig.json": JSON.stringify({ files: ["src/a.ts", "src/gone.ts"] }),
 			"src/a.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 1 });
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 1 });
 		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
 			"src/a.ts",
 		]);
@@ -287,13 +290,10 @@ describe("path aliases from a real tsconfig", () => {
 			...sources,
 			"tsconfig.json": JSON.stringify({ compilerOptions, include: ["e2e"] }),
 		});
-		Workspace.reset();
-		const index = discoverPageObjects(
-			Workspace.acquire({ projectRoot: root }),
-			{
-				includeControls: true,
-			},
-		);
+		pool.clear();
+		const index = discoverPageObjects(pool.acquire({ projectRoot: root }), {
+			includeControls: true,
+		});
 		return index.pageObjects.map((entry) => entry.id);
 	}
 
@@ -322,8 +322,8 @@ describe("maxFiles pre-scan", () => {
 			"src/b.ts": "export const b = 1;",
 			"src/c.ts": "export const c = 1;",
 		});
-		Workspace.reset();
-		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 2 })).toThrow(
+		pool.clear();
+		expect(() => pool.acquire({ projectRoot: root, maxFiles: 2 })).toThrow(
 			/3 source files, more than the configured limit of 2/,
 		);
 	});
@@ -338,10 +338,10 @@ describe("maxFiles pre-scan", () => {
 			"src/a.ts": "export const a = 1;",
 			"src/b.ts": "export const b = 1;",
 		});
-		Workspace.reset();
+		pool.clear();
 		let message = "";
 		try {
-			Workspace.acquire({ projectRoot: root, maxFiles: 1 });
+			pool.acquire({ projectRoot: root, maxFiles: 1 });
 		} catch (error) {
 			message = error instanceof Error ? error.message : String(error);
 		}
@@ -359,8 +359,8 @@ describe("maxFiles pre-scan", () => {
 			"types/globals.d.ts": "declare const x: number;",
 			"types/other.d.ts": "declare const y: number;",
 		});
-		Workspace.reset();
-		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 1 });
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 1 });
 		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
 			"src/a.ts",
 		]);
@@ -373,8 +373,8 @@ describe("maxFiles pre-scan", () => {
 			"scripts/one.ts": "export const one = 1;",
 			"scripts/two.ts": "export const two = 1;",
 		});
-		Workspace.reset();
-		const ws = Workspace.acquire({
+		pool.clear();
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src"],
 			maxFiles: 1,

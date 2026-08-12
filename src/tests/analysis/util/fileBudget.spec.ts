@@ -3,12 +3,15 @@ import { Project } from "ts-morph";
 import { beforeEach, describe, expect, it } from "vitest";
 import { AnalysisLimitError } from "../../../analysis/diagnostics";
 import { admitAddedFile } from "../../../analysis/util/fileBudget";
-import { Workspace } from "../../../analysis/workspace";
+import { Workspace, WorkspacePool } from "../../../analysis/workspace";
 
 /**
  * The cap gate is a chain keyed by the `Project`, not by the workspace that
  * installed it, so a gate outlives its owner unless the owner is careful.
  */
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
 
 const ROOT = path.resolve("/ppo-budget");
 
@@ -24,7 +27,7 @@ function projectWith(count: number): Project {
 }
 
 beforeEach(() => {
-	Workspace.reset();
+	pool.clear();
 });
 
 describe("file admission gates", () => {

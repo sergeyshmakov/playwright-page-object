@@ -7,7 +7,7 @@ import {
 	packageSourceOutsideRoot,
 	registerWorkspaceRoot,
 } from "../../analysis/util/workspaceRoot";
-import { Workspace } from "../../analysis/workspace";
+import { WorkspacePool } from "../../analysis/workspace";
 import { libImport, makeWorkspace } from "./helpers/inMemory";
 import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
 
@@ -21,13 +21,16 @@ import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
  * action.
  */
 
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
+
 function scratch(files: Record<string, string>): string {
 	return scratchRepo(files, { prefix: "ppo-probe-" });
 }
 
 afterAll(() => {
 	cleanupScratchRoots();
-	Workspace.reset();
+	pool.clear();
 });
 
 describe("the node-budget count", () => {
@@ -135,10 +138,10 @@ describe("the running file total", () => {
 			"src/a.ts": 'import "./b";\nexport const a = 1;',
 			"src/b.ts": "export const b = 1;",
 		});
-		Workspace.reset();
+		pool.clear();
 		// Two analysable files, two declaration files. A cap of 3 counts only the
 		// former, so this must not refuse.
-		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 3 });
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 3 });
 		expect(() => ws.sourceFiles()).not.toThrow();
 	});
 });

@@ -4,7 +4,7 @@ import { discoverPageObjects } from "../../analysis/page-objects/discover";
 import { buildPageObjectTree } from "../../analysis/page-objects/tree";
 import { buildTestIdTree } from "../../analysis/tsx/tree";
 import type { Diagnostic } from "../../analysis/types";
-import { Workspace } from "../../analysis/workspace";
+import { type Workspace, WorkspacePool } from "../../analysis/workspace";
 import { cleanupScratchRoots, scratchRepo, writeIn } from "./helpers/onDisk";
 
 /**
@@ -22,6 +22,9 @@ import { cleanupScratchRoots, scratchRepo, writeIn } from "./helpers/onDisk";
  * the four entry points a caller reaches for, the payload says the environment
  * is wrong.
  */
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
 
 let root: string;
 
@@ -68,16 +71,16 @@ beforeAll(() => {
 			"",
 		].join("\n"),
 	);
-	Workspace.reset();
+	pool.clear();
 });
 
 afterAll(() => {
-	Workspace.reset();
+	pool.clear();
 	cleanupScratchRoots();
 });
 
 function workspace(): Workspace {
-	return Workspace.acquire({ projectRoot: root });
+	return pool.acquire({ projectRoot: root });
 }
 
 const builders: Array<[string, () => Diagnostic[]]> = [

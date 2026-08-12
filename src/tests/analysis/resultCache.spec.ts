@@ -5,7 +5,7 @@ import type { TestIdTree } from "../../analysis";
 import { buildCoverageReport } from "../../analysis/coverage/mapCoverage";
 import { buildPageObjectTree } from "../../analysis/page-objects/tree";
 import { buildTestIdTree } from "../../analysis/tsx/tree";
-import { Workspace } from "../../analysis/workspace";
+import { WorkspacePool } from "../../analysis/workspace";
 import {
 	cleanupScratchRoots,
 	scratchRepo,
@@ -19,12 +19,15 @@ import {
  * files the answer was computed from have moved on.
  */
 
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
+
 function scratch(files: Record<string, string>): string {
 	return scratchRepo(files, { prefix: "ppo-memo-" });
 }
 
 afterEach(() => {
-	Workspace.reset();
+	pool.clear();
 	cleanupScratchRoots();
 });
 
@@ -57,7 +60,7 @@ function sampleRepo(): string {
 
 describe("builder result cache", () => {
 	it("hands the identical object back on a repeat call", () => {
-		const ws = Workspace.acquire({ projectRoot: sampleRepo() });
+		const ws = pool.acquire({ projectRoot: sampleRepo() });
 		expect(buildTestIdTree(ws)).toBe(buildTestIdTree(ws));
 		expect(buildCoverageReport(ws)).toBe(buildCoverageReport(ws));
 		expect(buildPageObjectTree(ws, "HomePage")).toBe(
@@ -66,7 +69,7 @@ describe("builder result cache", () => {
 	});
 
 	it("keys on the options that change the answer", () => {
-		const ws = Workspace.acquire({ projectRoot: sampleRepo() });
+		const ws = pool.acquire({ projectRoot: sampleRepo() });
 		expect(buildTestIdTree(ws, { maxDepth: 2 })).not.toBe(
 			buildTestIdTree(ws, { maxDepth: 3 }),
 		);
@@ -85,7 +88,7 @@ describe("builder result cache", () => {
 	});
 
 	it("treats an explicit attribute as a different question from the default", () => {
-		const ws = Workspace.acquire({ projectRoot: sampleRepo() });
+		const ws = pool.acquire({ projectRoot: sampleRepo() });
 		expect(buildTestIdTree(ws).attributeSource).toBe("default");
 		expect(
 			buildTestIdTree(ws, { attribute: "data-testid" }).attributeSource,
@@ -94,7 +97,7 @@ describe("builder result cache", () => {
 
 	it("misses after revalidate picks up an edit", () => {
 		const root = sampleRepo();
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const staticIds = (tree: TestIdTree) =>
 			tree.inventory.map((entry) =>
 				entry.value.kind === "static" ? entry.value.value : undefined,
@@ -116,7 +119,7 @@ describe("builder result cache", () => {
 	});
 
 	it("does not cache a throw", () => {
-		const ws = Workspace.acquire({ projectRoot: sampleRepo() });
+		const ws = pool.acquire({ projectRoot: sampleRepo() });
 		expect(() => buildPageObjectTree(ws, "NoSuchPage")).toThrow();
 		expect(() => buildPageObjectTree(ws, "NoSuchPage")).toThrow();
 		expect(buildPageObjectTree(ws, "HomePage").root).toContain("HomePage");
@@ -156,7 +159,7 @@ describe("builder result cache", () => {
 			].join("\n"),
 		});
 
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const first = buildTestIdTree(ws, { entry: "src/main.tsx" });
 		expect(
 			Object.values(first.components).map((component) => component.name),

@@ -10,13 +10,16 @@ import {
 	resolveRelativeModule,
 	resolvesToCallable,
 } from "../../../analysis/util/resolve";
-import { Workspace } from "../../../analysis/workspace";
+import { WorkspacePool } from "../../../analysis/workspace";
 import {
 	MEMORY_ROOT_POSIX,
 	makeWorkspace,
 	memoryPath,
 } from "../helpers/inMemory";
 import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
 
 function resolveIn(
 	files: Record<string, string>,
@@ -608,7 +611,7 @@ describe("resolveIdentifier through baseUrl", () => {
 
 describe("relative module resolution freshness", () => {
 	afterEach(() => {
-		Workspace.reset();
+		pool.clear();
 		cleanupScratchRoots();
 	});
 
@@ -633,7 +636,7 @@ describe("relative module resolution freshness", () => {
 			].join("\n"),
 			"lib/.keep": "",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src"] });
 		const sourceFile = ws.project.getSourceFileOrThrow(
 			toPosix(path.join(root, "src/a.ts")),
 		);
@@ -663,7 +666,7 @@ describe("relative module resolution freshness", () => {
 			].join("\n"),
 			"src/widget.ts": "export class Widget {}",
 		});
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const sourceFile = ws.project.getSourceFileOrThrow(
 			toPosix(path.join(root, "src/a.ts")),
 		);

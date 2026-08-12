@@ -4,7 +4,7 @@ import { readPlaywrightConfig } from "../../analysis/config/playwrightConfig";
 import { locateTsConfig } from "../../analysis/config/tsconfig";
 import { discoverPageObjects } from "../../analysis/page-objects/discover";
 import { buildPageObjectTree } from "../../analysis/page-objects/tree";
-import { Workspace } from "../../analysis/workspace";
+import { WorkspacePool } from "../../analysis/workspace";
 import { validateServerOptions } from "../../mcp/options";
 import { libImport, makeWorkspace } from "./helpers/inMemory";
 import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
@@ -19,13 +19,16 @@ import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
  * reports no members because a loop counter ran out.
  */
 
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
+
 function scratch(files: Record<string, string>): string {
 	return scratchRepo(files, { prefix: "ppo-wrong-" });
 }
 
 afterAll(() => {
 	cleanupScratchRoots();
-	Workspace.reset();
+	pool.clear();
 });
 
 describe("config read wrongly", () => {
@@ -40,8 +43,8 @@ describe("config read wrongly", () => {
 				"export default defineConfig({ use: { testIdAttribute } });",
 			].join("\n"),
 		});
-		Workspace.reset();
-		const ws = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
 		const config = readPlaywrightConfig(ws);
 		expect(config.testIdAttribute).toBeUndefined();
 		expect(

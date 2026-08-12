@@ -2,7 +2,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { MAX_CONFIG_CANDIDATES } from "../../../analysis/config/configDiscovery";
 import { readPlaywrightConfig } from "../../../analysis/config/playwrightConfig";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
-import { Workspace, type WorkspaceOptions } from "../../../analysis/workspace";
+import {
+	type Workspace,
+	type WorkspaceOptions,
+	WorkspacePool,
+} from "../../../analysis/workspace";
 import { exampleWorkspace } from "../helpers/example";
 import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
 
@@ -11,18 +15,21 @@ import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
  * have to be read straight off disk. That makes a real temp directory the
  * honest fixture here.
  */
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
 function workspaceWithConfig(
 	files: Record<string, string>,
 	options: Partial<WorkspaceOptions> = {},
 ): Workspace {
 	const root = scratchRepo(files, { prefix: "ppo-pwcfg-" });
-	Workspace.reset();
-	return Workspace.acquire({ projectRoot: root, ...options });
+	pool.clear();
+	return pool.acquire({ projectRoot: root, ...options });
 }
 
 afterAll(() => {
 	cleanupScratchRoots();
-	Workspace.reset();
+	pool.clear();
 });
 
 describe("readPlaywrightConfig", () => {

@@ -84,4 +84,5 @@ export {
 	type RevalidateResult,
 	Workspace,
 	type WorkspaceOptions,
+	WorkspacePool,
 } from "./workspace";

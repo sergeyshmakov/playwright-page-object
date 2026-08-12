@@ -7,7 +7,7 @@ import { MAX_CONFIG_CANDIDATES } from "../../analysis/config/configDiscovery";
 import { AnalysisLimitError } from "../../analysis/diagnostics";
 import { toPosix } from "../../analysis/util/paths";
 import { resolveRelativeModule } from "../../analysis/util/resolve";
-import { Workspace } from "../../analysis/workspace";
+import { Workspace, WorkspacePool } from "../../analysis/workspace";
 import { makeWorkspace } from "./helpers/inMemory";
 import {
 	cleanupScratchRoots,
@@ -24,6 +24,9 @@ import {
  * *whether a file was parsed at all*, which is the whole difference between a
  * cap checked before the parse and one checked after it.
  */
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
 const readingFs = createRequire(path.join(process.cwd(), "package.json"))(
 	"node:fs",
 ) as typeof fs;
@@ -64,32 +67,85 @@ function touch(root: string, relativePath: string, secondsAhead: number): void {
 }
 
 beforeEach(() => {
-	Workspace.reset();
+	pool.clear();
 });
 
 afterEach(() => {
-	Workspace.reset();
+	pool.clear();
 	cleanupScratchRoots();
 });
 
-describe("Workspace.acquire", () => {
+describe("WorkspacePool.acquire", () => {
+	/**
+	 * The reason the cache is an instance rather than a static: two servers in
+	 * one process analyse two roots, and the in-memory transport every MCP test
+	 * boots puts two of them side by side routinely.
+	 */
+	it("shares nothing with another pool", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const other = new WorkspacePool();
+		const mine = pool.acquire({ projectRoot: root });
+		expect(other.acquire({ projectRoot: root })).not.toBe(mine);
+		expect(other.size).toBe(1);
+		other.clear();
+		expect(pool.size, "clearing one must not clear the other").toBe(1);
+	});
+
+	/**
+	 * The workspace's own scan set outgrew its cap, so its scope is no longer
+	 * viable and no sweep can make it so. Leaving it cached means the next call
+	 * gets the rolled-back — that is, truncated — project and analyses it
+	 * without complaint; dropping it makes the next `acquire` rebuild and refuse
+	 * in `precheckMaxFiles`, before anything is parsed.
+	 *
+	 * This is the one line of coupling left from the workspace back to whatever
+	 * holds it, and nothing exercised it before: with the eviction commented out
+	 * the whole suite stayed green.
+	 */
+	it("drops a workspace whose own scan outgrew the cap", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+				include: ["src/**/*.ts"],
+			}),
+			"src/a.ts": "export const a = 1;",
+			"src/b.ts": "export const b = 1;",
+		});
+		const held = pool.acquire({ projectRoot: root, maxFiles: 3 });
+		expect(rels(held)).toHaveLength(2);
+		expect(pool.size).toBe(1);
+
+		write(root, "src/c.ts", "export const c = 1;");
+		write(root, "src/d.ts", "export const d = 1;");
+		expect(() =>
+			pool.acquire({ projectRoot: root, maxFiles: 3, staleAfterMs: 0 }),
+		).toThrow(AnalysisLimitError);
+		expect(pool.size, "an unviable scope must not be handed out again").toBe(0);
+
+		// And the rebuild refuses too, rather than quietly answering from the
+		// truncated set the rollback left behind.
+		expect(() => pool.acquire({ projectRoot: root, maxFiles: 3 })).toThrow(
+			AnalysisLimitError,
+		);
+	});
+
 	it("reuses the workspace for the same root", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const first = Workspace.acquire({ projectRoot: root });
-		const second = Workspace.acquire({ projectRoot: root });
+		const first = pool.acquire({ projectRoot: root });
+		const second = pool.acquire({ projectRoot: root });
 		expect(second).toBe(first);
-		expect(Workspace.cacheSize).toBe(1);
+		expect(pool.size).toBe(1);
 	});
 
 	it("keeps only the two most recent roots", () => {
 		const a = scratch({ "src/a.ts": "export const a = 1;" });
 		const b = scratch({ "src/b.ts": "export const b = 1;" });
 		const c = scratch({ "src/c.ts": "export const c = 1;" });
-		const first = Workspace.acquire({ projectRoot: a });
-		Workspace.acquire({ projectRoot: b });
-		Workspace.acquire({ projectRoot: c });
-		expect(Workspace.cacheSize).toBe(2);
-		expect(Workspace.acquire({ projectRoot: a })).not.toBe(first);
+		const first = pool.acquire({ projectRoot: a });
+		pool.acquire({ projectRoot: b });
+		pool.acquire({ projectRoot: c });
+		expect(pool.size).toBe(2);
+		expect(pool.acquire({ projectRoot: a })).not.toBe(first);
 	});
 
 	/**
@@ -102,16 +158,16 @@ describe("Workspace.acquire", () => {
 		vi.useFakeTimers();
 		try {
 			const root = scratch({ "src/a.ts": "export const a = 1;" });
-			const first = Workspace.acquire({ projectRoot: root });
-			expect(Workspace.cacheSize).toBe(1);
+			const first = pool.acquire({ projectRoot: root });
+			expect(pool.size).toBe(1);
 
 			vi.advanceTimersByTime(10 * 60_000 + 1);
-			expect(Workspace.cacheSize, "idle for the whole window").toBe(0);
+			expect(pool.size, "idle for the whole window").toBe(0);
 
 			// The next call answers; it simply pays to rebuild.
-			const rebuilt = Workspace.acquire({ projectRoot: root });
+			const rebuilt = pool.acquire({ projectRoot: root });
 			expect(rebuilt).not.toBe(first);
-			expect(Workspace.cacheSize).toBe(1);
+			expect(pool.size).toBe(1);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -121,14 +177,12 @@ describe("Workspace.acquire", () => {
 		vi.useFakeTimers();
 		try {
 			const root = scratch({ "src/a.ts": "export const a = 1;" });
-			const first = Workspace.acquire({ projectRoot: root });
+			const first = pool.acquire({ projectRoot: root });
 
 			// Fifty-four minutes of work, nine minutes apart: never idle long enough.
 			for (let call = 0; call < 6; call += 1) {
 				vi.advanceTimersByTime(9 * 60_000);
-				expect(Workspace.acquire({ projectRoot: root }), `call ${call}`).toBe(
-					first,
-				);
+				expect(pool.acquire({ projectRoot: root }), `call ${call}`).toBe(first);
 			}
 		} finally {
 			vi.useRealTimers();
@@ -149,7 +203,7 @@ describe("Workspace.acquire", () => {
 		}
 		const root = scratch(files);
 
-		const workspace = Workspace.acquire({ projectRoot: root });
+		const workspace = pool.acquire({ projectRoot: root });
 		// Well past the old ceiling of 2,000, which refused this outright.
 		expect(workspace.sourceFiles().length).toBeGreaterThanOrEqual(3_200);
 
@@ -163,8 +217,8 @@ describe("Workspace.acquire", () => {
 
 	it("treats different include globs as different workspaces", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const first = Workspace.acquire({ projectRoot: root });
-		const second = Workspace.acquire({
+		const first = pool.acquire({ projectRoot: root });
+		const second = pool.acquire({
 			projectRoot: root,
 			include: ["src/**"],
 		});
@@ -176,8 +230,8 @@ describe("Workspace.acquire", () => {
 			"src/a.ts": "export const a = 1;",
 			"src/b.ts": "export const b = 1;",
 		});
-		Workspace.acquire({ projectRoot: root });
-		expect(() => Workspace.acquire({ projectRoot: root, maxFiles: 1 })).toThrow(
+		pool.acquire({ projectRoot: root });
+		expect(() => pool.acquire({ projectRoot: root, maxFiles: 1 })).toThrow(
 			/more than the configured limit of 1/,
 		);
 	});
@@ -192,22 +246,22 @@ describe("Workspace.acquire", () => {
 	 */
 	it("applies the caller's staleAfterMs to a cached workspace", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const first = Workspace.acquire({
+		const first = pool.acquire({
 			projectRoot: root,
 			staleAfterMs: 60_000,
 		});
 		// Spends the free first re-glob every freshly built workspace gets.
-		Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 });
+		pool.acquire({ projectRoot: root, staleAfterMs: 60_000 });
 		// Nothing has changed on disk, so the long interval is what decides, and it
 		// says do not walk the repository again.
-		const quiet = Workspace.acquire({
+		const quiet = pool.acquire({
 			projectRoot: root,
 			staleAfterMs: 60_000,
 		});
 		expect(quiet).toBe(first);
 		expect(rels(quiet)).toEqual(["src/a.ts"]);
 
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		expect(ws).toBe(first);
 		expect(rels(ws)).toEqual(["src/a.ts"]);
 	});
@@ -223,25 +277,25 @@ describe("Workspace.acquire", () => {
 	 */
 	it("sees a new file inside the window when its directory changed", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const first = Workspace.acquire({
+		const first = pool.acquire({
 			projectRoot: root,
 			staleAfterMs: 60_000,
 		});
-		Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 });
+		pool.acquire({ projectRoot: root, staleAfterMs: 60_000 });
 		write(root, "src/b.ts", "export const b = 1;");
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 60_000 });
 		expect(ws).toBe(first);
 		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
 	});
 
 	it("treats different analysis options as different workspaces", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const first = Workspace.acquire({ projectRoot: root });
+		const first = pool.acquire({ projectRoot: root });
 		expect(
-			Workspace.acquire({ projectRoot: root, libraryModules: ["@acme/po"] }),
+			pool.acquire({ projectRoot: root, libraryModules: ["@acme/po"] }),
 		).not.toBe(first);
 		expect(
-			Workspace.acquire({
+			pool.acquire({
 				projectRoot: root,
 				preferSyntacticResolution: false,
 			}),
@@ -257,11 +311,11 @@ describe("Workspace.acquire", () => {
 			"one.config.ts": 'export default { use: { testIdAttribute: "one" } };',
 			"two.config.ts": 'export default { use: { testIdAttribute: "two" } };',
 		});
-		const first = Workspace.acquire({
+		const first = pool.acquire({
 			projectRoot: root,
 			playwrightConfig: "one.config.ts",
 		});
-		const second = Workspace.acquire({
+		const second = pool.acquire({
 			projectRoot: root,
 			playwrightConfig: "two.config.ts",
 		});
@@ -278,7 +332,7 @@ describe("Workspace.acquire", () => {
 describe("Workspace scope diagnostics", () => {
 	it("warns when an analysed directory is not on disk", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src", "packages/app"],
 		});
@@ -291,7 +345,7 @@ describe("Workspace scope diagnostics", () => {
 
 	it("still builds a usable workspace from the directories that do exist", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src", "nope"],
 		});
@@ -303,7 +357,7 @@ describe("Workspace scope diagnostics", () => {
 	// evidence side. Reporting it here would fire on every legitimate filter.
 	it("says nothing about a glob that happens to match no file", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src/**/*.tsx"],
 		});
@@ -324,7 +378,7 @@ describe("Workspace scope diagnostics", () => {
 			"src/generated/x.ts": "export const x = 1;",
 			"src/generated/y.ts": "export const y = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src", "!src/generated"],
 			// One in-scope file and a cap of one: the excluded pair can only fit if
@@ -346,7 +400,7 @@ describe("Workspace scope diagnostics", () => {
 			"src/generated/x.ts": "export const x = 1;",
 			"src/generated/y.ts": "export const y = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			exclude: ["src/generated"],
 			maxFiles: 1,
@@ -368,7 +422,7 @@ describe("Workspace scope diagnostics", () => {
 			include: ["src", "!src/generated"],
 			staleAfterMs: 0,
 		};
-		const ws = Workspace.acquire(options);
+		const ws = pool.acquire(options);
 		write(root, "src/generated/y.ts", "export const y = 1;");
 		write(root, "src/b.ts", "export const b = 1;");
 		ws.revalidate();
@@ -396,7 +450,7 @@ describe("Workspace scope diagnostics", () => {
 			"src/[draft].ts": "export const draft = 1;",
 			"src/other.ts": "export const other = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src/[draft].ts"],
 		});
@@ -405,7 +459,7 @@ describe("Workspace scope diagnostics", () => {
 
 	it("says nothing about an excluded directory that is not there", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({ projectRoot: root, exclude: ["generated"] });
+		const ws = pool.acquire({ projectRoot: root, exclude: ["generated"] });
 		expect(ws.warnings.map((diagnostic) => diagnostic.code)).not.toContain(
 			"scope-dir-missing",
 		);
@@ -413,7 +467,7 @@ describe("Workspace scope diagnostics", () => {
 
 	it("reports an empty JSX scope through environmentWarnings", () => {
 		const root = scratch({ "e2e/Page.ts": "export class Page {}" });
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		expect(ws.environmentWarnings().map((one) => one.code)).toContain(
 			"scope-empty",
 		);
@@ -425,7 +479,7 @@ describe("Workspace scope diagnostics", () => {
 				'export const App = () => <div data-tid="A"><b data-tid="B" /></div>;',
 			].join("\n"),
 		});
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const codes = ws.environmentWarnings().map((one) => one.code);
 		expect(codes[0]).toBe("attribute-mismatch");
 		expect(codes).toContain("playwright-config-not-found");
@@ -433,7 +487,7 @@ describe("Workspace scope diagnostics", () => {
 
 	it("memoizes environmentWarnings per epoch and per attribute", () => {
 		const root = scratch({ "src/App.tsx": "export const A = () => <b/>;" });
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const first = ws.environmentWarnings();
 		expect(ws.environmentWarnings()).toBe(first);
 		expect(ws.environmentWarnings("data-tid")).not.toBe(first);
@@ -459,7 +513,7 @@ describe("Workspace scope globs", () => {
 			"src/a/c.ts": "export const c = 1;\n",
 			"src/a/d.md": "not source\n",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["**/{*.ts,*.tsx}"],
 		});
@@ -472,7 +526,7 @@ describe("Workspace scope globs", () => {
 			"src/pages/B.tsx": "export const B = () => null;\n",
 			"src/legacy/C.tsx": "export const C = () => null;\n",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src/@(components|pages)/**"],
 		});
@@ -487,7 +541,7 @@ describe("Workspace scope globs", () => {
 		// `src/**` is a glob, so it is passed through rather than expanded — and a
 		// trailing globstar covers the directory entry itself, which is what every
 		// engine that will read this pattern next already believed.
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src/**"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src/**"] });
 		expect(rels(ws)).toEqual(["src/a.ts"]);
 	});
 });
@@ -503,7 +557,7 @@ describe("Workspace config discovery caching", () => {
 			"playwright.config.ts": "export default {};",
 			"src/a.ts": "export const a = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const before = ws.configDiscovery();
 		ws.bumpEpoch();
 		expect(ws.configDiscovery()).toBe(before);
@@ -511,7 +565,7 @@ describe("Workspace config discovery caching", () => {
 
 	it("re-discovers once a config file appears", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		expect(ws.playwright().configFile).toBeNull();
 
 		write(
@@ -545,7 +599,7 @@ describe("Workspace config discovery caching", () => {
 			"playwright.config.ts":
 				'export default { use: { testIdAttribute: "data-first" } };',
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src"],
 			staleAfterMs: 0,
@@ -583,7 +637,7 @@ describe("Workspace config discovery caching", () => {
 			}),
 			"src/a.ts": "export const a = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		expect(ws.playwright().configFile).toBeNull();
 
 		write(
@@ -624,7 +678,7 @@ describe("Workspace config discovery caching", () => {
 			files[name] = "export default {};";
 		}
 		const root = scratch(files);
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		expect(ws.configDiscovery().candidates).toHaveLength(MAX_CONFIG_CANDIDATES);
 		expect(ws.configDiscovery().truncated).toBe(true);
 
@@ -653,7 +707,7 @@ describe("Workspace config discovery caching", () => {
 			"e2e/playwright.config.ts":
 				'export default { use: { testIdAttribute: "data-gone" } };',
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		expect(ws.testIdAttribute().attribute).toBe("data-gone");
 
 		fs.rmSync(path.join(root, "e2e/playwright.config.ts"));
@@ -667,7 +721,7 @@ describe("Workspace config discovery caching", () => {
 describe("Workspace.revalidate", () => {
 	it("detects an edited file and refreshes it", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		expect(ws.revalidate()).toEqual({ changed: [], added: [], removed: [] });
 
 		write(root, "src/a.ts", "export const a = 2;");
@@ -681,7 +735,7 @@ describe("Workspace.revalidate", () => {
 
 	it("detects a new file", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		write(root, "src/b.ts", "export const b = 1;");
 		expect(ws.revalidate().added).toEqual(["src/b.ts"]);
 	});
@@ -701,7 +755,7 @@ describe("Workspace.revalidate", () => {
 			}),
 			"src/a.ts": "export const a = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		expect(ws.tsconfigPath).not.toBeNull();
 		expect(rels(ws)).toEqual(["src/a.ts"]);
 
@@ -723,7 +777,7 @@ describe("Workspace.revalidate", () => {
 			}),
 			"src/a.ts": "export const a = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		write(root, "src/generated/x.ts", "export const x = 1;");
 		write(root, "src/b.ts", "export const b = 1;");
 		expect(ws.revalidate().added).toEqual(["src/b.ts"]);
@@ -735,7 +789,7 @@ describe("Workspace.revalidate", () => {
 			"src/a.ts": "export const a = 1;",
 			"src/b.ts": "export const b = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		fs.rmSync(path.join(root, "src/b.ts"));
 		expect(ws.revalidate().removed).toEqual(["src/b.ts"]);
 		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
@@ -751,7 +805,7 @@ describe("Workspace.revalidate", () => {
 	 */
 	it("re-globs on the first revalidate however young the workspace is", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		write(root, "src/b.ts", "export const b = 1;");
 		expect(ws.revalidate().added).toEqual(["src/b.ts"]);
 	});
@@ -770,7 +824,7 @@ describe("Workspace.revalidate", () => {
 				'import { helper } from "./helper.js";\nexport const a = helper;',
 			"src/helper.js": "export const helper = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		// `.js` is outside SCAN_GLOB, so the file is in the project only because
 		// the resolver added it while following the import.
 		expect(rels(ws)).toEqual(["src/a.ts"]);
@@ -794,7 +848,7 @@ describe("Workspace.revalidate", () => {
 				'import { helper } from "./helper.js";\nexport const a = helper;',
 			"src/helper.js": "export const helper = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		resolveRelativeModule(
 			ws.project,
 			ws.project.getSourceFileOrThrow("a.ts"),
@@ -807,7 +861,7 @@ describe("Workspace.revalidate", () => {
 
 	it("bumps the epoch only when something actually changed", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		const before = ws.currentEpoch;
 		ws.revalidate();
 		expect(ws.currentEpoch).toBe(before);
@@ -849,7 +903,7 @@ describe("Workspace maxFiles enforcement", () => {
 	// the rest of the session without ever reporting `max_files_exceeded`.
 	it("refuses a resolver-added file that breaks the cap", () => {
 		const root = scratch(capped);
-		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 2 });
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 2 });
 		expect(() =>
 			resolveRelativeModule(
 				ws.project,
@@ -863,7 +917,7 @@ describe("Workspace maxFiles enforcement", () => {
 
 	it("still resolves an on-demand import that fits inside the cap", () => {
 		const root = scratch(capped);
-		const ws = Workspace.acquire({ projectRoot: root, maxFiles: 3 });
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 3 });
 		expect(
 			resolveRelativeModule(
 				ws.project,
@@ -880,12 +934,12 @@ describe("Workspace maxFiles enforcement", () => {
 			"src/b.ts": "export const b = 1;",
 		});
 		const options = { projectRoot: root, maxFiles: 2, staleAfterMs: 0 };
-		const ws = Workspace.acquire(options);
+		const ws = pool.acquire(options);
 		write(root, "src/c.ts", "export const c = 1;");
 
 		expect(() => ws.revalidate()).toThrow(AnalysisLimitError);
 		// The retry must not find a cached workspace that quietly kept the file.
-		expect(() => Workspace.acquire(options)).toThrow(AnalysisLimitError);
+		expect(() => pool.acquire(options)).toThrow(AnalysisLimitError);
 		expect(() => ws.revalidate()).toThrow(AnalysisLimitError);
 		expect(parsed(ws)).toEqual(["src/a.ts", "src/b.ts"]);
 	});
@@ -896,12 +950,12 @@ describe("Workspace maxFiles enforcement", () => {
 			"src/b.ts": "export const b = 1;",
 		});
 		const options = { projectRoot: root, maxFiles: 2, staleAfterMs: 0 };
-		Workspace.acquire(options);
+		pool.acquire(options);
 		write(root, "src/c.ts", "export const c = 1;");
-		expect(() => Workspace.acquire(options)).toThrow(AnalysisLimitError);
+		expect(() => pool.acquire(options)).toThrow(AnalysisLimitError);
 
 		fs.rmSync(path.join(root, "src/c.ts"));
-		expect(rels(Workspace.acquire(options))).toEqual(["src/a.ts", "src/b.ts"]);
+		expect(rels(pool.acquire(options))).toEqual(["src/a.ts", "src/b.ts"]);
 	});
 
 	/**
@@ -917,7 +971,7 @@ describe("Workspace maxFiles enforcement", () => {
 			"src/b.ts": "export const b = 1;",
 			"shared/helper.ts": "export const helper = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src"],
 			maxFiles: 2,
@@ -945,7 +999,7 @@ describe("Workspace maxFiles enforcement", () => {
 				'import { helper } from "../shared/helper";\nexport const a = helper;',
 			"shared/helper.ts": "export const helper = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src"],
 			maxFiles: 2,
@@ -979,7 +1033,7 @@ describe("Workspace maxFiles enforcement", () => {
 			"e2e/playwright.config.ts":
 				'export default { use: { testIdAttribute: "data-x" } };',
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src"],
 			maxFiles: 2,
@@ -1014,7 +1068,7 @@ describe("Workspace maxFiles enforcement", () => {
 		const root = outsideRootTsConfig();
 		const reads = recordingReads(() => {
 			expect(() =>
-				Workspace.acquire({
+				pool.acquire({
 					projectRoot: path.join(root, "app"),
 					maxFiles: 3,
 				}),
@@ -1031,7 +1085,7 @@ describe("Workspace maxFiles enforcement", () => {
 	// counting it here would refuse a scope that costs nothing.
 	it("still admits a narrowed scope inside an oversized tsconfig", () => {
 		const root = outsideRootTsConfig();
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: path.join(root, "app"),
 			include: ["src"],
 			maxFiles: 3,
@@ -1082,7 +1136,7 @@ describe("Workspace on-demand additions", () => {
 				'import { helper } from "./helper.js";\nexport const a = helper;',
 			"src/helper.js": "export const helper = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		// `.js` is outside the scan globs, so it is in the project only once the
 		// resolver follows the import — and `rels` here memoizes the list first.
 		expect(rels(ws)).toEqual(["src/a.ts"]);
@@ -1106,7 +1160,7 @@ describe("Workspace on-demand additions", () => {
 				'import { helper } from "./helper.js";\nexport const a = helper;',
 			"src/helper.js": "export const helper = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		const before = ws.currentEpoch;
 		resolveRelativeModule(
 			ws.project,
@@ -1124,7 +1178,7 @@ describe("Workspace on-demand additions", () => {
 				'import { helper } from "../shared/helper";\nexport const a = helper;',
 			"shared/helper.ts": "export const helper = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src"] });
 		expect(rels(ws)).toEqual(["src/a.ts"]);
 		resolveRelativeModule(
 			ws.project,
@@ -1147,7 +1201,7 @@ describe("Workspace.revalidate scoping", () => {
 			"e2e/a.ts": "export const a = 1;",
 			"scripts/stray.ts": "export const stray = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		expect(rels(ws)).toEqual(["e2e/a.ts"]);
 
 		const result = ws.revalidate();
@@ -1161,7 +1215,7 @@ describe("Workspace.revalidate scoping", () => {
 			"e2e/a.ts": "export const a = 1;",
 			"scripts/stray.ts": "export const stray = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		write(root, "e2e/b.ts", "export const b = 1;");
 
 		expect(ws.revalidate().added).toEqual(["e2e/b.ts"]);
@@ -1174,7 +1228,7 @@ describe("Workspace.revalidate scoping", () => {
 			"e2e/a.ts": "export const a = 1;",
 			"scripts/stray.ts": "export const stray = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["scripts"],
 			staleAfterMs: 0,
@@ -1196,7 +1250,7 @@ describe("Workspace.revalidate scoping", () => {
 			"scripts/one.ts": "export const one = 1;",
 			"scripts/two.ts": "export const two = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, include: ["e2e"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["e2e"] });
 		const parsed = ws.project
 			.getSourceFiles()
 			.map((file) => ws.rel(file.getFilePath()));
@@ -1212,7 +1266,7 @@ describe("Workspace.revalidate scoping", () => {
 			}),
 			"e2e/a.tsx": "export const A = () => <div data-testid='x' />;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, include: ["e2e"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["e2e"] });
 		expect(ws.project.getCompilerOptions().jsx).toBeDefined();
 		expect(rels(ws)).toEqual(["e2e/a.tsx"]);
 	});
@@ -1227,7 +1281,7 @@ describe("Workspace include normalization", () => {
 
 	it("expands a bare directory into a recursive source glob", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src"] });
 		expect(rels(ws)).toEqual(["src/a.ts", "src/nested/b.tsx"]);
 	});
 
@@ -1240,19 +1294,19 @@ describe("Workspace include normalization", () => {
 			"src/legacy.cts": "export const c = 1;",
 			"src/notes.md": "# not source",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src"] });
 		expect(rels(ws)).toEqual(["src/App.jsx", "src/legacy.cts", "src/util.mts"]);
 	});
 
 	it("expands a directory written with a trailing slash", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src/"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src/"] });
 		expect(rels(ws)).toEqual(["src/a.ts", "src/nested/b.tsx"]);
 	});
 
 	it("expands a directory written with Windows separators", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src\\nested"],
 		});
@@ -1261,7 +1315,7 @@ describe("Workspace include normalization", () => {
 
 	it("expands an absolute directory inside the root", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: [path.join(root, "src")],
 		});
@@ -1270,25 +1324,25 @@ describe("Workspace include normalization", () => {
 
 	it("expands `.` to the whole root", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({ projectRoot: root, include: ["."] });
+		const ws = pool.acquire({ projectRoot: root, include: ["."] });
 		expect(rels(ws)).toEqual(["other/c.ts", "src/a.ts", "src/nested/b.tsx"]);
 	});
 
 	it("leaves a real glob untouched", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src/*.ts"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src/*.ts"] });
 		expect(rels(ws)).toEqual(["src/a.ts"]);
 	});
 
 	it("leaves a single file path untouched", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src/a.ts"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src/a.ts"] });
 		expect(rels(ws)).toEqual(["src/a.ts"]);
 	});
 
 	it("expands a bare directory in `exclude` too", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({ projectRoot: root, exclude: ["src"] });
+		const ws = pool.acquire({ projectRoot: root, exclude: ["src"] });
 		expect(rels(ws)).toEqual(["other/c.ts"]);
 	});
 
@@ -1297,7 +1351,7 @@ describe("Workspace include normalization", () => {
 			"foo.config/a.ts": "export const a = 1;",
 			"src/b.ts": "export const b = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["foo.config"],
 		});
@@ -1309,7 +1363,7 @@ describe("Workspace include normalization", () => {
 			".config/a.ts": "export const a = 1;",
 			"src/b.ts": "export const b = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, include: [".config"] });
+		const ws = pool.acquire({ projectRoot: root, include: [".config"] });
 		expect(rels(ws)).toEqual([".config/a.ts"]);
 	});
 
@@ -1318,7 +1372,7 @@ describe("Workspace include normalization", () => {
 			"foo.config/a.ts": "export const a = 1;",
 			"src/b.ts": "export const b = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			exclude: ["foo.config"],
 		});
@@ -1330,7 +1384,7 @@ describe("Workspace include normalization", () => {
 			"src/a.ts": "export const a = 1;",
 			"src/b.ts": "export const b = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, include: ["src/a.ts"] });
+		const ws = pool.acquire({ projectRoot: root, include: ["src/a.ts"] });
 		expect(rels(ws)).toEqual(["src/a.ts"]);
 	});
 });
@@ -1352,7 +1406,7 @@ describe("Workspace negated scope", () => {
 
 	it("scans everything but the negated directory", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["!src/generated"],
 		});
@@ -1368,7 +1422,7 @@ describe("Workspace negated scope", () => {
 			"src/a.ts": 'import { b } from "./generated/b";\nexport const a = b;',
 			"src/generated/b.ts": "export const b = 1;",
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src", "!src/generated"],
 		});
@@ -1388,7 +1442,7 @@ describe("Workspace negated scope", () => {
 	// that is not there is not a misconfiguration to report.
 	it("says nothing about a negated directory that is not there", () => {
 		const root = scratch(tree);
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: root,
 			include: ["src", "!src/nope"],
 		});
@@ -1402,7 +1456,7 @@ describe("Workspace negated scope", () => {
 describe("Workspace.memo", () => {
 	it("reuses a value while its dependencies are unchanged", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		let calls = 0;
 		const compute = () => {
 			calls += 1;
@@ -1415,7 +1469,7 @@ describe("Workspace.memo", () => {
 
 	it("recomputes after the dependency is edited", () => {
 		const root = scratch({ "src/a.ts": "export const a = 1;" });
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		let calls = 0;
 		const compute = () => {
 			calls += 1;
@@ -1433,7 +1487,7 @@ describe("Workspace.memo", () => {
 			"src/a.ts": "export const a = 1;",
 			"src/b.ts": "export const b = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		let calls = 0;
 		const compute = () => {
 			calls += 1;
@@ -1474,7 +1528,7 @@ describe("Workspace paths and attribute resolution", () => {
 			"src/App.jsx": "export const App = () => null;",
 			"src/a.ts": "export const a = 1;",
 		});
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		expect(ws.jsxFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
 			"src/App.jsx",
 		]);

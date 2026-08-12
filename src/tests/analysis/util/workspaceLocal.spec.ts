@@ -12,7 +12,7 @@ import {
 	realDirectory,
 	registerWorkspaceRoot,
 } from "../../../analysis/util/workspaceRoot";
-import { Workspace } from "../../../analysis/workspace";
+import { WorkspacePool } from "../../../analysis/workspace";
 import {
 	canLink,
 	cleanupScratchRoots,
@@ -32,6 +32,9 @@ import {
  * These have to run against a real filesystem: ts-morph's in-memory host models
  * no links at all.
  */
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
 
 function scratch(files: Record<string, string>): string {
 	return scratchRepo(files, { prefix: "ppo-link-", real: true });
@@ -86,7 +89,7 @@ const MONOREPO = {
 };
 
 beforeEach(() => {
-	Workspace.reset();
+	pool.clear();
 	vi.restoreAllMocks();
 });
 
@@ -101,7 +104,7 @@ describe.skipIf(!LINKS_WORK)("isWorkspaceLocal", () => {
 			"node_modules/react/index.js": "module.exports = {};",
 		});
 		link(root, "node_modules/@acme/ui", "packages/ui");
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 
 		expect(
 			isWorkspaceLocal(
@@ -128,7 +131,7 @@ describe.skipIf(!LINKS_WORK)("isWorkspaceLocal", () => {
 		const root = scratch(MONOREPO);
 		link(root, "node_modules/@acme/ui", "packages/ui");
 		const alias = aliasOf(root);
-		const ws = Workspace.acquire({ projectRoot: alias });
+		const ws = pool.acquire({ projectRoot: alias });
 
 		// Spelled with the resolved root: what `realpath` answers with, and
 		// therefore what the classifier compares against the configured root.
@@ -156,7 +159,7 @@ describe.skipIf(!LINKS_WORK)("isWorkspaceLocal", () => {
 			"node_modules/react/index.js": "module.exports = {};",
 		});
 		link(root, "node_modules/@acme/ui", "packages/ui");
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const spelled = `${toPosix(root)}/Node_Modules/react/index.js`;
 
 		// Case-folding filesystem: the installed dependency it really is. Case
@@ -170,7 +173,7 @@ describe.skipIf(!LINKS_WORK)("isWorkspaceLocal", () => {
 	it("folds case exactly where the filesystem folds it", () => {
 		const root = scratch(MONOREPO);
 		link(root, "node_modules/@acme/ui", "packages/ui");
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const inside = `${toPosix(root)}/packages/ui/src/index.tsx`;
 
 		expect(isWorkspaceLocal(ws.project, inside)).toBe(true);
@@ -225,7 +228,7 @@ describe.skipIf(!LINKS_WORK)(
 		it("expands the linked component and reports its real path", () => {
 			const root = scratch(MONOREPO);
 			link(root, "node_modules/@acme/ui", "packages/ui");
-			const ws = Workspace.acquire({ projectRoot: root });
+			const ws = pool.acquire({ projectRoot: root });
 
 			const tree = buildTestIdTree(ws, { entry: "apps/web/src/App.tsx" });
 			const gapped = tree.roots[0];
@@ -247,7 +250,7 @@ describe.skipIf(!LINKS_WORK)(
 		it("back-fills the linked package's ids into the inventory", () => {
 			const root = scratch(MONOREPO);
 			link(root, "node_modules/@acme/ui", "packages/ui");
-			const ws = Workspace.acquire({ projectRoot: root });
+			const ws = pool.acquire({ projectRoot: root });
 
 			// The tsconfig scopes the scan to `apps`, so `packages/ui` only joins the
 			// project when the walk resolves the import — after the memoized file list
@@ -287,7 +290,7 @@ describe.skipIf(!LINKS_WORK)(
 			const root = scratch(files);
 			link(root, "node_modules/@acme/ui", "packages/ui");
 			const spy = vi.spyOn(fs.realpathSync, "native");
-			const ws = Workspace.acquire({ projectRoot: root });
+			const ws = pool.acquire({ projectRoot: root });
 			const tree = buildTestIdTree(ws, { entry: "apps/web/src/App.tsx" });
 
 			// Only this engine ever resolves a `node_modules` path — TypeScript's own
@@ -318,7 +321,7 @@ describe.skipIf(!LINKS_WORK)("linked package subpaths", () => {
 	}
 
 	function resolveFrom(root: string, name: string) {
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const entry = ws.project.getSourceFileOrThrow(
 			path.join(root, "apps", "web", "src", "App.tsx"),
 		);
@@ -616,7 +619,7 @@ describe.skipIf(!LINKS_WORK)("linked package subpaths", () => {
 			"apps/web/src/App.tsx": app('import { Gapped } from "@acme/ui";'),
 		});
 		link(root, "node_modules/@acme/ui", "packages/ui");
-		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		const ws = pool.acquire({ projectRoot: root, staleAfterMs: 0 });
 		const entry = path.join(root, "apps", "web", "src", "App.tsx");
 		const first = resolveIdentifier(
 			ws.project,
@@ -668,7 +671,7 @@ describe("installed dependencies stay unread", () => {
 				"",
 			].join("\n"),
 		});
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 		const app = ws.project.getSourceFileOrThrow(
 			path.join(root, "src", "App.tsx"),
 		);
@@ -706,7 +709,7 @@ describe("installed dependencies stay unread", () => {
 				].join("\n"),
 			});
 			link(root, "node_modules/@acme/built", "packages/built");
-			const ws = Workspace.acquire({ projectRoot: root });
+			const ws = pool.acquire({ projectRoot: root });
 			const app = ws.project.getSourceFileOrThrow(
 				path.join(root, "apps", "web", "src", "App.tsx"),
 			);
@@ -767,7 +770,7 @@ describe.skipIf(!LINKS_WORK)("externalModuleRoot", () => {
 	it("names the directory that would bring a linked sibling into scope", () => {
 		const root = scratch(APP_ONLY);
 		link(root, "node_modules/@acme/ui", "packages/ui");
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: path.join(root, "apps", "web"),
 		});
 
@@ -788,7 +791,7 @@ describe.skipIf(!LINKS_WORK)("externalModuleRoot", () => {
 			"node_modules/@acme/ui/src/index.tsx":
 				'export function Gapped() { return <div data-testid="GappedRoot" />; }\n',
 		});
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: path.join(root, "apps", "web"),
 		});
 

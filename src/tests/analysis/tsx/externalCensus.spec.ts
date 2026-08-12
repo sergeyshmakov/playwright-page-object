@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { buildCoverageReport } from "../../../analysis/coverage/mapCoverage";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
-import { Workspace } from "../../../analysis/workspace";
+import { WorkspacePool } from "../../../analysis/workspace";
 import { canLink, cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
 
 /**
@@ -20,6 +20,9 @@ import { canLink, cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
  *
  * Real filesystem, because ts-morph's in-memory host models no links at all.
  */
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
 
 function scratch(files: Record<string, string>): string {
 	return scratchRepo(files, { prefix: "ppo-census-", real: true });
@@ -75,7 +78,7 @@ const SPLIT_MONOREPO = {
 };
 
 beforeEach(() => {
-	Workspace.reset();
+	pool.clear();
 });
 
 afterAll(() => {
@@ -86,7 +89,7 @@ describe.skipIf(!LINKS_WORK)("external module census", () => {
 	it("resolves one specifier per importing file", () => {
 		const root = scratch(SPLIT_MONOREPO);
 		link(root, "packages/web/node_modules/@acme/ui", "packages/ui");
-		const ws = Workspace.acquire({ projectRoot: root });
+		const ws = pool.acquire({ projectRoot: root });
 
 		const tree = buildTestIdTree(ws, { entry: "packages/web/src/App.tsx" });
 
@@ -155,7 +158,7 @@ describe.skipIf(!LINKS_WORK)("external module census", () => {
 			`repo/packages/app${importers - 1}/node_modules/@acme/ui`,
 			"shared/ui",
 		);
-		const ws = Workspace.acquire({
+		const ws = pool.acquire({
 			projectRoot: path.join(outer, "repo"),
 		});
 

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
-import { Workspace as AnalysisWorkspace, type Workspace } from "../analysis";
+import { type Workspace, WorkspacePool } from "../analysis";
 import {
 	CoverageHandles,
 	HANDLE_LIFETIME_CLAUSE,
@@ -118,12 +118,15 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		maxFiles: options.maxFiles,
 		attribute: options.attribute,
 	};
+	// One pool per server, like the handle store below: a second server in the
+	// same process analyses its own root and must not be handed a workspace
+	// built for another one.
+	const workspaces = new WorkspacePool();
 	// Re-acquired on every call, never memoized here: `acquire` builds the
 	// workspace on first use and afterwards returns the cached one (LRU of 2)
 	// only after an mtime revalidation sweep. That sweep is what makes a
 	// long-lived stdio session see edits made since the previous call.
-	const getWorkspace = (): Workspace =>
-		AnalysisWorkspace.acquire(workspaceOptions);
+	const getWorkspace = (): Workspace => workspaces.acquire(workspaceOptions);
 
 	const server = new McpServer(
 		{ name: "playwright-page-object", version: readVersion() },

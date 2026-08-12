@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { Workspace } from "../../analysis/workspace";
+import { WorkspacePool } from "../../analysis/workspace";
 import {
 	cleanupScratchRoots,
 	scratchRepo,
@@ -22,13 +22,16 @@ import {
  * immediately asks again is the opposite of silent.
  */
 
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
+
 function scratch(files: Record<string, string>): string {
 	return scratchRepo(files, { prefix: "ppo-fresh-" });
 }
 
 afterAll(() => {
 	cleanupScratchRoots();
-	Workspace.reset();
+	pool.clear();
 });
 
 describe("what survives a config edit", () => {
@@ -44,12 +47,12 @@ describe("what survives a config edit", () => {
 			"a/spec.ts": "export const a = 1;",
 			"b/spec.ts": "export const b = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const first = pool.acquire({ projectRoot: root });
 		expect(first.tsconfigPath).toContain(`a${path.sep}tsconfig.json`);
 
 		write(root, "playwright.config.ts", 'export default { testDir: "./b" };');
-		const second = Workspace.acquire({ projectRoot: root });
+		const second = pool.acquire({ projectRoot: root });
 		expect(second).not.toBe(first);
 		expect(second.tsconfigPath).toContain(`b${path.sep}tsconfig.json`);
 	});
@@ -64,8 +67,8 @@ describe("what survives a config edit", () => {
 			}),
 			"src/a.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const first = pool.acquire({ projectRoot: root });
 		write(
 			root,
 			"tsconfig.json",
@@ -74,7 +77,7 @@ describe("what survives a config edit", () => {
 				include: ["src/**/*.ts", "extra/**/*.ts"],
 			}),
 		);
-		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
+		expect(pool.acquire({ projectRoot: root })).not.toBe(first);
 	});
 
 	it("rebuilds when a tsconfig the located one extends is edited", () => {
@@ -91,8 +94,8 @@ describe("what survives a config edit", () => {
 			}),
 			"src/a.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const first = pool.acquire({ projectRoot: root });
 		write(
 			root,
 			"tsconfig.base.json",
@@ -100,7 +103,7 @@ describe("what survives a config edit", () => {
 				compilerOptions: { target: "ES2022", noEmit: true, strict: true },
 			}),
 		);
-		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
+		expect(pool.acquire({ projectRoot: root })).not.toBe(first);
 	});
 
 	it("notices an extends target that did not exist yet", () => {
@@ -115,8 +118,8 @@ describe("what survives a config edit", () => {
 			}),
 			"src/a.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const first = pool.acquire({ projectRoot: root });
 		write(
 			root,
 			"base.json",
@@ -124,7 +127,7 @@ describe("what survives a config edit", () => {
 				compilerOptions: { target: "ES2022", noEmit: true },
 			}),
 		);
-		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
+		expect(pool.acquire({ projectRoot: root })).not.toBe(first);
 	});
 
 	it("rebuilds when a linked config package it extends is edited", () => {
@@ -143,8 +146,8 @@ describe("what survives a config edit", () => {
 			}),
 			"src/a.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const first = pool.acquire({ projectRoot: root });
 		write(
 			root,
 			"node_modules/@repo/tsconfig/base.json",
@@ -152,7 +155,7 @@ describe("what survives a config edit", () => {
 				compilerOptions: { target: "ES2022", noEmit: true, strict: true },
 			}),
 		);
-		expect(Workspace.acquire({ projectRoot: root })).not.toBe(first);
+		expect(pool.acquire({ projectRoot: root })).not.toBe(first);
 	});
 
 	it("keeps the same project when an ordinary source file changes", () => {
@@ -165,14 +168,14 @@ describe("what survives a config edit", () => {
 			}),
 			"e2e/spec.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const first = pool.acquire({ projectRoot: root });
 		write(root, "e2e/spec.ts", "export const a = 2;");
-		const second = Workspace.acquire({ projectRoot: root });
+		const second = pool.acquire({ projectRoot: root });
 		expect(second).toBe(first);
 		// And repeatedly, with nothing changed at all.
-		expect(Workspace.acquire({ projectRoot: root })).toBe(first);
-		expect(Workspace.acquire({ projectRoot: root })).toBe(first);
+		expect(pool.acquire({ projectRoot: root })).toBe(first);
+		expect(pool.acquire({ projectRoot: root })).toBe(first);
 	});
 
 	it("keeps the same project when the config changes something unrelated", () => {
@@ -184,14 +187,14 @@ describe("what survives a config edit", () => {
 			}),
 			"e2e/spec.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const first = pool.acquire({ projectRoot: root });
 		write(
 			root,
 			"playwright.config.ts",
 			'export default { testDir: "./e2e", retries: 3 };',
 		);
-		expect(Workspace.acquire({ projectRoot: root })).toBe(first);
+		expect(pool.acquire({ projectRoot: root })).toBe(first);
 	});
 });
 
@@ -207,8 +210,8 @@ describe("what a fixed scope stops saying", () => {
 			}),
 			"src/a.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({
+		pool.clear();
+		const first = pool.acquire({
 			projectRoot: root,
 			include: ["src", "e2e"],
 		});
@@ -217,7 +220,7 @@ describe("what a fixed scope stops saying", () => {
 		);
 
 		write(root, "e2e/spec.ts", "export const b = 1;");
-		const second = Workspace.acquire({
+		const second = pool.acquire({
 			projectRoot: root,
 			include: ["src", "e2e"],
 		});
@@ -239,8 +242,8 @@ describe("what a fixed config stops saying", () => {
 				"export default { use: { testIdAttribute: process.env.ATTR } };",
 			"src/a.ts": "export const a = 1;",
 		});
-		Workspace.reset();
-		const first = Workspace.acquire({ projectRoot: root });
+		pool.clear();
+		const first = pool.acquire({ projectRoot: root });
 		expect(
 			first.environmentWarnings().map((diagnostic) => diagnostic.code),
 		).toContain("testid-attribute-unresolved");
@@ -250,7 +253,7 @@ describe("what a fixed config stops saying", () => {
 			"playwright.config.ts",
 			'export default { use: { testIdAttribute: "data-tid" } };',
 		);
-		const second = Workspace.acquire({ projectRoot: root });
+		const second = pool.acquire({ projectRoot: root });
 		expect(second.testIdAttribute().attribute).toBe("data-tid");
 		expect(
 			second.environmentWarnings().map((diagnostic) => diagnostic.code),
