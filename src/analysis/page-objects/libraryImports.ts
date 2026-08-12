@@ -207,6 +207,15 @@ function canonicalThroughBarrel(
 		const specifier = declaration.getModuleSpecifierValue();
 		const named = declaration.getNamedExports();
 		if (named.length === 0) {
+			// `export * as controls from "the-library"` also has no named exports,
+			// and it publishes exactly one name — `controls`. Treating it as a plain
+			// star export said the barrel re-exported `Selector`, so a *local*
+			// export of that name elsewhere in the barrel would be read as the
+			// library's decorator. Skipped rather than followed: what it binds is a
+			// namespace, and this function answers with canonical names.
+			if (declaration.getNamespaceExport()) {
+				continue;
+			}
 			// `export * from "..."`: the name passes through unchanged.
 			const found = specifier ? through(specifier, exported) : undefined;
 			if (found) {
@@ -248,12 +257,14 @@ function collectThroughBarrel(
 	declaration: ImportDeclaration,
 	ctx: AnalysisContext,
 	aliases: Map<string, string>,
+	namespaces: Set<string>,
 ): void {
+	const namespaceImport = declaration.getNamespaceImport();
 	const wanted = declaration
 		.getNamedImports()
 		.filter((named) => !named.isTypeOnly())
 		.filter((named) => CANONICAL_EXPORTS.has(named.getName()));
-	if (wanted.length === 0) {
+	if (wanted.length === 0 && !namespaceImport) {
 		return;
 	}
 	const barrel = resolveRelativeModule(
@@ -263,6 +274,14 @@ function collectThroughBarrel(
 	);
 	if (!barrel) {
 		return;
+	}
+	// `import * as po from "./pom"` binds every export at once, so there is no
+	// imported name to test cheaply and no canonical name to map it to. The
+	// question is only whether this barrel leads to the library at all; if it
+	// does, `canonicalLocalName` resolves `po.Selector` from the suffix, and a
+	// suffix outside `CANONICAL_EXPORTS` is rejected there as it always was.
+	if (namespaceImport && barrelReachesLibrary(barrel, ctx, new Set())) {
+		namespaces.add(namespaceImport.getText());
 	}
 	for (const named of wanted) {
 		const canonical = canonicalThroughBarrel(
@@ -277,6 +296,40 @@ function collectThroughBarrel(
 		const alias = named.getAliasNode();
 		aliases.set(alias ? alias.getText() : named.getName(), canonical);
 	}
+}
+
+/**
+ * Whether any export of this barrel comes from the library.
+ *
+ * One walk rather than one per canonical name: a namespace import binds the
+ * whole module, so the question is about the barrel and not about a name.
+ */
+function barrelReachesLibrary(
+	file: SourceFile,
+	ctx: AnalysisContext,
+	seen: Set<string>,
+): boolean {
+	if (seen.size >= MAX_BARREL_HOPS || seen.has(file.getFilePath())) {
+		return false;
+	}
+	seen.add(file.getFilePath());
+	for (const declaration of file.getExportDeclarations()) {
+		if (declaration.isTypeOnly()) {
+			continue;
+		}
+		const specifier = declaration.getModuleSpecifierValue();
+		if (specifier === undefined) {
+			continue;
+		}
+		if (isDirectLibrarySpecifier(specifier, ctx)) {
+			return true;
+		}
+		const next = resolveRelativeModule(ctx.project, file, specifier);
+		if (next && barrelReachesLibrary(next, ctx, seen)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /** The module `local` was imported from in `file`, for a bare `export { local }`. */
@@ -319,7 +372,7 @@ export function collectLibraryImports(
 			// be one of ours; every other relative import in the repository is
 			// dismissed on a set lookup.
 			if (isRelativeSpecifier(specifier) && !declaration.isTypeOnly()) {
-				collectThroughBarrel(sourceFile, declaration, ctx, aliases);
+				collectThroughBarrel(sourceFile, declaration, ctx, aliases, namespaces);
 			}
 			continue;
 		}

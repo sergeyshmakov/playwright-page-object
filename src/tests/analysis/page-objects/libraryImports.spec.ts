@@ -203,3 +203,65 @@ describe("the library reached through a project barrel", () => {
 		).toBeUndefined();
 	});
 });
+
+describe("barrel shapes that must not be over-read", () => {
+	it("does not treat `export * as ns` as a passthrough re-export", () => {
+		// `export * as controls from "the-library"` publishes one name -
+		// `controls` - and reading it as `export *` said the barrel re-exported
+		// `Selector`, so the barrel's own local `Selector` became the library's.
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/pom.ts": [
+					'export * as controls from "playwright-page-object";',
+					"export const Selector = (id: string) => (..._args: never[]) => {};",
+					"export class RootPageObject {}",
+				].join("\n"),
+				"e2e/HomePage.ts": [
+					'import { RootPageObject, Selector } from "./pom";',
+					"export class HomePage extends RootPageObject {",
+					'  @Selector("Title")',
+					"  accessor Title!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage"),
+		).toBeUndefined();
+	});
+
+	it("resolves a namespace import of a barrel that reaches the library", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/pom.ts": 'export * from "playwright-page-object";',
+				"e2e/HomePage.ts": [
+					'import * as po from "./pom";',
+					"@po.RootSelector()",
+					"export class HomePage extends po.RootPageObject {",
+					'  @po.Selector("Title")',
+					"  accessor Title!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage")?.counts
+				.members,
+		).toBe(1);
+	});
+
+	it("leaves a namespace import of an unrelated module alone", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/pom.ts": "export class RootPageObject {}",
+				"e2e/HomePage.ts": [
+					'import * as po from "./pom";',
+					"export class HomePage extends po.RootPageObject {}",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage"),
+		).toBeUndefined();
+	});
+});
