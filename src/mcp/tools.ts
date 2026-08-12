@@ -9,6 +9,7 @@ import {
 	type Diagnostic,
 	discoverPageObjects,
 	entryFileCandidates,
+	foldPath,
 	isCatchAllPattern,
 	matchEntryPath,
 	nearestFiles,
@@ -970,12 +971,15 @@ export function handleGetTestIdTree(
 /**
  * A path as the engine spells it, folded for comparison: posix separators, no
  * leading `./`, and case folded only where the filesystem folds it too.
+ *
+ * Both halves come from the engine. The case rule in particular has one owner -
+ * `util/paths.ts` documents `isCaseInsensitiveFileSystem` as the single source
+ * of truth, blind spots and all - and re-inlining the platform test here meant
+ * the tool layer could answer a question about the filesystem differently from
+ * the analysis that produced the paths it is comparing.
  */
 function foldFile(value: string): string {
-	const posix = normalizeRelPath(value);
-	return process.platform === "win32" || process.platform === "darwin"
-		? posix.toLowerCase()
-		: posix;
+	return foldPath(normalizeRelPath(value));
 }
 
 /**

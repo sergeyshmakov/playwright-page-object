@@ -20,6 +20,7 @@ import type {
 } from "../types";
 import { unwrapTransparent } from "../util/ast";
 import { Budget } from "../util/budget";
+import { rawText } from "../util/literal";
 import { keyFold, matchesAnyGlob, normalizeRelPath } from "../util/paths";
 import { lineAndColumnAt } from "../util/position";
 import { resolveExportedName } from "../util/resolve";
@@ -183,6 +184,15 @@ const EMPTY_STATE: ExpandState = {
 	conditional: false,
 	repeated: false,
 };
+
+/**
+ * Source text on a marker node, bounded shorter than the wire default.
+ *
+ * A marker is one line inside a tree that may carry hundreds of them, so it
+ * gets 80 characters where `rawText`'s own default of 200 is sized for a single
+ * diagnostic message.
+ */
+const MARKER_RAW = 80;
 
 /** Field separators that cannot occur in an identifier or in source text. */
 const FIELD = "\u0000";
@@ -1399,7 +1409,12 @@ class TreeBuilder {
 				scope,
 			);
 			if (inlined.length === 0 && fromArguments.length === 0) {
-				return this.marker(owner, node, "local-render-function", rawText(node));
+				return this.marker(
+					owner,
+					node,
+					"local-render-function",
+					rawText(node, MARKER_RAW),
+				);
 			}
 			return [...inlined, ...fromArguments];
 		}
@@ -1575,7 +1590,7 @@ class TreeBuilder {
 			owner,
 			callee,
 			"imported-render-function",
-			rawText(callee.getParent() ?? callee),
+			rawText(callee.getParent() ?? callee, MARKER_RAW),
 		);
 	}
 
@@ -2748,12 +2763,6 @@ function isLexicallyInside(node: Node, container: Node): boolean {
 		current = current.getParent();
 	}
 	return false;
-}
-
-/** Source text for a marker: one line, bounded, so a long call cannot bloat the payload. */
-function rawText(node: Node, limit = 80): string {
-	const text = node.getText().replace(/\s+/g, " ").trim();
-	return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
 /**
