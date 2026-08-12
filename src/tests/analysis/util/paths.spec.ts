@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	defKey,
 	escapeRegExp,
+	globStaticBase,
 	isCaseInsensitiveFileSystem,
 	isDeclarationFile,
 	isGlobPattern,
@@ -264,6 +265,59 @@ describe("isGlobPattern", () => {
 			"src/!(generated)",
 		]) {
 			expect(isGlobPattern(glob)).toBe(true);
+		}
+	});
+});
+
+/**
+ * The static leading path of a pattern, which is what `--src-dir` containment is
+ * decided on.
+ *
+ * Pinned directly, not only through `validateServerOptions`, because the whole
+ * check rests on one assumption about picomatch: that `scan().base` is the part
+ * of the pattern before the first magic character, and therefore a real path
+ * that can be resolved and compared. If that ever stops holding, a scope
+ * pointing outside the root starts passing validation and every tool answers
+ * from an empty index with nothing saying why.
+ */
+describe("globStaticBase", () => {
+	it("returns the path before the first magic character", () => {
+		const cases: Array<[string, string]> = [
+			["../other/**/*.tsx", "../other"],
+			["src/**/*.tsx", "src"],
+			["src/components/*.tsx", "src/components"],
+			// No static part at all: the pattern is rooted wherever it is applied,
+			// so there is nothing to check containment against.
+			["**/*.tsx", ""],
+			// Extglobs are magic to picomatch even without a `*`, so the base stops
+			// before them — the same verdict `isGlobPattern` gives.
+			["src/@(App|Admin).tsx", "src"],
+			["src/{a,b}/x.tsx", "src"],
+			["../../x/*.ts", "../../x"],
+		];
+		for (const [pattern, base] of cases) {
+			expect(globStaticBase(pattern)).toBe(base);
+		}
+	});
+
+	it("normalises Windows separators before scanning", () => {
+		// The caller resolves this against the project root, so a backslash form
+		// has to come back in the same posix spelling everything else uses.
+		expect(globStaticBase("src\\components\\**\\*.tsx")).toBe("src/components");
+	});
+
+	it("agrees with isGlobPattern about where magic starts", () => {
+		// The two read the same `scan()`; a disagreement would mean containment is
+		// checked against a base for a pattern that was never treated as a glob.
+		for (const pattern of ["src/**/*.ts", "src/@(a|b)", "{a,b}"]) {
+			expect(isGlobPattern(pattern)).toBe(true);
+			expect(globStaticBase(pattern).includes("*")).toBe(false);
+		}
+	});
+
+	it("gives a plain path back unchanged", () => {
+		for (const literal of ["src", "e2e/tests", "../other"]) {
+			expect(globStaticBase(literal)).toBe(literal);
 		}
 	});
 });
