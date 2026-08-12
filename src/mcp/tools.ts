@@ -798,10 +798,26 @@ export function handleMapCoverage(
 		// case-sensitively against workspace-relative paths.
 		poInclude = [match];
 	} else if (args.class) {
-		const index = discoverPageObjects(workspace);
-		const matches = index.pageObjects.filter(
+		// Widened on a miss, exactly as the `file` branch above does. The default
+		// index filters out factory-only controls, and a control's class name is
+		// precisely what a parent's selector tree hands the caller — so asking for
+		// its coverage by the name the tree just showed you answered
+		// `class_not_found` and recommended `list_page_objects`, which by design
+		// never lists it. The same selectors were auditable by `file`.
+		let index = discoverPageObjects(workspace);
+		let matches = index.pageObjects.filter(
 			(item) => item.className === args.class,
 		);
+		if (matches.length === 0) {
+			const widened = discoverPageObjects(workspace, { includeControls: true });
+			const found = widened.pageObjects.filter(
+				(item) => item.className === args.class,
+			);
+			if (found.length > 0) {
+				index = widened;
+				matches = found;
+			}
+		}
 		if (matches.length === 0) {
 			const wanted = args.class ?? "";
 			const names = index.pageObjects.map((item) => item.className);
