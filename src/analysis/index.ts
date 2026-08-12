@@ -52,7 +52,11 @@ export {
 	discoverPageObjects,
 } from "./page-objects/discover";
 export { toInlineTree } from "./page-objects/inline";
-export { buildPageObjectTree, type TreeOptions } from "./page-objects/tree";
+export {
+	buildPageObjectTree,
+	isDynamicMember,
+	type TreeOptions,
+} from "./page-objects/tree";
 export {
 	type AttributeCensus,
 	attributeVerdict,

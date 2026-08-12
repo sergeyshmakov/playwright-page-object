@@ -9,6 +9,7 @@ import type {
 	UiNode,
 	UiUnresolvedReason,
 } from "../analysis";
+import { isDynamicMember } from "../analysis";
 
 /**
  * Token-lean plain-text renderers for the two tree shapes.
@@ -77,15 +78,6 @@ function resultLabel(member: MemberNode): string {
 		default:
 			return "unknown";
 	}
-}
-
-/** Mirrors the engine's `isDynamicMember`: a resolved-looking label can still be a guess. */
-function isDynamic(member: MemberNode): boolean {
-	return (
-		member.selector.dynamic ||
-		member.result.kind === "unknown" ||
-		(member.result.kind === "control" && member.result.dynamic === true)
-	);
 }
 
 function memberRefs(member: MemberNode): string[] {
@@ -175,7 +167,7 @@ export function renderPageObjectOutline(tree: PageObjectTree): string {
 		);
 
 		for (const member of def.members) {
-			const dynamicMark = isDynamic(member) ? " [dynamic]" : "";
+			const dynamicMark = isDynamicMember(member) ? " [dynamic]" : "";
 			lines.push(
 				`${indent}  ${member.name} -> ${resultLabel(member)}  ${selectorLabel(member.selector)}${dynamicMark}`,
 			);
