@@ -20,6 +20,7 @@ import {
 	synthesizedCompilerOptions,
 	tsConfigChain,
 	tsConfigFileNames,
+	tsConfigWildcardDirectories,
 } from "./config/tsconfig";
 import {
 	AnalysisLimitError,
@@ -38,6 +39,7 @@ import type {
 import { registerFileAdmission } from "./util/fileBudget";
 import {
 	foldPath,
+	globStaticBase,
 	isDeclarationFile,
 	isGlobPattern,
 	isIgnoredPath,
@@ -294,6 +296,14 @@ export class Workspace {
 	private identity: string | null = null;
 	/** Summed lockfile mtimes as of the last sweep. See {@link lockfileChanged}. */
 	private lockfileStamp: number | null = null;
+	/** Last known mtime per scanned directory. See {@link scanDirsChanged}. */
+	private readonly scanDirMtimes = new Map<string, number>();
+	/** The tsconfig's wildcard directories, cached against its own mtime. */
+	private wildcardDirs: {
+		root: string;
+		stamp: string;
+		paths: string[];
+	} | null = null;
 	/**
 	 * The located tsconfig's `extends` chain, cached against the root's own mtime
 	 * so {@link projectIdentity} stats the chain per acquire but only re-reads it
@@ -389,6 +399,10 @@ export class Workspace {
 		// every later call saw the same stamp, leaving a newly linked package
 		// misclassified for the rest of the session.
 		created.lockfileChanged();
+		// Same reason, and the same mistake avoided: seeded before any tool call,
+		// so a file created between construction and the second acquire is a
+		// difference rather than the baseline.
+		created.scanDirsChanged();
 		while (Workspace.cache.size > LRU_SIZE) {
 			const oldest = Workspace.cache.entries().next();
 			if (oldest.done) {
@@ -501,6 +515,104 @@ export class Workspace {
 		} catch {
 			return null;
 		}
+	}
+
+	/**
+	 * Whether any directory the scan covers has changed since the last check.
+	 *
+	 * Two sources, because neither alone is enough:
+	 *
+	 * - Every directory that currently holds a project file, from the keys of
+	 *   {@link mtimes} - free, since the sweep maintains that map anyway. Covers a
+	 *   file appearing beside files already loaded, and a whole new subdirectory,
+	 *   which bumps its existing parent.
+	 * - The scan roots themselves, so a file landing in a root that holds no
+	 *   loaded source is still seen.
+	 *
+	 * Not exhaustive, and the timer is why that is acceptable: a file created in a
+	 * pre-existing *nested* directory holding no loaded source is still missed
+	 * until the window elapses. Catching that exactly needs a recursive watcher.
+	 * One second late is the worst case; before this it was "until something else
+	 * changed".
+	 */
+	private scanDirsChanged(): boolean {
+		if (this.inMemory) {
+			return false;
+		}
+		const directories = new Set<string>(this.scanRoots());
+		for (const filePath of this.mtimes.keys()) {
+			directories.add(path.dirname(filePath));
+		}
+		// Per directory, not a sum over the set, and only directories already known
+		// count as evidence. The set *grows* on its own as the resolver pulls files
+		// in on demand, so a summed stamp changed on almost every call and the
+		// re-glob it is supposed to gate ran every time - measured at 5-8% slower
+		// across the board on a 4,924-file repository, for a signal that was
+		// reporting the project loading rather than the disk changing.
+		//
+		// A genuinely new directory needs no special case: creating `src/new/`
+		// bumps the mtime of `src`, which is already known.
+		let changed = false;
+		const seen = new Set<string>();
+		for (const directory of directories) {
+			let stamp: number;
+			try {
+				stamp = fs.statSync(directory).mtimeMs;
+			} catch {
+				// Gone since the sweep, which already reported the files it held.
+				continue;
+			}
+			seen.add(directory);
+			const previous = this.scanDirMtimes.get(directory);
+			if (previous !== undefined && previous !== stamp) {
+				changed = true;
+			}
+			this.scanDirMtimes.set(directory, stamp);
+		}
+		for (const directory of this.scanDirMtimes.keys()) {
+			if (!seen.has(directory)) {
+				this.scanDirMtimes.delete(directory);
+			}
+		}
+		return changed;
+	}
+
+	/**
+	 * The directories the scan is anchored at.
+	 *
+	 * For a tsconfig-backed project, its `wildcardDirectories` - TypeScript
+	 * computes them for exactly this purpose and they are the only place the
+	 * scan's *directories*, as opposed to its files, are written down. Cached
+	 * against the tsconfig's own mtime, so the parse behind them is not repeated
+	 * per call.
+	 */
+	private scanRoots(): string[] {
+		const include = this.options.include ?? [];
+		if (include.length > 0) {
+			return include
+				.filter((pattern) => !pattern.startsWith("!"))
+				.map((pattern) =>
+					path.resolve(this.root, globStaticBase(pattern) || "."),
+				);
+		}
+		if (!this.tsconfigPath) {
+			return [this.root];
+		}
+		const stamp = mtimeOf(this.tsconfigPath);
+		if (
+			this.wildcardDirs === null ||
+			this.wildcardDirs.root !== this.tsconfigPath ||
+			this.wildcardDirs.stamp !== stamp
+		) {
+			this.wildcardDirs = {
+				root: this.tsconfigPath,
+				stamp,
+				paths: tsConfigWildcardDirectories(this.tsconfigPath),
+			};
+		}
+		return this.wildcardDirs.paths.length > 0
+			? this.wildcardDirs.paths
+			: [this.root];
 	}
 
 	private rememberProjectIdentity(): void {
@@ -1003,7 +1115,22 @@ export class Workspace {
 
 		const now = Date.now();
 		const rescanned: SourceFile[] = [];
-		if (now - this.lastGlobAt >= this.staleAfterMs) {
+		// The timer is the backstop, not the trigger. A file the agent has just
+		// *created* is invisible to the sweep above - that only visits files the
+		// project already holds - so throttling the re-glob throttled the one thing
+		// it is needed for, and the server's own promise that "results reflect the
+		// files on disk at the moment of the call" was false for the commonest
+		// workflow there is: write a component, then ask about it.
+		//
+		// A changed directory is the cheap exact signal. Hundreds of stats against
+		// the ~226 ms the re-glob costs on a 4,924-file repository.
+		//
+		// Evaluated before the `||`, never short-circuited by it: the call is what
+		// refreshes the baseline, so letting the timer skip it would leave the
+		// stamp describing whatever the tree looked like two calls ago and the
+		// *next* comparison would be against the wrong snapshot.
+		const dirsChanged = this.scanDirsChanged();
+		if (now - this.lastGlobAt >= this.staleAfterMs || dirsChanged) {
 			this.lastGlobAt = now;
 			try {
 				for (const sourceFile of this.rescan()) {

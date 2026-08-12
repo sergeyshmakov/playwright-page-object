@@ -229,6 +229,40 @@ export function tsConfigFileNames(
 }
 
 /**
+ * The directories a tsconfig's `include` patterns watch, as TypeScript computes
+ * them.
+ *
+ * `parseJsonConfigFileContent` already produces this for exactly this purpose —
+ * it is what `tsc --watch` registers recursive watches on — and
+ * {@link tsConfigFileNames} was throwing it away. It is the only place the scan's
+ * *directories*, as opposed to its files, exist anywhere in this codebase.
+ *
+ * The caller stats these to notice a file appearing in a directory that holds no
+ * loaded source yet, which the file-level mtime sweep cannot see. Returns `[]`
+ * when the config cannot be read; the caller then falls back to the timer.
+ */
+export function tsConfigWildcardDirectories(
+	tsConfigFilePath: string,
+): string[] {
+	try {
+		const read = ts.readConfigFile(tsConfigFilePath, (file) =>
+			ts.sys.readFile(file),
+		);
+		if (read.error || !read.config) {
+			return [];
+		}
+		const parsed = ts.parseJsonConfigFileContent(
+			read.config,
+			ts.sys,
+			path.dirname(tsConfigFilePath),
+		);
+		return Object.keys(parsed.wildcardDirectories ?? {});
+	} catch {
+		return [];
+	}
+}
+
+/**
  * Compiler options used when no tsconfig exists. Everything the engine needs is
  * syntactic, so these only have to make the parser produce the right AST.
  */

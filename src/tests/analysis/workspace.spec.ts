@@ -209,12 +209,38 @@ describe("Workspace.acquire", () => {
 		});
 		// Spends the free first re-glob every freshly built workspace gets.
 		Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 });
-		write(root, "src/b.ts", "export const b = 1;");
-		expect(
-			rels(Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 })),
-		).toEqual(["src/a.ts"]);
+		// Nothing has changed on disk, so the long interval is what decides, and it
+		// says do not walk the repository again.
+		const quiet = Workspace.acquire({
+			projectRoot: root,
+			staleAfterMs: 60_000,
+		});
+		expect(quiet).toBe(first);
+		expect(rels(quiet)).toEqual(["src/a.ts"]);
 
 		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 0 });
+		expect(ws).toBe(first);
+		expect(rels(ws)).toEqual(["src/a.ts"]);
+	});
+
+	/**
+	 * `staleAfterMs` throttles the *cost*, never the promise.
+	 *
+	 * The server tells every caller that results reflect the files on disk at the
+	 * moment of the call, and a file the agent has just written is exactly what
+	 * the mtime sweep cannot see — it only visits files the project already
+	 * holds. So a changed directory defeats the interval, however long the caller
+	 * set it: write a component, ask about it, see it.
+	 */
+	it("sees a new file inside the window when its directory changed", () => {
+		const root = scratch({ "src/a.ts": "export const a = 1;" });
+		const first = Workspace.acquire({
+			projectRoot: root,
+			staleAfterMs: 60_000,
+		});
+		Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 });
+		write(root, "src/b.ts", "export const b = 1;");
+		const ws = Workspace.acquire({ projectRoot: root, staleAfterMs: 60_000 });
 		expect(ws).toBe(first);
 		expect(rels(ws)).toEqual(["src/a.ts", "src/b.ts"]);
 	});
