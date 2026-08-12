@@ -176,6 +176,60 @@ describe("gaps the tree has to admit to", () => {
 		expect(nodes.map((node) => node.testId?.value)).toContain("PanelTitle");
 	});
 
+	it("does not resolve a call inside a block-local shadow", () => {
+		// The other half of the block-scope trade. `helperIndexOf` is per component
+		// and has no idea where in the body a call is written, so a call *inside*
+		// the block resolved to the module-scope helper and reported its subtree -
+		// and its ids - at a site that renders something else.
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Panel from "./Panel";',
+				"export default function App() { return <Panel />; }",
+			].join("\n"),
+			"src/Panel.tsx": [
+				'function renderTitle() { return <h1 data-testid="ModuleTitle" />; }',
+				"export default function Panel({ compact }: { compact?: boolean }) {",
+				"  if (compact) {",
+				"    const renderTitle = 1;",
+				"    void renderTitle;",
+				"    return <section>{renderTitle()}</section>;",
+				"  }",
+				'  return <aside data-testid="PanelWide" />;',
+				"}",
+			].join("\n"),
+		});
+		const ids = nodes.map((node) => node.testId?.value);
+		// The branch that is not shadowed still reports normally.
+		expect(ids).toContain("PanelWide");
+		// The shadowed call does not borrow the module helper's id.
+		expect(ids).not.toContain("ModuleTitle");
+	});
+
+	it("uses a block-local helper for a call inside that block", () => {
+		// The inverse: a function really declared in the block is the right answer
+		// for a call inside it, and the index would never have found it.
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				'import Menu from "./Menu";',
+				"export default function App() { return <Menu />; }",
+			].join("\n"),
+			"src/Menu.tsx": [
+				'function renderItem() { return <li data-testid="ModuleItem" />; }',
+				"export default function Menu({ compact }: { compact?: boolean }) {",
+				"  if (compact) {",
+				'    const renderItem = () => <li data-testid="BlockItem" />;',
+				"    return <ul>{renderItem()}</ul>;",
+				"  }",
+				"  return <ul>{renderItem()}</ul>;",
+				"}",
+			].join("\n"),
+		});
+		const ids = nodes.map((node) => node.testId?.value);
+		expect(ids).toContain("BlockItem");
+		// And the unshadowed call outside the block still gets the module one.
+		expect(ids).toContain("ModuleItem");
+	});
+
 	it("does not resolve `memo(Inner)` against a shadowed name", () => {
 		// The lookup reads the file's top-level declarations, which is only the
 		// right answer when the identifier is at top level too. Here `Inner` binds

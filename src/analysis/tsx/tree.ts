@@ -1496,7 +1496,29 @@ class TreeBuilder {
 			// can say which, and guessing would attach a subtree to the wrong site.
 			return null;
 		}
-		const found = this.helperIndexOf(owner).get(callee.getText());
+		const name = callee.getText();
+		// Innermost binding first, from the call site outward. The index below is
+		// per *component* and has no idea where in the body the call is written, so
+		// a name declared in an enclosing block was invisible to it: a call inside
+		// `if (x) { const renderIcon = ... ; ... renderIcon() }` resolved to the
+		// module-scope `renderIcon` and reported that function's subtree, and its
+		// ids, at a site that renders something else.
+		//
+		// `helperIndexOf` handles the function-body level, where a declaration
+		// really does shadow every call in the component. This handles the levels
+		// below it, which are the ones that depend on position.
+		const blockScoped = blockScopedBinding(callee, name, owner.fn);
+		if (blockScoped) {
+			// Written here and a function: that is the helper, whatever module scope
+			// says. Written here and something else: the call is shadowed by a value
+			// the walk cannot follow, so it is unknown - and the caller's
+			// `local-render-function` marker already reports that honestly.
+			const inner = unwrapExpression(blockScoped);
+			return isInlineFunction(inner) && containsJsx(inner)
+				? { fn: inner, parameters: parameterNames(inner), nested: true }
+				: null;
+		}
+		const found = this.helperIndexOf(owner).get(name);
 		if (!found || !containsJsx(found)) {
 			return null;
 		}
@@ -1593,21 +1615,23 @@ class TreeBuilder {
 		}
 		for (const [name, declaration] of this.localVariablesOf(owner)) {
 			const initializer = declaration.getInitializer();
+			if (!shadowsWholeBody(declaration, owner.fn)) {
+				// Block-scoped, so it decides nothing for the component as a whole -
+				// in either direction. A helper declared inside an `if` is the right
+				// answer only for calls inside that `if`, which `blockScopedBinding`
+				// resolves from the call site; indexing it here handed it to every
+				// call in the body, including ones the block does not reach.
+				continue;
+			}
 			if (initializer && isInlineFunction(initializer)) {
 				index.set(name, unwrapExpression(initializer));
-			} else if (shadowsWholeBody(declaration, owner.fn)) {
+			} else {
 				// A local that is *not* a function written here still shadows the
 				// module-scope one of the same name — `const renderIcon =
 				// props.renderIcon ?? fallback` is the caller's function or the
 				// module's, and the call site cannot say which. Leaving the module
 				// entry in place inlined a subtree this render may never produce,
 				// with `fidelity: "full"` over the top.
-				//
-				// Only when it really shadows the whole body, though. `const` is
-				// block-scoped, so one declared inside an `if` shadows nothing at the
-				// call sites outside that block — and deleting the entry for it threw
-				// away a valid module-scope helper, and the ids it renders, over a
-				// name collision the language does not have.
 				index.delete(name);
 			}
 		}
@@ -2684,6 +2708,53 @@ function shadowsWholeBody(declaration: VariableDeclaration, fn: Node): boolean {
 			? fn.getBody()
 			: undefined;
 	return body !== undefined && statement.getParent() === body;
+}
+
+/**
+ * A declaration of `name` in a block between the call site and the component
+ * body, or `null` when the nearest binding is not block-scoped.
+ *
+ * Only the levels *below* the function body: `helperIndexOf` already owns the
+ * body level, where a declaration shadows every call in the component no matter
+ * where it is written. Here position is the whole question, so the walk starts
+ * at the call and stops at the body.
+ *
+ * `var` is deliberately not consulted - it is function-scoped, so
+ * {@link shadowsWholeBody} has already accounted for it at the body level.
+ * Returns the initializer (or the declaration, for a hoisted `function`) so the
+ * caller can decide whether it is a helper or an opaque value.
+ */
+function blockScopedBinding(from: Node, name: string, body: Node): Node | null {
+	for (let scope = from.getParent(); scope; scope = scope.getParent()) {
+		if (scope === body) {
+			return null;
+		}
+		if (!Node.isBlock(scope) && !Node.isCaseClause(scope)) {
+			continue;
+		}
+		for (const statement of scope.getStatements()) {
+			if (Node.isFunctionDeclaration(statement)) {
+				if (statement.getName() === name) {
+					return statement;
+				}
+				continue;
+			}
+			if (!Node.isVariableStatement(statement)) {
+				continue;
+			}
+			const list = statement.getDeclarationList();
+			if (list.getDeclarationKind() === VariableDeclarationKind.Var) {
+				continue;
+			}
+			for (const declaration of list.getDeclarations()) {
+				const nameNode = declaration.getNameNode();
+				if (Node.isIdentifier(nameNode) && nameNode.getText() === name) {
+					return declaration.getInitializer() ?? declaration;
+				}
+			}
+		}
+	}
+	return null;
 }
 
 /** Whether `node` is written somewhere inside `container`. */
