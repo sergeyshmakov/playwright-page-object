@@ -159,8 +159,8 @@ function isLibrarySpecifier(specifier: string, ctx: AnalysisContext): boolean {
 /**
  * How many local re-export hops to follow looking for the library.
  *
- * A cost bound, not the termination argument - `seen` is that, and it holds
- * however deep the chain goes. It was 5, which cut a six-barrel chain off
+ * A cost bound, not the termination argument - the `visited` memo is that, and
+ * it holds however deep the chain goes. It was 5, which cut a six-barrel chain off
  * before its exports were read; a monorepo that re-exports through a package
  * index, a testing index and a per-app shim reaches that without trying.
  */
@@ -191,13 +191,23 @@ const MAX_BARREL_HOPS = 32;
 function barrelExports(
 	file: SourceFile,
 	ctx: AnalysisContext,
-	seen: Set<string>,
+	visited: Map<string, Map<string, string> | null>,
 ): Map<string, string> {
-	const out = new Map<string, string>();
-	if (seen.size >= MAX_BARREL_HOPS || seen.has(file.getFilePath())) {
-		return out;
+	const key = file.getFilePath();
+	const cached = visited.get(key);
+	if (cached !== undefined) {
+		// `null` marks a file on the current path: a cycle. Contribute nothing
+		// rather than recursing. Anything else is this module's finished answer,
+		// which is the whole reason this is a cache and not a visited set — a
+		// second lookup of the same module has to give the same answer as the
+		// first, not an empty one.
+		return cached ?? new Map();
 	}
-	seen.add(file.getFilePath());
+	if (visited.size >= MAX_BARREL_HOPS) {
+		return new Map();
+	}
+	visited.set(key, null);
+	const out = new Map<string, string>();
 
 	/** What `specifier` publishes, by outward name. */
 	const through = (specifier: string): Map<string, string> => {
@@ -205,7 +215,7 @@ function barrelExports(
 			return new Map([...CANONICAL_EXPORTS].map((name) => [name, name]));
 		}
 		const next = resolveRelativeModule(ctx.project, file, specifier);
-		return next ? barrelExports(next, ctx, seen) : new Map();
+		return next ? barrelExports(next, ctx, visited) : new Map();
 	};
 
 	for (const declaration of file.getExportDeclarations()) {
@@ -241,6 +251,7 @@ function barrelExports(
 			}
 		}
 	}
+	visited.set(key, out);
 	return out;
 }
 
@@ -274,7 +285,7 @@ function collectThroughBarrel(
 	if (!barrel) {
 		return;
 	}
-	const published = barrelExports(barrel, ctx, new Set());
+	const published = barrelExports(barrel, ctx, new Map());
 	if (published.size === 0) {
 		return;
 	}

@@ -344,3 +344,59 @@ describe("what a namespace import of a barrel is allowed to claim", () => {
 		).toBe(1);
 	});
 });
+
+describe("several library names through one intermediate barrel", () => {
+	/**
+	 * The visited set was shared across sibling `through()` calls, so resolving
+	 * the first name marked the intermediate module and every later name got an
+	 * empty map back from it. One export survived and the rest vanished - a class
+	 * whose decorator came second was reported with no members, or with no
+	 * library base at all.
+	 *
+	 * The same defect this branch already fixed once, in `d6ef71c`, for the
+	 * config reader's export walk. A visited *set* answers "have I been here",
+	 * which is the wrong question when the answer itself is what the caller
+	 * needs; a memo answers "what did I find here".
+	 */
+	it("keeps every name a barrel re-exports through one module", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/inner.ts":
+					'export { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+				"e2e/pom.ts":
+					'export { RootPageObject, RootSelector, Selector } from "./inner";',
+				"e2e/HomePage.ts": [
+					'import { RootPageObject, RootSelector, Selector } from "./pom";',
+					'@RootSelector("Root")',
+					"export class HomePage extends RootPageObject {",
+					'  @Selector("Title")',
+					"  accessor Title!: never;",
+					'  @Selector("Body")',
+					"  accessor Body!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		const home = discovery.pageObjects.find(
+			(one) => one.className === "HomePage",
+		);
+		expect(home, "the base class comes through the same barrel").toBeDefined();
+		expect(home?.counts.members).toBe(2);
+	});
+
+	it("terminates on barrels that re-export each other", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/a.ts": 'export * from "./b";',
+				"e2e/b.ts": 'export * from "./a";',
+				"e2e/HomePage.ts": [
+					'import { RootPageObject } from "./a";',
+					"export class HomePage extends RootPageObject {}",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage"),
+		).toBeUndefined();
+	});
+});
