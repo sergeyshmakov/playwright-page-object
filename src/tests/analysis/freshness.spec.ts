@@ -357,3 +357,40 @@ describe("a lockfile that arrives after the server does", () => {
 		expect(ws.currentEpoch).toBeGreaterThan(before);
 	});
 });
+
+describe("a config that appears outside the scanned scope", () => {
+	it("picks up a root playwright.config.ts within the throttle window", () => {
+		// This gate drives `rediscoverConfigs()` as well as the re-glob, and config
+		// discovery does not follow the scan scope: a server scoped to `src` finds
+		// the config at the root. Watching only scan roots and the directories of
+		// loaded sources meant a config appearing at the root was invisible for the
+		// whole window, so the next call kept the default attribute while promising
+		// results reflect the disk.
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		pool.clear();
+		// Three acquires: `lastGlobAt` starts at 0, so the throttle is only closed
+		// from the second one on.
+		const scope = {
+			projectRoot: root,
+			include: ["src"],
+			staleAfterMs: 600_000,
+		};
+		const ws = pool.acquire(scope);
+		expect(ws.testIdAttribute().attribute).toBe("data-testid");
+		pool.acquire(scope);
+
+		write(
+			root,
+			"playwright.config.ts",
+			'export default { use: { testIdAttribute: "data-qa" } };',
+		);
+		const again = pool.acquire(scope);
+		expect(again).toBe(ws);
+		expect(again.testIdAttribute().attribute).toBe("data-qa");
+	});
+});

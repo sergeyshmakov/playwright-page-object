@@ -523,6 +523,19 @@ export class Workspace {
 		for (const filePath of this.mtimes.keys()) {
 			directories.add(path.dirname(filePath));
 		}
+		// The project root, whether or not anything is scanned there, and the
+		// directories holding the configs already found.
+		//
+		// This gate gets `rediscoverConfigs()` as well as the re-glob, and config
+		// discovery does not follow the scan scope: a server scoped to `src` finds
+		// `playwright.config.ts` at the root. Watching only scan roots and the
+		// directories of loaded sources meant a config *appearing* at the root was
+		// invisible for the throttle window, so the next call kept the old
+		// `testIdAttribute` and `testDir` while promising results reflect the disk.
+		directories.add(this.root);
+		for (const candidate of this.discovery?.candidates ?? []) {
+			directories.add(path.dirname(path.resolve(candidate)));
+		}
 		// Per directory, not a sum over the set, and only directories already known
 		// count as evidence. The set *grows* on its own as the resolver pulls files
 		// in on demand, so a summed stamp changed on almost every call and the
