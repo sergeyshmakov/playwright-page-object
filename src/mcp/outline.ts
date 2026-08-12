@@ -539,7 +539,7 @@ function renderUiBlock(
 	// elided, so two same-shaped subtrees in different files whose children sit
 	// on matching line numbers hashed identically, and the second collapsed into
 	// a back-reference pointing at the wrong file.
-	const key = `${node.file} ${childLines.join("\n")}`;
+	const key = `${node.file}\u0000${childLines.join("\n")}`;
 	const first = ctx.seen.get(key);
 	if (first) {
 		return [own, `  (contents as at ${first})`];
