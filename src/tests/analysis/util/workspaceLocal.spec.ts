@@ -802,3 +802,48 @@ describe.skipIf(!LINKS_WORK)("externalModuleRoot", () => {
 		expect(tree.externalModuleRoot).toBeUndefined();
 	});
 });
+
+describe.skipIf(!LINKS_WORK)("a source far below the analysed root", () => {
+	/**
+	 * The walk up to `node_modules` stops at the filesystem root and at the
+	 * analysed root, and the second is what makes it correct - a `node_modules`
+	 * above the project belongs to somebody else. A ten-hop cap cut in before
+	 * either, so a source ten or more levels down never reached the root's own
+	 * `node_modules` and its linked workspace packages were classified external:
+	 * first-party code reported as a third-party boundary, in a repository deep
+	 * enough that nobody would suspect the depth.
+	 */
+	it("resolves a linked package from twelve directories down", () => {
+		const deep = "apps/web/src/a/b/c/d/e/f/g/h/i/App.tsx";
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { jsx: "react-jsx", target: "ES2022" },
+				include: ["apps"],
+			}),
+			"packages/ui/package.json": JSON.stringify({
+				name: "@acme/ui",
+				main: "src/index.tsx",
+			}),
+			"packages/ui/src/index.tsx":
+				'export function Gapped() { return <b data-testid="GappedRoot" />; }\n',
+			[deep]: [
+				'import { Gapped } from "@acme/ui";',
+				"export default function App() { return <Gapped />; }",
+				"",
+			].join("\n"),
+		});
+		link(root, "node_modules/@acme/ui", "packages/ui");
+
+		const ws = pool.acquire({ projectRoot: root });
+		const entry = ws.project.getSourceFileOrThrow(path.join(root, deep));
+		const resolution = resolveIdentifier(ws.project, entry, "Gapped");
+		expect(resolution.resolved, "the link leads back into the workspace").toBe(
+			true,
+		);
+		if (resolution.resolved) {
+			expect(ws.rel(resolution.sourceFile.getFilePath())).toBe(
+				"packages/ui/src/index.tsx",
+			);
+		}
+	});
+});

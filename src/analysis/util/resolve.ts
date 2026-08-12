@@ -370,8 +370,22 @@ type WorkspaceProbe =
 
 const NONE: WorkspaceProbe = { kind: "none" };
 
-/** Directory levels walked up looking for a `node_modules` directory. */
-const MAX_NODE_MODULES_HOPS = 10;
+/**
+ * Directory levels walked up looking for a `node_modules` directory.
+ *
+ * A cost backstop, not the stop condition: the walk already ends at the
+ * filesystem root and at the analysed root, and the second of those is what
+ * makes it correct — a `node_modules` above the project belongs to somebody
+ * else. Ten cut in *before* either, so a source ten or more levels below the
+ * root never reached the root's own `node_modules` and its linked workspace
+ * packages were classified external — first-party code reported as a
+ * third-party boundary, in a repository deep enough that nobody would suspect
+ * the depth.
+ *
+ * Same mistake as the ten-hop cap `packageSourceOutsideRoot` carried, fixed in
+ * 1e48f75 for the probe and left standing here.
+ */
+const MAX_NODE_MODULES_HOPS = 64;
 
 /**
  * Fields a workspace package may point its source at, most source-like first.
