@@ -241,21 +241,49 @@ describe("readHeritage", () => {
 		expect(heritage.inheritedApi).toBeNull();
 	});
 
-	it("caps the walk at five hops", () => {
+	it("reaches a library base five project-local bases up", () => {
+		// The cap was 5, which a design system reaches without trying. The leaf
+		// came back `inheritedApi: null`, and a leaf with no decorators or fixture
+		// binding of its own then failed discovery outright - silently absent from
+		// every answer, while inheriting the whole page-object API.
 		const files: Record<string, string> = {};
-		for (let index = 0; index < 8; index += 1) {
+		for (let index = 0; index < 5; index += 1) {
 			files[`src/b${index}.ts`] =
 				`import { B${index + 1} } from "./b${index + 1}";\nexport class B${index} extends B${index + 1} {}`;
 		}
-		files["src/b8.ts"] = "export class B8 {}";
+		files["src/b5.ts"] = [
+			libImport("PageObject"),
+			"export class B5 extends PageObject {}",
+		].join("\n");
 		const fixture = classFixture(
 			'import { B0 } from "./b0";\nexport class Child extends B0 {}',
 			"Child",
 			files,
 		);
 		const heritage = readHeritage(fixture.cls, fixture.imports, fixture.ctx);
+		expect(heritage.truncated).toBe(false);
+		expect(heritage.inheritedApi).toBe("PageObject");
+	});
+
+	it("terminates on a cyclic `extends` instead of running to the cap", () => {
+		// Illegal TypeScript, and a real thing to find on disk mid-edit. The cap
+		// used to be the only thing stopping this, which made a cycle
+		// indistinguishable from a chain that is merely deep - and it is the
+		// reason a cap cannot be the termination argument on its own.
+		const fixture = classFixture(
+			'import { B0 } from "./b0";\nexport class Child extends B0 {}',
+			"Child",
+			{
+				"src/b0.ts":
+					'import { B1 } from "./b1";\nexport class B0 extends B1 {}',
+				"src/b1.ts":
+					'import { B0 } from "./b0";\nexport class B1 extends B0 {}',
+			},
+		);
+		const heritage = readHeritage(fixture.cls, fixture.imports, fixture.ctx);
 		expect(heritage.truncated).toBe(true);
-		expect(heritage.chain).toHaveLength(5);
+		expect(heritage.inheritedApi).toBeNull();
+		expect(heritage.chain.length).toBeLessThan(8);
 	});
 });
 

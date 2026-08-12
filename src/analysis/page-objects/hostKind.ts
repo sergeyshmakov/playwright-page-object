@@ -20,7 +20,21 @@ import {
 	ROOT_DECORATORS,
 } from "./libraryImports";
 
-const MAX_HERITAGE_DEPTH = 5;
+/**
+ * Backstop on the `extends` walk. Cycle detection is what makes it terminate.
+ *
+ * This was 5, which a design system reaches without trying: a leaf five
+ * project-local bases below `PageObject` came back `inheritedApi: null`, and a
+ * leaf with no decorators or fixture binding of its own then failed the
+ * discovery rules and was simply absent from every answer — the class inherits
+ * the whole page-object API and decorated members, and nothing said otherwise.
+ *
+ * A cap alone cannot be the termination argument anyway: `class A extends B` /
+ * `class B extends A` is illegal TypeScript but exists on disk mid-edit, and a
+ * cap turns that into a silent truncation rather than a cycle. The `seen` set
+ * below decides termination; this only bounds the cost of a pathological chain.
+ */
+const MAX_HERITAGE_DEPTH = 64;
 
 export type InheritedApi = "PageObject" | "ListPageObject" | "RootPageObject";
 
@@ -77,6 +91,8 @@ export function readHeritage(
 ): HeritageInfo {
 	const chain: string[] = [];
 	const localBases: ClassLike[] = [];
+	/** Every class the walk has stood on, so a cyclic `extends` terminates. */
+	const seen = new Set<ClassLike>([classDeclaration]);
 	let current: ClassLike = classDeclaration;
 	let currentImports = imports;
 
@@ -128,6 +144,18 @@ export function readHeritage(
 				unresolvedBase: true,
 			};
 		}
+		if (seen.has(resolution.declaration)) {
+			// A cycle in the `extends` graph. Truncated rather than unresolved: the
+			// bases were read, they just do not lead anywhere.
+			return {
+				chain,
+				inheritedApi: null,
+				localBases,
+				truncated: true,
+				unresolvedBase: false,
+			};
+		}
+		seen.add(resolution.declaration);
 		current = resolution.declaration;
 		localBases.push(current);
 		currentImports = collectLibraryImports(current.getSourceFile(), ctx);
