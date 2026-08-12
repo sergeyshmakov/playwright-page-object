@@ -27,10 +27,35 @@ export interface AttributeCensus {
 	evidence: "ast" | "text";
 	/** `true` when counting stopped early because the attribute was clearly present. */
 	sampled?: true;
+	/**
+	 * `true` when the name tally hit {@link MAX_TRACKED_NAMES} and stopped
+	 * admitting new ones.
+	 *
+	 * Distinct from {@link sampled}, which is set on the opposite outcome - the
+	 * attribute was found, so counting stopped early. This one says the search
+	 * for an *alternative* was incomplete, which is the case where a caller is
+	 * about to be told no alternative stood out.
+	 */
+	namesCapped?: true;
 }
 
-/** Distinct attribute names tracked before the tally stops growing. */
-const MAX_TRACKED_NAMES = 64;
+/**
+ * Distinct attribute names tracked before the tally stops growing.
+ *
+ * A memory bound on a loop that terminates by itself, so its only effect is to
+ * decide which names are countable - and at 64 that was reachable before the
+ * scan ever met the real attribute. Inline SVG alone brings `stroke-width`,
+ * `stroke-linecap`, `clip-rule`, `stop-color`, `text-anchor`,
+ * `dominant-baseline` and a dozen more, and `ws.jsxFiles()` order then decides
+ * which 64 win.
+ *
+ * That matters more here than anywhere else in the engine: this census is what
+ * turns "no test ids found" into "you are reading the wrong attribute, and the
+ * sources use `qa-id` 4,000 times". Losing the real name to a cap turns the one
+ * diagnostic written against confidently-wrong output into
+ * `attribute-no-evidence`.
+ */
+const MAX_TRACKED_NAMES = 4096;
 const MAX_REPORTED_CANDIDATES = 5;
 /**
  * One occurrence of a hyphenated attribute is as likely to be `aria`-adjacent
@@ -88,8 +113,11 @@ export function censusFromText(
 		}
 
 		const tally = new Map<string, number>();
+		let capped = false;
 		for (const sourceFile of files) {
-			tallyAttributeNames(sourceFile.getFullText(), attribute, tally);
+			capped =
+				tallyAttributeNames(sourceFile.getFullText(), attribute, tally) ||
+				capped;
 		}
 		const candidates = [...tally.entries()]
 			.filter(([name]) => name !== attribute)
@@ -105,6 +133,7 @@ export function censusFromText(
 			resolvedCount: 0,
 			candidates,
 			evidence: "text",
+			...(capped ? { namesCapped: true as const } : {}),
 		};
 	});
 }
@@ -119,11 +148,13 @@ function countOccurrences(text: string, needle: string): number {
 	return count;
 }
 
+/** Tallies hyphenated names into `into`. Returns whether the cap turned any away. */
 function tallyAttributeNames(
 	text: string,
 	attribute: string,
 	into: Map<string, number>,
-): void {
+): boolean {
+	let capped = false;
 	HYPHENATED_ATTRIBUTE.lastIndex = 0;
 	let match = HYPHENATED_ATTRIBUTE.exec(text);
 	while (match !== null) {
@@ -131,11 +162,16 @@ function tallyAttributeNames(
 		// `aria-*` is an accessibility contract, never a test hook: offering
 		// `aria-label` as the repository's test-id attribute would be noise.
 		const skip = name !== attribute && name.startsWith("aria-");
-		if (!skip && (into.has(name) || into.size < MAX_TRACKED_NAMES)) {
-			into.set(name, (into.get(name) ?? 0) + 1);
+		if (!skip) {
+			if (into.has(name) || into.size < MAX_TRACKED_NAMES) {
+				into.set(name, (into.get(name) ?? 0) + 1);
+			} else {
+				capped = true;
+			}
 		}
 		match = HYPHENATED_ATTRIBUTE.exec(text);
 	}
+	return capped;
 }
 
 /**
@@ -185,14 +221,21 @@ export function attributeVerdict(
 		);
 	}
 
+	// `namesCapped` turns this from a finding into a shrug, and saying so is the
+	// difference between "the sources use no such convention" and "we stopped
+	// looking". The second is not a conclusion a caller should act on.
+	const incomplete = census.namesCapped
+		? ` The search for an alternative was incomplete: more distinct attribute names were present than the tally admits, so a name they do use may not have been counted.`
+		: "";
 	return warn(
 		"attribute-no-evidence",
-		`No element in the ${census.files} scanned JSX/TSX file(s) uses the "${census.attribute}" attribute (${origin}), and no other attribute name stood out as the one they use instead. Either the analysed scope is not where the UI lives, or the attribute name is wrong.`,
+		`No element in the ${census.files} scanned JSX/TSX file(s) uses the "${census.attribute}" attribute (${origin}), and no other attribute name stood out as the one they use instead. Either the analysed scope is not where the UI lives, or the attribute name is wrong.${incomplete}`,
 		undefined,
 		{
 			attribute: census.attribute,
 			attributeSource,
 			files: census.files,
+			namesCapped: census.namesCapped,
 		},
 	);
 }
