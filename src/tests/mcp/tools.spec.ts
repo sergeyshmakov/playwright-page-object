@@ -17,8 +17,8 @@ import { MAX_BUCKET_LIMIT } from "../../mcp/schemas";
 /** The real schema ceiling, imported so the test cannot drift from it. */
 const MAX_BUCKET_PAGE = MAX_BUCKET_LIMIT;
 
+import { coverageShrinkHint } from "../../mcp/present/coverage";
 import { createMcpServer } from "../../mcp/server";
-import { coverageShrinkHint } from "../../mcp/tools";
 
 /**
  * In-process integration tests: a real Client talks to the real server over

@@ -9,19 +9,14 @@ import {
 	type Diagnostic,
 	discoverPageObjects,
 	entryFileCandidates,
-	foldPath,
 	isCatchAllPattern,
 	matchEntryPath,
 	nearestFiles,
-	nearestIds,
 	nearestNames,
 	normalizeRelPath,
 	type PageObjectSummary,
 	type SelectorInfo,
 	scannedComponents,
-	type TestIdOccurrence,
-	type UiNode,
-	type UiUnresolvedReason,
 	type Workspace,
 } from "../analysis";
 import { apiHintsFor } from "./api";
@@ -34,21 +29,30 @@ import {
 import type { McpServerOptions } from "./options";
 import { renderPageObjectOutline, renderTestIdOutline } from "./outline";
 import {
-	envelopeBytes,
-	fitBuckets,
-	MAX_ERROR_LIST,
-	MAX_RESPONSE_BYTES,
-	ok,
-	type TextResult,
-	type ToolMeta,
-} from "./respond";
+	BUCKET_ORDER,
+	type BucketSlice,
+	coverageResult,
+	coverageShrinkHint,
+	degradeHint,
+	pagingHint,
+	selectedBuckets,
+} from "./present/coverage";
 import {
-	COVERAGE_BUCKETS,
-	type getPageObjectTreeInput,
-	type getTestIdTreeInput,
-	type listPageObjectsInput,
-	type mapCoverageInput,
-	type queryCoverageInput,
+	blindScan,
+	gapHint,
+	idsNotPlaced,
+	subtreeStats,
+	traversalGap,
+} from "./present/gaps";
+import { listEmptyHint, lookupHint, missingComponent } from "./present/hints";
+import { foldFile, isScannedFile } from "./present/paths";
+import { MAX_ERROR_LIST, ok } from "./respond";
+import type {
+	getPageObjectTreeInput,
+	getTestIdTreeInput,
+	listPageObjectsInput,
+	mapCoverageInput,
+	queryCoverageInput,
 } from "./schemas";
 import { planWarnings, type WarningLedger } from "./warnings";
 
@@ -185,6 +189,37 @@ function configFileOf(workspace: Workspace): string | undefined {
 	return workspace.playwright().configFile ?? undefined;
 }
 
+/**
+ * What to say when a tool found nothing, or found the wrong thing.
+ *
+ * An empty answer is the one an agent is most likely to act on wrongly - it
+ * reads as "there is nothing here" when it usually means "you asked the wrong
+ * question" - so each of these turns a count into the next call to make.
+ *
+ * Pure over the engine's summaries and plain counts, and therefore testable as
+ * a table rather than through a repository built to produce a zero.
+ */
+
+function summaryEntry(summary: PageObjectSummary): Record<string, unknown> {
+	const entry: Record<string, unknown> = {
+		name: summary.className,
+		file: summary.file,
+		kind: summary.hostKind,
+	};
+	if (summary.rootSelector) {
+		entry.root = compactSelector(summary.rootSelector);
+	}
+	if (summary.fixtures.length > 0) {
+		entry.fixtures = summary.fixtures.map((fixture) => fixture.name);
+	}
+	entry.members = summary.counts.members;
+	entry.methods = summary.counts.methods;
+	if (summary.doc) {
+		entry.doc = summary.doc;
+	}
+	return entry;
+}
+
 function compactSelector(selector: SelectorInfo): Record<string, unknown> {
 	const compact: Record<string, unknown> = { kind: selector.kind };
 	if (selector.testId !== undefined) {
@@ -211,60 +246,6 @@ function compactSelector(selector: SelectorInfo): Record<string, unknown> {
 		compact.raw = selector.raw;
 	}
 	return compact;
-}
-
-function summaryEntry(summary: PageObjectSummary): Record<string, unknown> {
-	const entry: Record<string, unknown> = {
-		name: summary.className,
-		file: summary.file,
-		kind: summary.hostKind,
-	};
-	if (summary.rootSelector) {
-		entry.root = compactSelector(summary.rootSelector);
-	}
-	if (summary.fixtures.length > 0) {
-		entry.fixtures = summary.fixtures.map((fixture) => fixture.name);
-	}
-	entry.members = summary.counts.members;
-	entry.methods = summary.counts.methods;
-	if (summary.doc) {
-		entry.doc = summary.doc;
-	}
-	return entry;
-}
-
-const EMPTY_INDEX_HINT =
-	'No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with --src-dir <dir>; also check that those files import from "playwright-page-object".';
-
-/**
- * What to say when the page came back empty.
- *
- * Three different situations produced the same "nothing was found" message, and
- * two of them were the caller's own arguments rather than the repository: a
- * filter that matched none of 305 page objects, and an offset past the end.
- * Telling either of those callers to restart the server with `--src-dir` sends
- * them to reconfigure a server that is working correctly.
- */
-function listEmptyHint(
-	filter: string | undefined,
-	offset: number,
-	total: number,
-	indexed: PageObjectSummary[],
-): string | undefined {
-	if (indexed.length === 0) {
-		return EMPTY_INDEX_HINT;
-	}
-	if (total === 0) {
-		const nearest = nearestIds(
-			filter ?? "",
-			indexed.map((item) => item.className),
-			5,
-		);
-		const suggestion =
-			nearest.length > 0 ? ` Closest names: ${nearest.join(", ")}.` : "";
-		return `No page object matches filter "${filter}", but the index holds ${indexed.length}. Drop or widen the filter — it is a plain case-insensitive substring of the class name or file path.${suggestion}`;
-	}
-	return `offset ${offset} is past the end of ${total} result(s); re-call with a smaller offset.`;
 }
 
 export function handleListPageObjects(
@@ -459,152 +440,6 @@ export function handleGetPageObjectTree(
 }
 
 /**
- * Why a tree is not worth sending, or `undefined` when it is.
- *
- * A run whose attribute does not appear in the sources builds a real tree of
- * real components in which *every* node is id-less — 11 KB, on a repository
- * where the answer is "you are reading the wrong attribute". The environment
- * warning and `meta.hint` already say that, in full, and they are what the
- * caller has to act on; the nodes add nothing to them.
- *
- * Deliberately narrow. It fires only when the analysis has *proven* the payload
- * is empty of answers: an environment diagnostic that invalidates the whole
- * scan, and not one id anywhere in the tree. A tree with a single id is shipped
- * whole, because then the reader has something to check the warning against.
- */
-function blindScan(
-	warnings: Diagnostic[],
-	roots: UiNode[],
-	gap: TreeGap | null,
-): string | undefined {
-	const hasId = (nodes: UiNode[]): boolean =>
-		nodes.some((node) => node.testId !== undefined || hasId(node.children));
-	if (roots.length === 0 || hasId(roots)) {
-		return undefined;
-	}
-
-	const blinding = warnings.find(
-		(warning) =>
-			warning.code === "attribute-mismatch" ||
-			warning.code === "attribute-no-evidence",
-	);
-	if (blinding) {
-		return `Not one node in this tree carries a test id, because ${blinding.code}: this run read an attribute the sources do not use. The nodes were omitted rather than sent as an id-less shell - read the warning and the hint, fix the attribute, and re-call.`;
-	}
-
-	// The same shape from a different cause, and the expensive one in practice.
-	// Rooting at a page component whose content sits behind a router or a
-	// provider wall walks hundreds of scaffolding nodes and reaches no id at
-	// all: 43 KB on the measured page, of which none was an answer. A *complete*
-	// tree with no ids is a real finding and still ships - "this component
-	// renders none" is worth knowing. A cut one proves nothing and costs most.
-	if (gap) {
-		return `This tree reached no test id at all, and the walk is incomplete (${gap.detail}), so its nodes prove nothing about what renders here - they were omitted. Pass testId to look an id up across the whole scan, which is complete whatever the walk did, and root a new tree at the file it names.`;
-	}
-	return undefined;
-}
-
-/** Ids named in a capped list, plus how many more there were. */
-interface IdsNotPlaced {
-	ids: string[];
-	total: number;
-}
-
-/** A short list is for reading; past this the count carries it. */
-const MAX_UNPLACED_IDS = 12;
-
-/**
- * Ids the walk read out of the files it visited but did not put in the tree.
- *
- * A partial tree says "293 of 375 nodes were left unexpanded", which is a
- * count, not a list — so an agent cannot tell "this id does not exist" from
- * "the walk did not reach it", and the whole promise of the tool is that
- * absence means something. Measured: a tree rooted at `GuestsList.tsx` reported
- * ids from lines 29–50 of a component file and silently omitted two from lines
- * 18 and 23 of that same file, which `map_coverage` located exactly.
- *
- * Scoped to files the tree actually walked, deliberately. Scan-wide this would
- * be ~1,500 entries on a real repository and useless; restricted this way it is
- * short, exact, and answers the question that was asked. The inventory is
- * complete in every fidelity mode, so this is a set difference over data the
- * response already holds — no extra analysis.
- */
-function idsNotPlaced(
-	roots: UiNode[],
-	inventory: TestIdOccurrence[],
-): IdsNotPlaced | undefined {
-	const walkedFiles = new Set<string>();
-	const placed = new Set<string>();
-	const visit = (nodes: UiNode[]): void => {
-		for (const node of nodes) {
-			walkedFiles.add(node.file);
-			// Both halves of a static choice. `data-testid={flag ? "Main" : "Alt"}`
-			// keeps `Main` in `testId` and `Alt` in `testIdAlternatives`, and the
-			// inventory holds both — so counting only the first reported `Alt` as an
-			// id the tree failed to place while it was sitting on that very node.
-			for (const value of [node.testId, ...(node.testIdAlternatives ?? [])]) {
-				if (value?.kind === "static" && value.value !== undefined) {
-					placed.add(value.value);
-				}
-			}
-			visit(node.children);
-		}
-	};
-	visit(roots);
-	if (walkedFiles.size === 0) {
-		return undefined;
-	}
-
-	const missing = new Set<string>();
-	for (const occurrence of inventory) {
-		if (
-			occurrence.value.kind === "static" &&
-			occurrence.value.value !== undefined &&
-			walkedFiles.has(occurrence.file) &&
-			!placed.has(occurrence.value.value)
-		) {
-			missing.add(occurrence.value.value);
-		}
-	}
-	if (missing.size === 0) {
-		return undefined;
-	}
-	return {
-		ids: [...missing].sort().slice(0, MAX_UNPLACED_IDS),
-		total: missing.size,
-	};
-}
-
-/** What a `testId` lookup should say beyond the occurrence list itself. */
-function lookupHint(
-	needle: string,
-	found: number,
-	catchAllSkipped: number,
-	propOnly: boolean,
-	families: string[] = [],
-): string | undefined {
-	if (found === 0) {
-		const quarantined =
-			catchAllSkipped > 0
-				? ` ${catchAllSkipped} element(s) do write the attribute with a value built entirely at runtime, which would match any id and so proves nothing about this one; they are excluded.`
-				: "";
-		// The one true-negative that reads like a bug. A `@ListSelector("Row")`
-		// matches ids rendered as `Row_1`, `Row_2`, ... and coverage counts it
-		// matched, while looking the bare prefix up is correctly empty — nothing
-		// renders `Row` itself. Saying only "not found" invites the reader to
-		// conclude the selector is broken.
-		if (families.length > 0) {
-			return `No element renders the exact id "${needle}", but ${families.length === 1 ? "an id family" : "id families"} built on it ${families.length === 1 ? "does" : "do"}: ${families.join(", ")}. A prefix selector such as @ListSelector("${needle}") matches those and is not dead. Look up a concrete one (for example "${needle}_0"), or call get_testid_tree on the component to see them in place.`;
-		}
-		return `No rendered element with test id "${needle}" was found.${quarantined} Call get_testid_tree without testId to see the full tree, or map_coverage to check for renamed ids.`;
-	}
-	if (propOnly) {
-		return `Every occurrence of "${needle}" is written as a prop on a component tag, and nothing proved the component forwards it to a host element. It may not exist in the DOM at all; check the component before writing a selector for it.`;
-	}
-	return undefined;
-}
-
-/**
  * The `file` argument, resolved to the path the walk will root at.
  *
  * `TestIdTreeOptions.entry` is a path the engine looks for among the scanned
@@ -659,79 +494,6 @@ function resolveEntryFile(
 	// The scanned spelling, not the caller's: it is what `component` is filtered
 	// against below, and what the engine will match without a suffix search.
 	return { file: match.file, note: resolved.note };
-}
-
-/**
- * What to say when `component` named nothing.
- *
- * Three mistakes wear the same error code, and each has a different list that
- * answers it. The name exists but not in the file that was named: the files
- * that *do* declare it are the fix, and they go in `candidates` — the same
- * answer the page-object side gives for `path.ts#ClassName` against the wrong
- * file. The name exists nowhere and a file was named: that file's own
- * components are the fix, and the whole list is short enough to be the answer.
- * The name exists nowhere and no file was named: ranking is all there is, since
- * dumping every component in the repository buries the one that matters.
- *
- * The list used to be empty in all three, which is how a one-character typo
- * became a dead end.
- */
-function missingComponent(
-	wanted: string,
-	scopeFile: string | undefined,
-	sameName: ComponentInfo[],
-	all: ComponentInfo[],
-): ToolError {
-	if (scopeFile && sameName.length > 0) {
-		return new ToolError(
-			"file_not_found",
-			`No component named "${wanted}" is declared in "${scopeFile}", but ${sameName.length} other file(s) declare it.`,
-			{
-				candidates: sameName.map((component) => component.file).sort(),
-				hint: "Re-call with `file` set to one of the candidates, or drop `file` to search every scanned file.",
-			},
-		);
-	}
-
-	if (!scopeFile) {
-		const suggestions = nearestNames(
-			wanted,
-			all.map((component) => component.name),
-			MAX_ERROR_LIST,
-		);
-		return new ToolError(
-			"file_not_found",
-			`No component named "${wanted}" was found in the scanned sources.`,
-			{
-				suggestions,
-				hint: hintForSuggestions(suggestions, {
-					some: "Pass one of the suggested names, pass `file` with the component's path, or omit both to auto-detect the app entry.",
-					none: "Nothing in the scan resembles that name. Pass `file` with the component's path, omit both to auto-detect the app entry, or pass `testId` to find where a known id is rendered.",
-				}),
-			},
-		);
-	}
-
-	const inFile = [
-		...new Set(
-			all
-				.filter((component) => isScannedFile(component.file, scopeFile))
-				.map((component) => component.name),
-		),
-	].sort();
-	return new ToolError(
-		"file_not_found",
-		inFile.length === 0
-			? `"${scopeFile}" declares no components.`
-			: `No component named "${wanted}" is declared in "${scopeFile}".`,
-		{
-			suggestions: inFile,
-			hint: hintForSuggestions(inFile, {
-				some: "Pass one of the suggested names, drop `file` to search every scanned file, or omit both to auto-detect the app entry.",
-				none: "Pass `file` with the path of a file that declares a component, or omit both to auto-detect the app entry.",
-			}),
-		},
-	);
 }
 
 export function handleGetTestIdTree(
@@ -972,453 +734,6 @@ export function handleGetTestIdTree(
 		meta,
 		shrink,
 	);
-}
-
-/**
- * A path as the engine spells it, folded for comparison: posix separators, no
- * leading `./`, and case folded only where the filesystem folds it too.
- *
- * Both halves come from the engine. The case rule in particular has one owner -
- * `util/paths.ts` documents `isCaseInsensitiveFileSystem` as the single source
- * of truth, blind spots and all - and re-inlining the platform test here meant
- * the tool layer could answer a question about the filesystem differently from
- * the analysis that produced the paths it is comparing.
- */
-function foldFile(value: string): string {
-	return foldPath(normalizeRelPath(value));
-}
-
-/**
- * Whether an engine-emitted path is the scanned file `resolveEntryFile` picked.
- *
- * Exact, deliberately. The suffix rule that makes `Nested.tsx` stand in for
- * `src/deep/Nested.tsx` belongs to {@link matchEntryPath}, which has already run
- * by the time anything here compares paths — and applying it a second time to
- * the *result* undoes it: `src/App.tsx`, resolved exactly against the scan,
- * matched `packages/ui/src/App.tsx` again, so a monorepo that declares the
- * requested component in the package copy was answered with the package copy
- * however fully the caller spelled the path.
- */
-function isScannedFile(rel: string, resolved: string): boolean {
-	return foldFile(rel) === foldFile(resolved);
-}
-
-/**
- * Counts describing exactly the nodes shipped in `roots`.
- *
- * `unresolved` and `unresolvedByReason` repeat the engine's own tree counters
- * deliberately rather than being copied from `tree.stats`: those are the two
- * numbers a caller checks against the nodes actually in front of them, and a
- * stat that describes a different set than the payload is worse than none.
- * They agree with the engine here — the handler ships the engine's roots
- * unchanged — and the walk was already visiting every node.
- *
- * Zero-count reasons are omitted, so the keys are exactly this tree's holes.
- * `spread-props` is never one of them: it marks an unknown test-id *value* on a
- * node whose children are all present, not a missing subtree.
- */
-function subtreeStats(roots: UiNode[]): Record<string, unknown> {
-	let nodes = 0;
-	let testIds = 0;
-	let patterns = 0;
-	let dynamic = 0;
-	let unresolved = 0;
-	const byReason: Partial<Record<UiUnresolvedReason, number>> = {};
-	const visit = (node: UiNode): void => {
-		nodes += 1;
-		if (node.testId) {
-			testIds += 1;
-			if (node.testId.kind === "pattern") {
-				patterns += 1;
-			} else if (node.testId.kind === "dynamic") {
-				dynamic += 1;
-			}
-		}
-		const reason = node.unresolved?.reason;
-		if (reason && reason !== "spread-props") {
-			unresolved += 1;
-			byReason[reason] = (byReason[reason] ?? 0) + 1;
-		}
-		for (const child of node.children) {
-			visit(child);
-		}
-	};
-	for (const root of roots) {
-		visit(root);
-	}
-	return {
-		nodes,
-		testIds,
-		patterns,
-		dynamic,
-		unresolved,
-		// An empty object would be noise on a complete tree; its absence and
-		// `unresolved: 0` say the same thing once.
-		...(unresolved > 0 ? { unresolvedByReason: byReason } : {}),
-	};
-}
-
-interface TreeGap {
-	kind: "not-followed" | "depth" | "nodes" | "boundary";
-	detail: string;
-	/** Set for `boundary`: the reason that accounts for most of the gap. */
-	reason?: UiUnresolvedReason;
-}
-
-/**
- * Why the walk could not see the whole tree, or `null` when it saw all of it.
- *
- * Only cuts that *hide* nodes count: the depth limit and the node budget stop
- * the walk outright, a component left unexpanded hides whatever it renders, and
- * a `#unresolved` marker stands for content the walk saw but could not place.
- * `spread-props` is not one of them — that marks an unknown test id on a node
- * whose children were still walked. `expandedAt` is not one either: the subtree
- * it points at is in this same tree.
- *
- * **Chosen by weight, not by rank.** This used to return the first hit in a
- * fixed order, so a single depth-limited node decided the advice for a tree
- * whose real problem was something else. Measured on one production page: 49
- * depth-limited sites against 178 `external-module` boundaries, and the reader
- * was told to re-call with a larger depth — advice that addresses 17% of the
- * gap. Following it cost 37% more bytes and returned nothing, because no depth
- * reaches inside a module that was never scanned.
- *
- * `not-followed` still wins outright when present: it is the only reason the
- * caller *chose*, so the fix is one argument away and no count changes that.
- */
-function traversalGap(roots: UiNode[], truncated: boolean): TreeGap | null {
-	let notFollowed = 0;
-	let depthCut = 0;
-	const boundaries = new Map<UiUnresolvedReason, number>();
-	const visit = (nodes: UiNode[]): void => {
-		for (const node of nodes) {
-			const reason = node.unresolved?.reason;
-			if (reason === "not-followed") {
-				notFollowed += 1;
-			} else if (reason === "depth-limit-reached") {
-				depthCut += 1;
-			} else if (
-				reason !== undefined &&
-				reason !== "spread-props" &&
-				(node.nodeType === "component" || node.nodeType === "unresolved")
-			) {
-				boundaries.set(reason, (boundaries.get(reason) ?? 0) + 1);
-			}
-			visit(node.children);
-		}
-	};
-	visit(roots);
-
-	if (notFollowed > 0) {
-		return {
-			kind: "not-followed",
-			detail: `${notFollowed} component tag(s) were reported without expanding them`,
-		};
-	}
-
-	// The widest boundary reason, and how it compares with the depth cuts.
-	let topReason: UiUnresolvedReason | undefined;
-	let topCount = 0;
-	for (const [reason, count] of boundaries) {
-		if (count > topCount) {
-			topReason = reason;
-			topCount = count;
-		}
-	}
-
-	if (topReason && topCount >= depthCut && topCount > 0) {
-		return {
-			kind: "boundary",
-			detail:
-				topCount === 1
-					? `a component in that tree was left unexpanded (${topReason})`
-					: `${topCount} component(s) in that tree were left unexpanded (${topReason})`,
-			reason: topReason,
-		};
-	}
-	if (depthCut > 0) {
-		return {
-			kind: "depth",
-			detail: `the depth limit cut the walk short at ${depthCut} site(s)`,
-		};
-	}
-	if (truncated) {
-		return { kind: "nodes", detail: "the node budget ran out mid-walk" };
-	}
-	return null;
-}
-
-/**
- * What to do about a gap: the next call, not an apology.
- *
- * `meta.fidelityReason` already counts the holes and names their codes, so this
- * says only the two things it cannot — which argument closes the gap, and that
- * an id's absence from a holed tree proves nothing.
- */
-function gapHint(
-	gap: TreeGap,
-	depth: number,
-	followComponents: boolean,
-): string {
-	const caveat =
-		"An id missing from an incomplete tree may still be rendered; pass testId to look one up across the whole scan.";
-	if (gap.kind === "not-followed") {
-		return `Re-call with followComponents: true to see inside them. ${caveat}`;
-	}
-	if (gap.kind === "depth") {
-		if (!followComponents) {
-			return `Re-call with followComponents: true. ${caveat}`;
-		}
-		return depth >= 10
-			? `Depth is already at the maximum. ${caveat}`
-			: `Re-call with a larger depth (this call walked ${depth}, max 10). ${caveat}`;
-	}
-	if (gap.kind === "nodes") {
-		return `The node budget ran out; re-call with file or component set to a narrower root. ${caveat}`;
-	}
-	// The commonest gap on a real application, and the one that used to get no
-	// advice at all beyond the caveat — while a single depth-limited node
-	// elsewhere in the tree hijacked the hint into recommending a bigger depth.
-	// Each reason has a different answer and only one of them is a budget.
-	switch (gap.reason) {
-		case "external-module":
-			return `Those components ship from outside the scanned sources, so no depth reaches inside them - re-root the server with --project-root covering their sources, or accept the gap. ${caveat}`;
-		case "local-render-function":
-			return `A same-file function returning JSX could not be inlined; its call is in the node's \`raw\`, so read that function directly. ${caveat}`;
-		case "imported-render-function":
-			return `A function imported from another file in this repository returns JSX and is called here; the call is in the node's \`raw\`. Its elements belong to that file, so root a tree there rather than expecting them inline. ${caveat}`;
-		case "identifier-unresolved":
-		case "namespaced-component":
-		case "not-a-function-component":
-			return `Those tags do not resolve to a function component the walk can enter. If one of them is a component in this repository, root a tree at it with \`component\`. ${caveat}`;
-		case "recursive":
-			return `The component renders itself and the walk cut the cycle; there is nothing to re-call with. ${caveat}`;
-		default:
-			return caveat;
-	}
-}
-
-/** Bucket names in the order the report ships them. */
-const BUCKET_ORDER: CoverageBucket[] = [...COVERAGE_BUCKETS];
-
-/** Which lists this call asked for, and whether an argument was overruled. */
-function selectedBuckets(
-	requested: CoverageBucket[] | undefined,
-	includeUnused: boolean,
-	/** Whether the caller actually wrote `includeUnused`, rather than defaulting. */
-	unusedWasGiven: boolean,
-): { buckets: Set<CoverageBucket>; ignored?: string[] } {
-	if (requested !== undefined) {
-		// Two ways to say the same thing, so one of them has to win, and the
-		// explicit list is the one the caller wrote on purpose. Saying which was
-		// dropped costs one meta field and saves a debugging session.
-		//
-		// An empty array is a list too: `buckets: []` asks for summary and scope
-		// and nothing else, which is the cheapest possible coverage call. Reading
-		// it as "no preference" returned all six lists — the opposite of what the
-		// schema promises, at the maximum response size.
-		// Only when there was something to overrule. `includeUnused` became
-		// optional, and reporting it as ignored on a call that never mentioned it
-		// tells the caller an argument of theirs was dropped when none was.
-		return {
-			buckets: new Set(requested),
-			...(unusedWasGiven ? { ignored: ["includeUnused"] } : {}),
-		};
-	}
-	const buckets = new Set(BUCKET_ORDER);
-	if (!includeUnused) {
-		buckets.delete("uncoveredTestIds");
-	}
-	return { buckets };
-}
-
-/** One list this call means to return: its page, and the size it was cut from. */
-interface BucketSlice {
-	name: CoverageBucket;
-	total: number;
-	page: unknown[];
-}
-
-/** What actually shipped, once the byte budget has had its say. */
-interface CoveragePaging {
-	shown: Record<string, number>;
-	nextOffset: Record<string, number>;
-	/** Buckets the size cap cut below the page `limit` had already selected. */
-	truncatedBuckets: CoverageBucket[];
-	/** Entries remain past what shipped, whether cut by `limit` or by bytes. */
-	truncated: boolean;
-	/** Entries shipped across every returned bucket. */
-	returned: number;
-	/** The size cap cut something: `truncatedBuckets` is non-empty. */
-	degraded: boolean;
-	/**
-	 * Buckets that kept no entry at all, so `nextOffset` cannot name them.
-	 *
-	 * Carried here rather than re-derived from `shown === 0`, which is how
-	 * {@link degradeHint} used to find them. The reserve measurement builds the
-	 * meta at its widest, and under that rule the two dimensions fight: the
-	 * widest `shown` is the page length, which is never zero, so the starvation
-	 * sentence was never in the reserve at all - and a page trimmed to the bytes
-	 * it allowed came back `too_large` anyway, reproduced at 99 bytes over. As
-	 * its own field it can be set to every bucket while the numbers beside it
-	 * stay at full width.
-	 */
-	starved: CoverageBucket[];
-}
-
-/**
- * The coverage envelope, shrunk to fit rather than refused.
- *
- * An oversized report used to come back as a `too_large` error carrying advice.
- * That is the one answer an agent cannot use: it has spent a call, learned
- * nothing about the repository, and has to guess which knob to turn. So
- * `summary` and `scope` always ship — they are the totals every capped list is
- * read against — and each requested bucket ships as much of its page as the
- * remaining bytes allow, with `meta.truncatedBuckets` naming what was cut and
- * `meta.nextOffset` saying where to resume.
- *
- * Fitting is measured, never estimated, and never quadratic (see
- * {@link fitBuckets}). The reserve is measured first, with the meta at its
- * widest — every bucket named as truncated, every `nextOffset` at its largest
- * possible value, the longest hint — because `compactMeta` only ever removes
- * keys, so the real meta cannot exceed the one measured here.
- *
- * If even that reserve is over the cap, nothing is kept, `ok` refuses the
- * result, and the caller gets the genuine `too_large` with this tool's own
- * shrink advice. That case falls out of the arithmetic rather than needing its
- * own branch.
- */
-function coverageResult(input: {
-	base: Record<string, unknown>;
-	slices: BucketSlice[];
-	offset: number;
-	buildMeta: (paging: CoveragePaging) => ToolMeta;
-	shrinkHint: string;
-	onDelivered?: () => void;
-}): TextResult {
-	const { base, slices, offset, buildMeta, shrinkHint, onDelivered } = input;
-
-	const pagingFor = (kept: number[]): CoveragePaging => {
-		const shown: Record<string, number> = {};
-		const nextOffset: Record<string, number> = {};
-		const truncatedBuckets: CoverageBucket[] = [];
-		const starved: CoverageBucket[] = [];
-		let truncated = false;
-		let returned = 0;
-		slices.forEach((slice, index) => {
-			const count = kept[index];
-			const end = offset + count;
-			returned += count;
-			if (end < slice.total) {
-				truncated = true;
-				// Only when it is forward progress. A bucket whose first entry does
-				// not fit keeps `end === offset`, and echoing that back as the next
-				// page is an invitation to loop on the same call forever; the hint
-				// says what to do instead.
-				if (end > offset) {
-					nextOffset[slice.name] = end;
-				}
-			}
-			// Only when the page is not the whole bucket: on a complete list the
-			// count is the array's own length and saying it again is noise.
-			if (count !== slice.total) {
-				shown[slice.name] = count;
-			}
-			if (count < slice.page.length) {
-				truncatedBuckets.push(slice.name);
-			}
-			if (count === 0 && slice.page.length > 0) {
-				starved.push(slice.name);
-			}
-		});
-		return {
-			shown,
-			nextOffset,
-			truncatedBuckets,
-			truncated,
-			returned,
-			degraded: truncatedBuckets.length > 0,
-			starved,
-		};
-	};
-
-	const dataFor = (kept: number[]): Record<string, unknown> => {
-		const data: Record<string, unknown> = { ...base };
-		slices.forEach((slice, index) => {
-			data[slice.name] =
-				kept[index] === slice.page.length
-					? slice.page
-					: slice.page.slice(0, kept[index]);
-		});
-		return data;
-	};
-
-	// The ordinary answer, measured once. Everything that already fits takes this
-	// path and is byte-identical to what it was before auto-degrade existed.
-	const whole = slices.map((slice) => slice.page.length);
-	const wholeData = dataFor(whole);
-	const wholeMeta = buildMeta(pagingFor(whole));
-	if (envelopeBytes(wholeData, wholeMeta) <= MAX_RESPONSE_BYTES) {
-		return ok(wholeData, wholeMeta, { shrinkHint, onDelivered });
-	}
-
-	const widestMeta = buildMeta({
-		shown: Object.fromEntries(
-			slices.map((slice) => [slice.name, slice.page.length]),
-		),
-		nextOffset: Object.fromEntries(
-			slices.map((slice) => [slice.name, offset + slice.page.length]),
-		),
-		truncatedBuckets: slices.map((slice) => slice.name),
-		truncated: true,
-		returned: 0,
-		degraded: true,
-		// Every bucket, so the starvation sentence is measured at full length.
-		starved: slices
-			.filter((slice) => slice.page.length > 0)
-			.map((slice) => slice.name),
-	});
-	const reserve = envelopeBytes(dataFor(slices.map(() => 0)), widestMeta);
-	const fit = fitBuckets(
-		MAX_RESPONSE_BYTES - reserve,
-		slices.map((slice) => ({ name: slice.name, entries: slice.page })),
-	);
-	const kept = slices.map((slice) => fit.get(slice.name) ?? 0);
-	return ok(dataFor(kept), buildMeta(pagingFor(kept)), {
-		shrinkHint,
-		onDelivered,
-	});
-}
-
-/**
- * What to say when the size cap cut the page down.
- *
- * Names the lists that lost entries and the exact next call, because the value
- * of degrading over erroring is only realised if the caller knows how to
- * continue. A bucket that lost *everything* is the one case `nextOffset` cannot
- * express, so it gets its own sentence.
- */
-function degradeHint(
-	paging: CoveragePaging,
-	coverageId: string | undefined,
-): string | undefined {
-	if (!paging.degraded) {
-		return undefined;
-	}
-	const starved = paging.starved;
-	const cut = paging.truncatedBuckets;
-	// The worked example resumes a bucket that actually has a next page; a
-	// starved one has no offset to name and gets its own sentence instead.
-	const resumable = cut.find((name) => paging.nextOffset[name] !== undefined);
-	const resume =
-		coverageId && resumable
-			? `query_coverage {"coverageId":"${coverageId}","bucket":"${resumable}","offset":${paging.nextOffset[resumable]}}`
-			: "a lower `limit`, then `offset`";
-	const starvation =
-		starved.length > 0
-			? ` ${starved.join(", ")} held no entry small enough for the bytes left over; request that bucket on its own so it gets the whole budget.`
-			: "";
-	return `This page would have exceeded the ${MAX_RESPONSE_BYTES}-byte response cap, so ${cut.join(", ")} ${cut.length > 1 ? "were" : "was"} cut to fit instead of the call failing - summary still reports every bucket's real size. Continue with ${resume}.${starvation}`;
 }
 
 export function handleMapCoverage(
@@ -1716,58 +1031,4 @@ export function handleQueryCoverage(
 			),
 		}),
 	});
-}
-
-/**
- * What to change to make THIS coverage call fit.
- *
- * The generic advice named `includeUnused`, which `selectedBuckets` ignores
- * whenever `buckets` is set. A caller who had already narrowed to one bucket
- * was told to pass a no-op, re-called, and got a byte-identical error - the
- * one shape of hint that costs a call and teaches nothing. So the advice now
- * depends on which knobs are still live.
- */
-export function coverageShrinkHint(
-	buckets: CoverageBucket[] | undefined,
-	limit: number,
-	coverageId?: string,
-): string {
-	const lowerLimit = `a lower \`limit\` (this call used ${limit})`;
-	// Only reachable when even `summary` + `scope` overflow, since a bucket page
-	// is now trimmed to fit rather than refused - but that is exactly the call
-	// where naming a handle nobody can spend would be noise.
-	const handle = coverageId
-		? ` Or page one bucket at a time with query_coverage {"coverageId":"${coverageId}", ...}.`
-		: "";
-
-	if (buckets === undefined) {
-		return `Re-call with ${lowerLimit}, \`buckets\` naming only the lists you need, or includeUnused:false. \`buckets: []\` returns summary and scope alone, which always fits.${handle}`;
-	}
-	if (buckets.length > 1) {
-		return `Re-call with ${lowerLimit}, or fewer \`buckets\` - one at a time pages cleanly through \`offset\`. (\`includeUnused\` is ignored while \`buckets\` is set.)${handle}`;
-	}
-	// One bucket already, so the only lever left is the page size. Naming
-	// `buckets` again here is what produced the loop.
-	return `Re-call with ${lowerLimit}, then page the rest with \`offset\`. \`buckets: []\` returns summary and scope alone if you only need the totals.${handle}`;
-}
-
-/**
- * What to say about an empty page.
- *
- * An offset past the end returns `[]` for every bucket, which reads exactly
- * like "there is nothing here" — the same confusion `list_page_objects` had,
- * and the reason it reports the end of its list rather than an empty one.
- */
-function pagingHint(
-	offset: number,
-	requested: number,
-	returned: number,
-	largest: number,
-): string | undefined {
-	if (offset === 0 || requested === 0 || returned > 0) {
-		return undefined;
-	}
-	return largest === 0
-		? `Every requested bucket is empty, so offset ${offset} returned nothing; the buckets themselves hold no entries.`
-		: `offset ${offset} is past the end of every requested bucket (the largest holds ${largest}); re-call with a smaller offset.`;
 }
