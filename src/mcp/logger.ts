@@ -54,10 +54,18 @@ export function pushLogLevel(level: LogLevel): () => void {
 }
 
 function applyMostVerbose(): void {
-	currentLevel = requestedLevels.reduce<LogLevel>(
-		(loudest, level) =>
-			LEVEL_ORDER[level] > LEVEL_ORDER[loudest] ? level : loudest,
-		"error",
+	if (requestedLevels.length === 0) {
+		// Nobody is serving; back to the module default.
+		currentLevel = "error";
+		return;
+	}
+	// Seeded from the first request, not from `"error"`. Seeding with the default
+	// made it a floor: a lone server asking for `silent` got `error`, because
+	// `error` is the more verbose of the two — so `--log-level silent` did
+	// nothing at all. The identity for "loudest" has to be the quietest thing
+	// there is, and only a request can supply it.
+	currentLevel = requestedLevels.reduce((loudest, level) =>
+		LEVEL_ORDER[level] > LEVEL_ORDER[loudest] ? level : loudest,
 	);
 }
 

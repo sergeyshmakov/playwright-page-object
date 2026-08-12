@@ -181,3 +181,40 @@ describe("pushLogLevel", () => {
 		first();
 	});
 });
+
+describe("a lone silent server", () => {
+	function emitted(body: () => void): string {
+		const chunks: string[] = [];
+		const original = process.stderr.write.bind(process.stderr);
+		(process.stderr as { write: unknown }).write = (chunk: string) => {
+			chunks.push(String(chunk));
+			return true;
+		};
+		try {
+			body();
+		} finally {
+			(process.stderr as { write: unknown }).write = original;
+		}
+		return chunks.join("");
+	}
+
+	it("is actually silent", () => {
+		// Seeding the reduction with the default made it a floor: `error` is more
+		// verbose than `silent`, so the only server asking for silence got `error`
+		// and `--log-level silent` did nothing at all.
+		const release = pushLogLevel("silent");
+		expect(emitted(() => logger.error("should not appear"))).toBe("");
+		release();
+	});
+
+	it("still yields to a louder server while one is up", () => {
+		const quiet = pushLogLevel("silent");
+		const loud = pushLogLevel("debug");
+		expect(
+			emitted(() => logger.error("the other server wants this")),
+		).toContain("the other server wants this");
+		loud();
+		expect(emitted(() => logger.error("back to silence"))).toBe("");
+		quiet();
+	});
+});
