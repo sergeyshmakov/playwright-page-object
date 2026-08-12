@@ -164,7 +164,7 @@ function isLibrarySpecifier(specifier: string, ctx: AnalysisContext): boolean {
  * before its exports were read; a monorepo that re-exports through a package
  * index, a testing index and a per-app shim reaches that without trying.
  */
-const MAX_BARREL_HOPS = 32;
+const MAX_BARREL_FILES = 32;
 
 /**
  * Every canonical library name a local barrel publishes, by the name it
@@ -203,7 +203,7 @@ function barrelExports(
 		// first, not an empty one.
 		return cached ?? new Map();
 	}
-	if (visited.size >= MAX_BARREL_HOPS) {
+	if (visited.size >= MAX_BARREL_FILES) {
 		return new Map();
 	}
 	visited.set(key, null);

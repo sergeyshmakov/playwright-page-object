@@ -93,8 +93,12 @@ export function locateTsConfig(
  * so counting enqueued paths spent the budget twice per hop and truncated a
  * four-deep chain at the halfway mark, silently dropping the outermost bases
  * from the fingerprint while TypeScript itself still applied them.
+ *
+ * `seen` is the termination argument and `MAX_WATCHED_CONFIGS` bounds the
+ * width, so this is only a depth budget - and truncating it is silent, with the
+ * same consequence the paragraph above describes. Generous rather than tight.
  */
-const MAX_EXTENDS_HOPS = 8;
+const MAX_EXTENDS_HOPS = 32;
 
 /**
  * Hard ceiling on watched paths, including the spellings that do not exist.
