@@ -162,8 +162,21 @@ describe("subtreeStats", () => {
 			node({
 				testId: { kind: "static", value: "A", raw: '"A"' },
 				children: [
-					node({ testId: { kind: "pattern", raw: `\`A${hole("n")}\`` } }),
-					node({ testId: { kind: "dynamic", raw: "id" } }),
+					node({
+						testId: {
+							kind: "pattern",
+							regex: { source: "^A.+$", flags: "" },
+							parts: [{ kind: "literal", text: "A" }],
+							raw: `\`A${hole("n")}\``,
+						},
+					}),
+					node({
+						testId: {
+							kind: "dynamic",
+							reason: "computed-expression",
+							raw: "id",
+						},
+					}),
 					node(),
 				],
 			}),

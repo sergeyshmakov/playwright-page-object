@@ -6,6 +6,7 @@ import type {
 	PageObjectTree,
 	SelectorInfo,
 	TestIdTree,
+	TestIdValue,
 	UiNode,
 	UiUnresolvedReason,
 } from "../analysis";
@@ -258,9 +259,22 @@ function idLabel(value: UiNode["testId"]): string {
 	if (!value) {
 		return "-";
 	}
-	return value.kind === "pattern"
-		? `${value.prefix ?? ""}*`
-		: (value.value ?? value.raw);
+	return testIdLabel(value);
+}
+
+/**
+ * How an id reads in an outline: the value when it is one, the prefix glob when
+ * it is a pattern, the source text when it is neither.
+ */
+function testIdLabel(value: TestIdValue): string {
+	switch (value.kind) {
+		case "static":
+			return value.value;
+		case "pattern":
+			return `${value.prefix ?? ""}*`;
+		default:
+			return value.raw;
+	}
 }
 
 /**
@@ -542,10 +556,7 @@ export function renderTestIdOutline(tree: TestIdTree): string {
 	if (tree.roots.length === 0) {
 		lines.push(`(flat inventory, ${tree.inventory.length} occurrences)`);
 		for (const occurrence of tree.inventory) {
-			const id =
-				occurrence.value.kind === "pattern"
-					? `${occurrence.value.prefix ?? ""}*`
-					: (occurrence.value.value ?? occurrence.value.raw);
+			const id = testIdLabel(occurrence.value);
 			// Flat is the fallback fidelity, so it is exactly when the per-occurrence
 			// metadata the full tree carries matters most.
 			const flags: string[] = [];

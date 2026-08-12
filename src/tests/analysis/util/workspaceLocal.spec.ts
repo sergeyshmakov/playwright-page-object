@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Project } from "ts-morph";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { staticId } from "../../../analysis";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import { foldPath, toPosix } from "../../../analysis/util/paths";
 import { resolveIdentifier } from "../../../analysis/util/resolve";
@@ -284,10 +285,9 @@ describe.skipIf(!LINKS_WORK)(
 			// was built. Its ids would otherwise be in `roots` and not in `inventory`,
 			// and `map_coverage` would call every selector for them dead.
 			const tree = buildTestIdTree(ws, { entry: "apps/web/src/App.tsx" });
-			expect(tree.inventory.map((entry) => entry.value.value).sort()).toEqual([
-				"GappedRoot",
-				"Inner",
-			]);
+			expect(
+				tree.inventory.map((entry) => staticId(entry.value)).sort(),
+			).toEqual(["GappedRoot", "Inner"]);
 			expect(tree.stats.files).toBe(2);
 		});
 

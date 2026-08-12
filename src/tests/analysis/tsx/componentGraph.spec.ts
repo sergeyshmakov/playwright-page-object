@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import {
 	collectComponents,
 	componentReturnExpressions,
@@ -411,7 +412,7 @@ describe("buildTestIdTree — graph traversal", () => {
 		expect(branches.every((branch) => branch.conditional)).toBe(true);
 		expect(
 			branches.flatMap((branch) =>
-				branch.children.map((child) => child.testId?.value),
+				branch.children.map((child) => staticId(child.testId)),
 			),
 		).toEqual(["Yes", "No"]);
 	});
@@ -440,7 +441,7 @@ describe("buildTestIdTree — graph traversal", () => {
 		expect(tree.roots).toEqual([]);
 		expect(tree.fidelityReason).toContain("auto-detected");
 		// The inventory is still complete: coverage runs off it, not the tree.
-		expect(tree.inventory.map((entry) => entry.value.value)).toEqual(["O"]);
+		expect(tree.inventory.map((entry) => staticId(entry.value))).toEqual(["O"]);
 	});
 
 	it("reports a missing explicit entry without throwing", () => {

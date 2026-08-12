@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import type { TestIdTreeOptions } from "../../../analysis/tsx/tree";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import { makeWorkspace } from "../helpers/inMemory";
@@ -61,10 +62,9 @@ describe("entryComponent", () => {
 		expect(tree.fidelityReason).toContain("Alpha");
 		expect(tree.fidelityReason).toContain("Beta");
 		// The inventory is untouched: coverage runs off it, not off the tree.
-		expect(tree.inventory.map((entry) => entry.value.value).sort()).toEqual([
-			"AlphaBox",
-			"BetaBox",
-		]);
+		expect(tree.inventory.map((entry) => staticId(entry.value)).sort()).toEqual(
+			["AlphaBox", "BetaBox"],
+		);
 	});
 
 	it("guesses nothing when no entry file was given", () => {

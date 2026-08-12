@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { TestIdTree, UiNode } from "../../../analysis/types";
 import { makeWorkspace } from "../helpers/inMemory";
@@ -20,7 +21,7 @@ function flatten(nodes: UiNode[]): UiNode[] {
 
 function ids(tree: TestIdTree): string[] {
 	return flatten(tree.roots)
-		.map((node) => node.testId?.value)
+		.map((node) => staticId(node.testId))
 		.filter((value): value is string => value !== undefined)
 		.sort();
 }
@@ -99,7 +100,9 @@ describe("same-file render helpers are inlined", () => {
 			].join("\n"),
 		});
 		expect(ids(tree)).toEqual(["Off", "On", "Root"]);
-		const on = flatten(tree.roots).find((node) => node.testId?.value === "On");
+		const on = flatten(tree.roots).find(
+			(node) => staticId(node.testId) === "On",
+		);
 		// Several returns are mutually exclusive: a selector writer has to know only
 		// one of them renders.
 		expect(on?.conditional).toBe(true);
@@ -135,7 +138,7 @@ describe("same-file render helpers are inlined", () => {
 		});
 		expect(ids(tree)).toEqual(["Hint", "In", "Out"]);
 		const hint = flatten(tree.roots).find(
-			(node) => node.testId?.value === "Hint",
+			(node) => staticId(node.testId) === "Hint",
 		);
 		expect(hint?.children).toHaveLength(2);
 		for (const child of hint?.children ?? []) {
@@ -181,7 +184,7 @@ describe("what a render helper's arguments are not", () => {
 		expect(cell?.testId?.kind).toBe("dynamic");
 		expect(cell?.testIdAbsent).toBeUndefined();
 		// The row's own prop still resolves; only the shadowed name does not.
-		expect(nodes.find((node) => node.tag === "tr")?.testId?.value).toBe(
+		expect(staticId(nodes.find((node) => node.tag === "tr")?.testId)).toBe(
 			"FromCaller",
 		);
 	});

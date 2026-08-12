@@ -373,17 +373,38 @@ export interface PageObjectIndex {
 /* TSX / UI                                                                   */
 /* -------------------------------------------------------------------------- */
 
-export interface TestIdValue {
-	kind: "static" | "pattern" | "dynamic";
-	value?: string;
-	prefix?: string;
-	regex?: { source: string; flags: string };
-	parts?: Array<
-		{ kind: "literal"; text: string } | { kind: "expr"; text: string }
-	>;
-	raw: string;
-	reason?: DynamicReason;
-}
+/** One segment of a template-built id: written text, or a hole. */
+export type TestIdPart =
+	| { kind: "literal"; text: string }
+	| { kind: "expr"; text: string };
+
+/**
+ * A test-id value as the scan read it, in the three states it can be in.
+ *
+ * A union rather than a `kind` beside five independent optionals, which is what
+ * `MemberResult` and `MaybeStatic` - the same static-or-dynamic idea, twice
+ * more in this file - already are. The producers always held the invariant:
+ * `staticValue` cannot omit `value`, `patternFromParts` cannot omit `regex`.
+ * Only the type failed to say so, and nine call sites re-proved it by hand, one
+ * of them casting against this very declaration to read a `prefix` that was
+ * already on it.
+ *
+ * The JSON is unchanged: these are the same objects the scan always produced.
+ */
+export type TestIdValue =
+	| { kind: "static"; value: string; raw: string }
+	| {
+			kind: "pattern";
+			regex: { source: string; flags: string };
+			parts: TestIdPart[];
+			/**
+			 * Leading literal run, used as a cheap containment probe. Genuinely
+			 * absent when the template opens with a hole - `${prefix}Row` has none.
+			 */
+			prefix?: string;
+			raw: string;
+	  }
+	| { kind: "dynamic"; reason: DynamicReason; raw: string };
 
 /**
  * Why a node's subtree is missing, unproven, or unreadable.

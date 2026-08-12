@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import type { TestIdTreeOptions } from "../../../analysis/tsx/tree";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { UiNode } from "../../../analysis/types";
@@ -55,7 +56,7 @@ describe("cross-site component de-duplication", () => {
 		});
 
 		const [first, second] = sitesOf(nodes, "Badge");
-		expect(first.children.map((child) => child.testId?.value)).toEqual([
+		expect(first.children.map((child) => staticId(child.testId))).toEqual([
 			"Badge",
 		]);
 		expect(first.expandedAt).toBeUndefined();
@@ -128,9 +129,9 @@ describe("cross-site component de-duplication", () => {
 		const resolved = tree.inventory.filter(
 			(occurrence) => occurrence.viaProp === "testId",
 		);
-		expect(resolved.map((occurrence) => occurrence.value.value).sort()).toEqual(
-			["One", "Two"],
-		);
+		expect(
+			resolved.map((occurrence) => staticId(occurrence.value)).sort(),
+		).toEqual(["One", "Two"]);
 	});
 
 	it("de-duplicates sites that bind the same prop value", () => {
@@ -395,7 +396,7 @@ describe("cross-site component de-duplication", () => {
 		// The inventory is scanned per file, so the collapsed subtree's ids are
 		// still there exactly once each.
 		expect(
-			tree.inventory.map((occurrence) => occurrence.value.value).sort(),
+			tree.inventory.map((occurrence) => staticId(occurrence.value)).sort(),
 		).toEqual(["Badge", "Root"]);
 		expect(tree.stats.occurrences).toBe(tree.inventory.length);
 	});

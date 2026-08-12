@@ -1,4 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type { TestIdValue } from "../../../analysis";
+
+/** Narrows to the pattern arm, failing loudly rather than reading undefined. */
+function pattern(value: TestIdValue) {
+	if (value.kind !== "pattern") {
+		throw new Error(`expected a pattern, got ${value.kind}`);
+	}
+	return value;
+}
+
+import { staticId } from "../../../analysis";
 import { isCatchAllPattern } from "../../../analysis/coverage/match";
 import {
 	scanFileElements,
@@ -57,7 +68,7 @@ describe("scanFileTestIds — value forms", () => {
 			// biome-ignore lint/suspicious/noTemplateCurlyInString: the scanner echoes the fixture text verbatim
 			raw: "`CartItem_${id}`",
 		});
-		expect(occurrences[0].value.parts).toEqual([
+		expect(pattern(occurrences[0].value).parts).toEqual([
 			{ kind: "literal", text: "CartItem_" },
 			{ kind: "expr", text: "id" },
 		]);
@@ -75,13 +86,16 @@ describe("scanFileTestIds — value forms", () => {
 	it("escapes regex metacharacters in the literal parts", () => {
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source for the parser, not an interpolation
 		const { occurrences } = scan("    <div data-testid={`item.${id}`} />");
-		expect(occurrences[0].value.regex?.source).toBe("^item\\..+$");
+		expect(pattern(occurrences[0].value).regex.source).toBe("^item\\..+$");
 	});
 
 	it("splits a two-branch static ternary into two conditional occurrences", () => {
 		const { occurrences } = scan('    <div data-testid={cond ? "A" : "B"} />');
 		expect(occurrences).toHaveLength(2);
-		expect(occurrences.map((entry) => entry.value.value)).toEqual(["A", "B"]);
+		expect(occurrences.map((entry) => staticId(entry.value))).toEqual([
+			"A",
+			"B",
+		]);
 		expect(occurrences.every((entry) => entry.conditional)).toBe(true);
 	});
 
@@ -96,18 +110,17 @@ describe("scanFileTestIds — value forms", () => {
 		);
 
 		expect(occurrences).toHaveLength(2);
-		expect(occurrences.map((entry) => entry.value.regex?.source)).toEqual([
-			"^AdditionalBedListItem_.+$",
-			"^MainBedListItem_.+$",
-		]);
+		expect(
+			occurrences.map((entry) => pattern(entry.value).regex.source),
+		).toEqual(["^AdditionalBedListItem_.+$", "^MainBedListItem_.+$"]);
 		// The branch literal and the literal that follows it are one anchor, and
 		// `prefix` is only ever the first part — unmerged it would read "Main".
-		expect(occurrences.map((entry) => entry.value.prefix)).toEqual([
+		expect(occurrences.map((entry) => pattern(entry.value).prefix)).toEqual([
 			"AdditionalBedListItem_",
 			"MainBedListItem_",
 		]);
 		expect(occurrences.every((entry) => entry.conditional)).toBe(true);
-		expect(occurrences[1].value.parts).toEqual([
+		expect(pattern(occurrences[1].value).parts).toEqual([
 			{ kind: "literal", text: "MainBedListItem_" },
 			{ kind: "expr", text: "id" },
 		]);
@@ -172,10 +185,9 @@ describe("scanFileTestIds — value forms", () => {
 			'    <div data-testid={(cond ? "Main" : "Extra") + "Row_" + id} />',
 		);
 
-		expect(occurrences.map((entry) => entry.value.regex?.source)).toEqual([
-			"^MainRow_.+$",
-			"^ExtraRow_.+$",
-		]);
+		expect(
+			occurrences.map((entry) => pattern(entry.value).regex.source),
+		).toEqual(["^MainRow_.+$", "^ExtraRow_.+$"]);
 	});
 
 	it("reports a bare identifier as dynamic", () => {

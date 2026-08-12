@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { UiNode } from "../../../analysis/types";
 import { makeWorkspace } from "../helpers/inMemory";
@@ -61,7 +62,7 @@ describe("composition-heavy page — every gap at once", () => {
 	});
 	const nodes = flatten(tree.roots);
 	const byId = (id: string): UiNode | undefined =>
-		nodes.find((node) => node.testId?.value === id);
+		nodes.find((node) => staticId(node.testId) === id);
 
 	it("roots at the requested component, not the file's first", () => {
 		expect(tree.roots[0].tag).toBe("Gapped");
@@ -105,7 +106,7 @@ describe("composition-heavy page — every gap at once", () => {
 		);
 		expect(bare?.testId?.raw).toBe("dataTid");
 		expect(bare?.testIdAbsent).toBeUndefined();
-		expect(staticIds(nodes.map((node) => node.testId?.value))).not.toContain(
+		expect(staticIds(nodes.map((node) => staticId(node.testId)))).not.toContain(
 			"dataTid",
 		);
 	});
@@ -119,7 +120,7 @@ describe("composition-heavy page — every gap at once", () => {
 	it("puts every statically known id from the inventory into the tree", () => {
 		// The 82-vs-8 invariant, in miniature: nothing the flat scan proved is
 		// missing from the walked tree.
-		const inTree = staticIds(nodes.map((node) => node.testId?.value));
+		const inTree = staticIds(nodes.map((node) => staticId(node.testId)));
 		const inInventory = staticIds(
 			tree.inventory.map((entry) =>
 				entry.value.kind === "static" ? entry.value.value : undefined,

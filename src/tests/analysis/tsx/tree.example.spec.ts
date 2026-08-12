@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { UiNode } from "../../../analysis/types";
 import { exampleWorkspace } from "../helpers/example";
@@ -8,7 +9,7 @@ function flatten(nodes: UiNode[]): UiNode[] {
 }
 
 function byTestId(nodes: UiNode[], id: string): UiNode | undefined {
-	return nodes.find((node) => node.testId?.value === id);
+	return nodes.find((node) => staticId(node.testId) === id);
 }
 
 describe("example/src — full fidelity from the auto-detected entry", () => {
@@ -76,7 +77,11 @@ describe("example/src — full fidelity from the auto-detected entry", () => {
 
 	it("builds a complete inventory with no dynamic ids", () => {
 		const ids = tree.inventory
-			.map((entry) => entry.value.value ?? entry.value.prefix)
+			.map((entry) =>
+				entry.value.kind === "pattern"
+					? entry.value.prefix
+					: staticId(entry.value),
+			)
 			.sort();
 		expect(ids).toEqual([
 			"ApplyPromoButton",

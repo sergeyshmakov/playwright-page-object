@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import type { TestIdTreeOptions } from "../../../analysis/tsx/tree";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { UiNode } from "../../../analysis/types";
@@ -31,7 +32,7 @@ function treeFor(files: Record<string, string>, options?: TestIdTreeOptions) {
 }
 
 function byTestId(nodes: UiNode[], id: string): UiNode | undefined {
-	return nodes.find((node) => node.testId?.value === id);
+	return nodes.find((node) => staticId(node.testId) === id);
 }
 
 function markers(nodes: UiNode[]): UiNode[] {
@@ -79,7 +80,7 @@ describe("children passed to a component the walk cannot expand", () => {
 		});
 
 		const layout = nodes.find((node) => node.tag === "Layout");
-		expect(layout?.children.map((child) => child.testId?.value)).toEqual([
+		expect(layout?.children.map((child) => staticId(child.testId))).toEqual([
 			"Head",
 			"Body",
 		]);
@@ -219,7 +220,7 @@ describe("children passed to a component the walk cannot expand", () => {
 		);
 		expect(byTestId(nodes, "Z")).toBeUndefined();
 		// The flat inventory never lost it, which is what keeps coverage honest.
-		expect(tree.inventory.some((entry) => entry.value.value === "Z")).toBe(
+		expect(tree.inventory.some((entry) => staticId(entry.value) === "Z")).toBe(
 			true,
 		);
 	});
@@ -238,9 +239,9 @@ describe("children passed to a component the walk cannot expand", () => {
 		const marker = markers(nodes)[0];
 		expect(marker?.unresolved).toEqual({ reason: "unresolved-jsx" });
 		expect(marker?.placement).toEqual({ kind: "prop", name: "renderItem" });
-		expect(tree.inventory.some((entry) => entry.value.value === "Item")).toBe(
-			true,
-		);
+		expect(
+			tree.inventory.some((entry) => staticId(entry.value) === "Item"),
+		).toBe(true);
 	});
 
 	// The wrappers `walk` sees straight through have to be invisible to the
@@ -351,9 +352,9 @@ describe("children passed to a component the walk cannot expand", () => {
 		// React stringifies it; claiming the id renders would be an over-claim,
 		// and the tree is allowed to under-claim but never to over-claim.
 		expect(byTestId(nodes, "Ghost")).toBeUndefined();
-		expect(tree.inventory.some((entry) => entry.value.value === "Ghost")).toBe(
-			true,
-		);
+		expect(
+			tree.inventory.some((entry) => staticId(entry.value) === "Ghost"),
+		).toBe(true);
 	});
 
 	it("gives a slot child the caller's conditional context", () => {

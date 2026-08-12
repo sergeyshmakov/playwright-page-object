@@ -8,7 +8,12 @@ import {
 	SyntaxKind,
 	ts,
 } from "ts-morph";
-import type { SourceLoc, TestIdOccurrence, TestIdValue } from "../types";
+import type {
+	DynamicReason,
+	SourceLoc,
+	TestIdOccurrence,
+	TestIdValue,
+} from "../types";
 import { hasDefaultKeyword } from "../util/exports";
 import { escapeRegExp } from "../util/paths";
 import { lineAndColumnAt } from "../util/position";
@@ -145,13 +150,25 @@ export function isRepeated(node: Node): boolean {
 	return false;
 }
 
+/**
+ * The id a value names outright, or `undefined` when it names none.
+ *
+ * The narrowing every reader of an inventory wants, written once. A pattern
+ * names a *set* of ids and a dynamic value names nothing, so neither has one -
+ * and before `TestIdValue` was a union, asking for `.value` on either silently
+ * returned `undefined` instead of failing to compile.
+ */
+export function staticId(value: TestIdValue | undefined): string | undefined {
+	return value?.kind === "static" ? value.value : undefined;
+}
+
 function staticValue(raw: string, text: string): TestIdValue {
 	return { kind: "static", value: text, raw };
 }
 
 function dynamicValue(
 	raw: string,
-	reason: TestIdValue["reason"] = "computed-expression",
+	reason: DynamicReason = "computed-expression",
 ): TestIdValue {
 	return { kind: "dynamic", raw, reason };
 }

@@ -202,9 +202,16 @@ const PART = "\u0002";
 const ALT = "\u0003";
 
 function valueSignature(value: TestIdValue): string {
-	return [value.kind, value.value ?? "", value.prefix ?? "", value.raw].join(
-		FIELD,
-	);
+	// Only one of the two ever exists, and which one is decided by `kind` - it is
+	// already the first field of the signature, so a static "A" and a pattern
+	// prefixed "A" cannot collide.
+	const distinguishing =
+		value.kind === "static"
+			? value.value
+			: value.kind === "pattern"
+				? (value.prefix ?? "")
+				: "";
+	return [value.kind, distinguishing, value.raw].join(FIELD);
 }
 
 /**

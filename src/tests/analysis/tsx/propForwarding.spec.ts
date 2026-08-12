@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { UiNode } from "../../../analysis/types";
 import { makeWorkspace } from "../helpers/inMemory";
@@ -190,7 +191,7 @@ describe("one-hop prop forwarding", () => {
 			].join("\n"),
 		});
 		const button = nodes.find((node) => node.tag === "button");
-		expect(button?.testId?.value).toBeUndefined();
+		expect(staticId(button?.testId)).toBeUndefined();
 		expect(button?.testId?.kind).toBe("dynamic");
 		expect(button?.viaDefault).toBeUndefined();
 	});
@@ -209,9 +210,10 @@ describe("one-hop prop forwarding", () => {
 		});
 		const values = tree.inventory.map((entry) => entry.value);
 		expect(values.filter((value) => value.kind === "dynamic")).toHaveLength(0);
-		expect(values.map((value) => value.value)).toContain("Folded");
+		expect(values.map(staticId)).toContain("Folded");
 		expect(
-			tree.inventory.find((entry) => entry.value.value === "Folded")?.viaProp,
+			tree.inventory.find((entry) => staticId(entry.value) === "Folded")
+				?.viaProp,
 		).toBe("testId");
 	});
 
@@ -241,7 +243,7 @@ describe("one-hop prop forwarding", () => {
 		const atRow = tree.inventory.filter(
 			(entry) => entry.file === "src/Row.tsx",
 		);
-		expect(atRow.map((entry) => entry.value.value)).toContain("Known");
+		expect(atRow.map((entry) => staticId(entry.value))).toContain("Known");
 		expect(
 			atRow.filter((entry) => entry.value.kind === "dynamic"),
 		).toHaveLength(1);
@@ -305,7 +307,7 @@ describe("test ids that provably do not render at a site", () => {
 		const row = nodes.find((node) => node.tag === "tr");
 		expect(row?.testId).toBeUndefined();
 		expect(row?.testIdAbsent).toBe(true);
-		const ids = nodes.map((node) => node.testId?.value);
+		const ids = nodes.map((node) => staticId(node.testId));
 		expect(ids).not.toContain("dataTid");
 		expect(
 			tree.roots.length,
@@ -376,7 +378,7 @@ describe("test ids that provably do not render at a site", () => {
 			...appRendering("<Row />"),
 		});
 		const resolved = tree.inventory.filter(
-			(entry) => entry.value.value === "Row",
+			(entry) => staticId(entry.value) === "Row",
 		);
 		expect(resolved).toHaveLength(1);
 		expect(resolved[0].viaProp).toBe("dataTid");
@@ -413,7 +415,9 @@ describe("test ids written on a component tag", () => {
 				"}",
 			].join("\n"),
 		});
-		const ghost = tree.inventory.find((entry) => entry.value.value === "Ghost");
+		const ghost = tree.inventory.find(
+			(entry) => staticId(entry.value) === "Ghost",
+		);
 		expect(ghost).toMatchObject({ tag: "Card", reach: "component-prop" });
 	});
 
@@ -430,7 +434,7 @@ describe("test ids written on a component tag", () => {
 			].join("\n"),
 		});
 		const occurrences = tree.inventory.filter(
-			(entry) => entry.value.value === "Real",
+			(entry) => staticId(entry.value) === "Real",
 		);
 		expect(occurrences.map((entry) => [entry.tag, entry.reach])).toEqual(
 			expect.arrayContaining([

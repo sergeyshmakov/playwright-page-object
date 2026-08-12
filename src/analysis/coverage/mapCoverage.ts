@@ -417,7 +417,8 @@ function sweepRawLocators(
 					...base,
 					kind: "testId",
 					dynamic: true,
-					reason: value.reason ?? "computed-expression",
+					reason:
+						value.kind === "dynamic" ? value.reason : "computed-expression",
 				});
 			}
 		}
@@ -740,7 +741,7 @@ function computeCoverageReport(
 		...partition.catchAll.map((occurrence) => ({
 			reason: "unanchored-pattern" as const,
 			occurrence,
-			...(occurrence.value.regex
+			...(occurrence.value.kind === "pattern"
 				? { patternSource: occurrence.value.regex.source }
 				: {}),
 		})),
@@ -925,8 +926,10 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 	if (partition.catchAll.length > 0) {
 		const [sample] = partition.catchAll;
 		const distinct = new Set(
-			partition.catchAll.map(
-				(occurrence) => occurrence.value.regex?.source ?? "",
+			partition.catchAll.map((occurrence) =>
+				occurrence.value.kind === "pattern"
+					? occurrence.value.regex.source
+					: "",
 			),
 		);
 		out.push(

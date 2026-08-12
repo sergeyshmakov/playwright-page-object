@@ -56,7 +56,9 @@ describe("ids the analysis must not erase", () => {
 		const tree = buildTestIdTree(makeWorkspace({ ...BOOTSTRAP, ...CHOICE_UI }));
 		const rendered = tree.inventory
 			.filter((occurrence) => occurrence.reach === "forwarded")
-			.map((occurrence) => occurrence.value.value);
+			.map((occurrence) =>
+				occurrence.value.kind === "static" ? occurrence.value.value : undefined,
+			);
 		expect(rendered).toContain("RowWide");
 		expect(rendered).toContain("RowNarrow");
 	});

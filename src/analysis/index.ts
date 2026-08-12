@@ -68,6 +68,7 @@ export {
 	attributeVerdict,
 	censusFromText,
 } from "./tsx/attributeCensus";
+export { staticId } from "./tsx/scanTestIds";
 export {
 	buildTestIdTree,
 	type EntryPathMatch,

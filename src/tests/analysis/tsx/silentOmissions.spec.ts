@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import type { TestIdTreeOptions } from "../../../analysis/tsx/tree";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { UiNode } from "../../../analysis/types";
@@ -110,7 +111,7 @@ describe("gaps the tree has to admit to", () => {
 				"export default Card;",
 			].join("\n"),
 		});
-		expect(nodes.map((node) => node.testId?.value)).toContain("CardBody");
+		expect(nodes.map((node) => staticId(node.testId))).toContain("CardBody");
 	});
 
 	it("enters a component wrapped in memo(forwardRef(...))", () => {
@@ -129,7 +130,7 @@ describe("gaps the tree has to admit to", () => {
 				"export default Input;",
 			].join("\n"),
 		});
-		expect(nodes.map((node) => node.testId?.value)).toContain("InputBody");
+		expect(nodes.map((node) => staticId(node.testId))).toContain("InputBody");
 	});
 
 	it("enters a component wrapped as `memo(Foo)` by identifier", () => {
@@ -149,7 +150,7 @@ describe("gaps the tree has to admit to", () => {
 				"export default Badge;",
 			].join("\n"),
 		});
-		expect(nodes.map((node) => node.testId?.value)).toContain("BadgeBody");
+		expect(nodes.map((node) => staticId(node.testId))).toContain("BadgeBody");
 	});
 
 	it("keeps a module helper that a block-scoped local only looks like", () => {
@@ -173,7 +174,7 @@ describe("gaps the tree has to admit to", () => {
 				"}",
 			].join("\n"),
 		});
-		expect(nodes.map((node) => node.testId?.value)).toContain("PanelTitle");
+		expect(nodes.map((node) => staticId(node.testId))).toContain("PanelTitle");
 	});
 
 	it("does not resolve a call inside a block-local shadow", () => {
@@ -198,7 +199,7 @@ describe("gaps the tree has to admit to", () => {
 				"}",
 			].join("\n"),
 		});
-		const ids = nodes.map((node) => node.testId?.value);
+		const ids = nodes.map((node) => staticId(node.testId));
 		// The branch that is not shadowed still reports normally.
 		expect(ids).toContain("PanelWide");
 		// The shadowed call does not borrow the module helper's id.
@@ -224,7 +225,7 @@ describe("gaps the tree has to admit to", () => {
 				"}",
 			].join("\n"),
 		});
-		const ids = nodes.map((node) => node.testId?.value);
+		const ids = nodes.map((node) => staticId(node.testId));
 		expect(ids).toContain("BlockItem");
 		// And the unshadowed call outside the block still gets the module one.
 		expect(ids).toContain("ModuleItem");
@@ -256,8 +257,8 @@ describe("gaps the tree has to admit to", () => {
 				"}",
 			].join("\n"),
 		});
-		expect(nodes.map((node) => node.testId?.value)).toContain("OuterBody");
-		expect(nodes.map((node) => node.testId?.value)).not.toContain(
+		expect(nodes.map((node) => staticId(node.testId))).toContain("OuterBody");
+		expect(nodes.map((node) => staticId(node.testId))).not.toContain(
 			"ModuleInner",
 		);
 	});

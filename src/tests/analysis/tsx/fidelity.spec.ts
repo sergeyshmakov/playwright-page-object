@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import type { TestIdTreeOptions } from "../../../analysis/tsx/tree";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { UiNode } from "../../../analysis/types";
@@ -197,8 +198,10 @@ describe("tree fidelity", () => {
 			include: ["src/App.tsx"],
 		});
 
-		expect(nodes.some((node) => node.testId?.value === "Mid")).toBe(true);
-		expect(tree.inventory.map((entry) => entry.value.value)).toEqual(["Shell"]);
+		expect(nodes.some((node) => staticId(node.testId) === "Mid")).toBe(true);
+		expect(tree.inventory.map((entry) => staticId(entry.value))).toEqual([
+			"Shell",
+		]);
 		const gap = tree.warnings.find(
 			(diag) => diag.code === "inventory-scope-gap",
 		);

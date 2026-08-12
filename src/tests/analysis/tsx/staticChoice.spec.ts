@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { staticId } from "../../../analysis";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import type { UiNode } from "../../../analysis/types";
 import { makeWorkspace } from "../helpers/inMemory";
@@ -30,8 +31,8 @@ function treeFor(files: Record<string, string>) {
 /** Every id the tree reports for one node, primary branch first. */
 function idsOf(node: UiNode | undefined): Array<string | undefined> {
 	return [
-		node?.testId?.value,
-		...(node?.testIdAlternatives ?? []).map((value) => value.value),
+		staticId(node?.testId),
+		...(node?.testIdAlternatives ?? []).map(staticId),
 	];
 }
 
@@ -49,10 +50,9 @@ describe("an element whose test id is a static choice", () => {
 		expect(idsOf(div)).toEqual(["Main", "Alt"]);
 		expect(div?.conditional).toBe(true);
 		// The tree now says exactly what the inventory says.
-		expect(tree.inventory.map((entry) => entry.value.value).sort()).toEqual([
-			"Alt",
-			"Main",
-		]);
+		expect(tree.inventory.map((entry) => staticId(entry.value)).sort()).toEqual(
+			["Alt", "Main"],
+		);
 	});
 
 	it("keeps every branch of a ternary interpolated into a template", () => {

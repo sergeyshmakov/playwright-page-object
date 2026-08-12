@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { TestIdTree } from "../../analysis";
 import { buildCoverageReport } from "../../analysis/coverage/mapCoverage";
 import { buildPageObjectTree } from "../../analysis/page-objects/tree";
 import { buildTestIdTree } from "../../analysis/tsx/tree";
@@ -105,9 +106,10 @@ describe("builder result cache", () => {
 	it("misses after revalidate picks up an edit", () => {
 		const root = sampleRepo();
 		const ws = Workspace.acquire({ projectRoot: root });
-		const staticIds = (tree: {
-			inventory: Array<{ value: { value?: string } }>;
-		}) => tree.inventory.map((entry) => entry.value.value);
+		const staticIds = (tree: TestIdTree) =>
+			tree.inventory.map((entry) =>
+				entry.value.kind === "static" ? entry.value.value : undefined,
+			);
 		const before = buildTestIdTree(ws);
 		expect(staticIds(before)).toContain("Title");
 
