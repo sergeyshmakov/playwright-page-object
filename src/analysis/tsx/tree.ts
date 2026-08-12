@@ -18,6 +18,7 @@ import type {
 	UiNode,
 	UiUnresolvedReason,
 } from "../types";
+import { unwrapTransparent } from "../util/ast";
 import { Budget } from "../util/budget";
 import { keyFold, matchesAnyGlob, normalizeRelPath } from "../util/paths";
 import { lineAndColumnAt } from "../util/position";
@@ -1513,7 +1514,7 @@ class TreeBuilder {
 			// says. Written here and something else: the call is shadowed by a value
 			// the walk cannot follow, so it is unknown - and the caller's
 			// `local-render-function` marker already reports that honestly.
-			const inner = unwrapExpression(blockScoped);
+			const inner = unwrapTransparent(blockScoped);
 			return isInlineFunction(inner) && containsJsx(inner)
 				? { fn: inner, parameters: parameterNames(inner), nested: true }
 				: null;
@@ -1602,7 +1603,7 @@ class TreeBuilder {
 		for (const declaration of owner.sourceFile.getVariableDeclarations()) {
 			const initializer = declaration.getInitializer();
 			if (initializer && isInlineFunction(initializer)) {
-				index.set(declaration.getName(), unwrapExpression(initializer));
+				index.set(declaration.getName(), unwrapTransparent(initializer));
 			}
 		}
 		for (const declaration of owner.fn.getDescendantsOfKind(
@@ -1624,7 +1625,7 @@ class TreeBuilder {
 				continue;
 			}
 			if (initializer && isInlineFunction(initializer)) {
-				index.set(name, unwrapExpression(initializer));
+				index.set(name, unwrapTransparent(initializer));
 			} else {
 				// A local that is *not* a function written here still shadows the
 				// module-scope one of the same name — `const renderIcon =
@@ -2158,7 +2159,7 @@ class TreeBuilder {
 	 * {@link walkLocalVariable} enforces when it walks the thing.
 	 */
 	private propContentSource(node: Node, owner: ComponentDefinition): Node {
-		const inner = unwrapExpression(node);
+		const inner = unwrapTransparent(node);
 		if (!Node.isIdentifier(inner)) {
 			return node;
 		}
@@ -2559,26 +2560,6 @@ function withPlacement(
 	return nodes;
 }
 
-/**
- * Peels the wrappers the walk sees straight through: parentheses and every
- * spelling of a type assertion. Kept in one place because a predicate that
- * disagrees with `walk` about what an expression *is* decides the opposite
- * thing about it.
- */
-function unwrapExpression(node: Node): Node {
-	let current = node;
-	while (
-		Node.isParenthesizedExpression(current) ||
-		Node.isAsExpression(current) ||
-		Node.isNonNullExpression(current) ||
-		Node.isTypeAssertion(current) ||
-		Node.isSatisfiesExpression(current)
-	) {
-		current = current.getExpression();
-	}
-	return current;
-}
-
 /** A same-file function a call site names, plus the names its parameters bind. */
 interface RenderHelper {
 	fn: Node;
@@ -2784,7 +2765,7 @@ function rawText(node: Node, limit = 80): string {
  * runs at all.
  */
 function isInlineFunction(node: Node): boolean {
-	const inner = unwrapExpression(node);
+	const inner = unwrapTransparent(node);
 	return Node.isArrowFunction(inner) || Node.isFunctionExpression(inner);
 }
 

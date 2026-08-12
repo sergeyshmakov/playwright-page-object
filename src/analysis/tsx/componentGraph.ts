@@ -13,6 +13,7 @@ import type {
 	TestIdValue,
 	UiUnresolvedReason,
 } from "../types";
+import { unwrapTransparent, unwrapTransparentParent } from "../util/ast";
 import { hasDefaultKeyword, isDefaultExported } from "../util/exports";
 import { defKey } from "../util/paths";
 import { lineAndColumnAt } from "../util/position";
@@ -98,21 +99,6 @@ export type ComponentResolution =
  */
 const COMPONENT_WRAPPERS = new Set(["memo", "forwardRef"]);
 
-/** Parentheses and type assertions, which say nothing about what a node is. */
-function unwrapSyntax(node: Node): Node {
-	let current = node;
-	while (
-		Node.isParenthesizedExpression(current) ||
-		Node.isAsExpression(current) ||
-		Node.isNonNullExpression(current) ||
-		Node.isTypeAssertion(current) ||
-		Node.isSatisfiesExpression(current)
-	) {
-		current = current.getExpression();
-	}
-	return current;
-}
-
 /**
  * The function inside any stack of component wrappers.
  *
@@ -127,7 +113,7 @@ function unwrapSyntax(node: Node): Node {
  * parameter, so the props side needs nothing special.
  */
 function unwrapComponentWrapper(node: Node): Node {
-	let current = unwrapSyntax(node);
+	let current = unwrapTransparent(node);
 	// Terminates: every iteration descends into a strictly smaller subexpression.
 	while (Node.isCallExpression(current)) {
 		const callee = current.getExpression();
@@ -143,7 +129,7 @@ function unwrapComponentWrapper(node: Node): Node {
 		if (!first) {
 			return current;
 		}
-		current = unwrapSyntax(first);
+		current = unwrapTransparent(first);
 	}
 	return current;
 }
@@ -357,21 +343,11 @@ function forwardsSpread(fn: ComponentFunction, sources: string[]): boolean {
  * read every one of them as not exported at all.
  */
 function isDefaultExportExpression(node: Node): boolean {
-	let current: Node | undefined = node.getParent();
-	while (
-		current !== undefined &&
-		(Node.isParenthesizedExpression(current) ||
-			Node.isAsExpression(current) ||
-			Node.isNonNullExpression(current) ||
-			Node.isTypeAssertion(current) ||
-			Node.isSatisfiesExpression(current))
-	) {
-		current = current.getParent();
-	}
+	const clause = unwrapTransparentParent(node);
 	return (
-		current !== undefined &&
-		Node.isExportAssignment(current) &&
-		!current.isExportEquals()
+		clause !== undefined &&
+		Node.isExportAssignment(clause) &&
+		!clause.isExportEquals()
 	);
 }
 

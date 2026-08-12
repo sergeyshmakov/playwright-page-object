@@ -26,7 +26,17 @@ function fail(node: Node, reason: DynamicReason): EvalResult {
 	return { ok: false, reason, text: rawText(node) };
 }
 
-/** Strips `as T`, `satisfies T` and redundant parentheses. */
+/**
+ * Strips `as T`, `satisfies T`, `x!` and redundant parentheses.
+ *
+ * Deliberately *narrower* than {@link unwrapTransparent} in `util/ast.ts`,
+ * which is the general rule: this one omits `Node.isTypeAssertion`, so the
+ * angle-bracket `<T>x` spelling stops the walk here while the general peel
+ * sees through it. Whether that is right is an open question - the form is
+ * unparseable in `.tsx`, and this evaluator is the one caller that reads `.ts`
+ * page objects, where it is legal - so the divergence is recorded rather than
+ * silently inherited. The eight-hop cap is likewise local to this file.
+ */
 function unwrap(node: Node): Node {
 	let current = node;
 	for (let guard = 0; guard < 8; guard += 1) {
