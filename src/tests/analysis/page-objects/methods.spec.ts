@@ -236,3 +236,47 @@ describe("readMethods", () => {
 		);
 	});
 });
+
+describe("readMethods and TypeScript overloads", () => {
+	/**
+	 * Overloading and shadowing are different relations that happen to share a
+	 * name. One `seen` set conflated them: the first signature marked the name,
+	 * and every later one was dropped as though a subclass had hidden a base
+	 * member - so the tree offered one call shape out of N and an agent writing
+	 * against the others got no support for them.
+	 */
+	it("reports every overload signature", () => {
+		const methods = methodsOf(
+			[
+				"  find(name: string): number;",
+				"  find(id: number): number;",
+				"  find(x: string | number): number { return Number(x); }",
+			].join("\n"),
+		);
+		expect(methods.map((one) => one.name)).toEqual(["find", "find"]);
+		const signatures = methods.map((one) => one.signature).join(" | ");
+		expect(signatures).toContain("name: string");
+		expect(signatures).toContain("id: number");
+	});
+
+	it("leaves the implementation signature out", () => {
+		// TypeScript resolves calls against the overloads alone, so offering the
+		// implementation would be offering a call shape the compiler refuses.
+		const methods = methodsOf(
+			[
+				"  find(name: string): number;",
+				"  find(id: number): number;",
+				"  find(x: string | number): number { return Number(x); }",
+			].join("\n"),
+		);
+		expect(methods).toHaveLength(2);
+		expect(methods.map((one) => one.signature).join(" | ")).not.toContain(
+			"string | number",
+		);
+	});
+
+	it("still reports a plain method once", () => {
+		const methods = methodsOf("  find(name: string): number { return 1; }");
+		expect(methods).toHaveLength(1);
+	});
+});

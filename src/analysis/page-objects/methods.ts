@@ -115,17 +115,28 @@ export function readMethods(
 				continue;
 			}
 
-			const info = describe(member, name, mode, ctx);
-			if (!info) {
-				continue;
-			}
-			if (inherited) {
-				info.inherited = true;
-				if (declaredIn) {
-					info.declaredIn = declaredIn;
+			// An overloaded method reaches here once, as its implementation:
+			// `getMembers()` does not return the signature declarations at all.
+			// Describing that one member gave the tree `find(x: string | number)` —
+			// the shape TypeScript refuses to let anyone call — while the two
+			// shapes they can call went unmentioned. Each overload gets its own
+			// entry, and the implementation gets none.
+			const overloads = Node.isMethodDeclaration(member)
+				? member.getOverloads()
+				: [];
+			for (const source of overloads.length > 0 ? overloads : [member]) {
+				const info = describe(source, name, mode, ctx);
+				if (!info) {
+					continue;
 				}
+				if (inherited) {
+					info.inherited = true;
+					if (declaredIn) {
+						info.declaredIn = declaredIn;
+					}
+				}
+				out.push(info);
 			}
-			out.push(info);
 		}
 	};
 
