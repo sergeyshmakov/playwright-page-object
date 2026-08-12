@@ -374,3 +374,58 @@ describe("bindings between the call and the body", () => {
 		expect(ids(tree)).toContain("ModuleRow");
 	});
 });
+
+describe("bindings the shadowing walk used to spell past", () => {
+	it("does not attribute a destructured loop binding to a module helper", () => {
+		// `const { renderRow }` binds the name every bit as much as `const
+		// renderRow` does, and the walk tested only for an identifier.
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"function renderRow() {",
+				'  return <span data-testid="ModuleRow" />;',
+				"}",
+				"export function Page({ rows }: { rows: { renderRow: () => never }[] }) {",
+				"  for (const { renderRow } of rows) {",
+				'    return <div data-testid="Host">{renderRow()}</div>;',
+				"  }",
+				'  return <div data-testid="Empty" />;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).not.toContain("ModuleRow");
+	});
+
+	it("does not attribute a destructured block binding to a module helper", () => {
+		// The block-level walk had the same blind spot, which nobody reported.
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"function renderRow() {",
+				'  return <span data-testid="ModuleRow" />;',
+				"}",
+				"export function Page({ on, bag }: { on: boolean; bag: { renderRow: () => never } }) {",
+				"  if (on) {",
+				"    const { renderRow } = bag;",
+				'    return <div data-testid="Host">{renderRow()}</div>;',
+				"  }",
+				'  return <div data-testid="Empty" />;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).not.toContain("ModuleRow");
+	});
+
+	it("inlines a function-valued classic `for` initializer", () => {
+		// `for (let render = () => <b/>; …)` really does declare a helper, and
+		// returning the declaration rather than its initializer lost it.
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"export function Page() {",
+				'  for (let renderBadge = () => <span data-testid="Badge" />; ; ) {',
+				'    return <div data-testid="Host">{renderBadge()}</div>;',
+				"  }",
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toContain("Badge");
+	});
+});

@@ -2727,19 +2727,55 @@ function shadowsWholeBody(declaration: VariableDeclaration, fn: Node): boolean {
 }
 
 /**
+ * Whether a declaration's name node binds `name`, destructuring included.
+ *
+ * `const { render } = props` and `const [render] = pair` bind `render` every
+ * bit as much as `const render` does. Testing only for an identifier meant a
+ * destructured binding was invisible to the shadowing walk, so the call fell
+ * through to a module helper of the same name — the mis-attribution this whole
+ * lookup exists to prevent, reachable through a spelling instead.
+ */
+function bindsName(nameNode: Node, name: string): boolean {
+	if (Node.isIdentifier(nameNode)) {
+		return nameNode.getText() === name;
+	}
+	if (
+		Node.isObjectBindingPattern(nameNode) ||
+		Node.isArrayBindingPattern(nameNode)
+	) {
+		for (const element of nameNode.getElements()) {
+			if (
+				Node.isBindingElement(element) &&
+				bindsName(element.getNameNode(), name)
+			) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/**
  * A binding `scope` introduces on its own header rather than inside its block.
  *
  * `for (const render of rows)` and `catch (render)` both scope a name to the
  * statement, and neither is a `Block`, so a walk that only inspects blocks
- * looks straight past them. Returns the declaration itself: it is not a
- * function, which is precisely the answer — the call is shadowed by a value the
- * walk cannot follow, and reporting it as unknown beats attributing a module
- * helper's subtree to it.
+ * looks straight past them.
+ *
+ * Returns the initializer where there is one and the declaration otherwise —
+ * the same rule {@link blockScopedBinding} uses, and for the same reason. A
+ * `for (let render = () => <b/>; …)` really does declare a helper, while a
+ * `for…of` variable has no initializer and stays opaque, which is the right
+ * answer: the call is shadowed by a value the walk cannot follow, and unknown
+ * beats attributing a module helper's subtree to it.
  */
 function headerBinding(scope: Node, name: string): Node | null {
 	if (Node.isCatchClause(scope)) {
 		const declaration = scope.getVariableDeclaration();
-		return declaration?.getName() === name ? declaration : null;
+		if (declaration && bindsName(declaration.getNameNode(), name)) {
+			return declaration;
+		}
+		return null;
 	}
 	if (
 		!Node.isForStatement(scope) &&
@@ -2760,9 +2796,11 @@ function headerBinding(scope: Node, name: string): Node | null {
 		return null;
 	}
 	for (const declaration of initializer.getDeclarations()) {
-		const nameNode = declaration.getNameNode();
-		if (Node.isIdentifier(nameNode) && nameNode.getText() === name) {
-			return declaration;
+		if (bindsName(declaration.getNameNode(), name)) {
+			// A destructured binding lands here too, and its initializer is the
+			// object being destructured — not a function, so opaque, which is what
+			// following one element of a pattern would have to guess at anyway.
+			return declaration.getInitializer() ?? declaration;
 		}
 	}
 	return null;
@@ -2814,8 +2852,10 @@ function blockScopedBinding(from: Node, name: string, body: Node): Node | null {
 				continue;
 			}
 			for (const declaration of list.getDeclarations()) {
-				const nameNode = declaration.getNameNode();
-				if (Node.isIdentifier(nameNode) && nameNode.getText() === name) {
+				// Destructuring included: `const { render } = props` shadows the name
+				// exactly as `const render` does, and the identifier-only test used
+				// here had the same blind spot the statement headers did.
+				if (bindsName(declaration.getNameNode(), name)) {
 					return declaration.getInitializer() ?? declaration;
 				}
 			}
