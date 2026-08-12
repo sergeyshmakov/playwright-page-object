@@ -11,6 +11,14 @@ Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator
 
 ---
 
+## MCP server for AI coding agents
+
+The package includes a local, read-only MCP server that lets AI coding agents inspect your existing page objects and JSX or TSX test IDs before editing tests. Agents can follow typed locator chains, reuse selectors already in the repository, and check selector coverage without launching a browser or executing application code.
+
+It works with local stdio MCP clients including Claude Code, Cursor, VS Code, and Codex CLI. The server exposes five tools for discovering page objects, reading selector trees, finding test IDs, and auditing coverage.
+
+**[Explore the MCP server docs →](https://pom.shmakov.tools/mcp/)** · [Connect your MCP client →](https://pom.shmakov.tools/mcp/quick-start/)
+
 ## Before / after
 
 ```ts
@@ -140,15 +148,7 @@ The full documentation site covers every guide, the API reference, and the v1 �
 - [Reference](https://pom.shmakov.tools/reference/context-resolution/) — context resolution, migration v1 → v2, troubleshooting
 - [API](https://pom.shmakov.tools/api/decorators/) — decorators, `PageObject`, `RootPageObject`, `ListPageObject`, `createFixtures`
 
-## AI tooling
-
-**MCP server.** The package ships a local MCP server that gives AI coding agents static analysis of your page objects and rendered test ids: no grepping, no invented selectors. Works with any stdio MCP client (Claude Code, Cursor, VS Code, Codex CLI). For Claude Code:
-
-```bash
-claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
-```
-
-Five read-only tools: `list_page_objects`, `get_page_object_tree`, `get_testid_tree`, `map_coverage`, and `query_coverage` for paging a long coverage report. See [MCP Server](https://pom.shmakov.tools/mcp/) in the docs — [quick start](https://pom.shmakov.tools/mcp/quick-start/), [tool reference](https://pom.shmakov.tools/mcp/tools/), [configuration](https://pom.shmakov.tools/mcp/configuration/), [troubleshooting](https://pom.shmakov.tools/mcp/troubleshooting/).
+## More AI tooling
 
 This package also ships an [Agent Skills](https://agentskills.io/)-compatible skill so AI assistants load library-specific guidance on demand:
 
