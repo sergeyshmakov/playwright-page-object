@@ -3,7 +3,7 @@ import {
 	serveStdio,
 } from "@modelcontextprotocol/server/stdio";
 import type { LogLevel } from "./logger";
-import { logger, redirectConsoleToStderr, setLogLevel } from "./logger";
+import { logger, pushLogLevel, redirectConsoleToStderr } from "./logger";
 import type { McpServerOptions } from "./options";
 import { createMcpServer } from "./server";
 
@@ -20,7 +20,10 @@ export interface RunMcpServerOptions extends McpServerOptions {
  * CLI subcommand; exported so the server can also be mounted programmatically.
  */
 export function runMcpServer(options: RunMcpServerOptions): StdioServerHandle {
-	setLogLevel(options.logLevel ?? "error");
+	// Registered rather than assigned: the level is process-wide, so a second
+	// server must not silence the first, and closing one must not leave its
+	// level behind. See `pushLogLevel`.
+	const releaseLevel = pushLogLevel(options.logLevel ?? "error");
 	// Global, and the process may not be ours: this is exported, so a host
 	// application mounting the server has its own logging taken over for as long
 	// as the transport is up. Undone on close, or it stays taken over — and at
@@ -42,6 +45,7 @@ export function runMcpServer(options: RunMcpServerOptions): StdioServerHandle {
 				// In `finally`: a transport that failed to shut down cleanly is
 				// exactly when the caller most needs their own logging back.
 				restoreConsole();
+				releaseLevel();
 			}
 		},
 	};

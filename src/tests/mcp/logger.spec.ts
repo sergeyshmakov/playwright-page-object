@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { redirectConsoleToStderr, setLogLevel } from "../../mcp/logger";
+import {
+	logger,
+	pushLogLevel,
+	redirectConsoleToStderr,
+	setLogLevel,
+} from "../../mcp/logger";
 
 /**
  * Taking over `console` is the last line of defence against a transitive
@@ -117,5 +122,62 @@ describe("redirectConsoleToStderr", () => {
 		}
 		expect(chunks.join("")).toContain("hello");
 		expect(stdoutWrites, "stdout is the JSON-RPC channel").toBe(0);
+	});
+});
+
+describe("pushLogLevel", () => {
+	function emitted(body: () => void): string {
+		const chunks: string[] = [];
+		const original = process.stderr.write.bind(process.stderr);
+		(process.stderr as { write: unknown }).write = (chunk: string) => {
+			chunks.push(String(chunk));
+			return true;
+		};
+		try {
+			body();
+		} finally {
+			(process.stderr as { write: unknown }).write = original;
+		}
+		return chunks.join("");
+	}
+
+	it("does not let a second server silence the first", () => {
+		// One module-level variable, two servers. Plain assignment meant the
+		// second server's level replaced the first's for both, so mounting a
+		// `silent` server alongside a running one suppressed that one's errors.
+		const loud = pushLogLevel("debug");
+		const quiet = pushLogLevel("silent");
+		expect(emitted(() => logger.debug("still here"))).toContain("still here");
+		quiet();
+		loud();
+	});
+
+	it("restores the level when a server closes", () => {
+		const release = pushLogLevel("debug");
+		release();
+		expect(emitted(() => logger.debug("gone"))).toBe("");
+	});
+
+	it("keeps the loudest level while any server wants it", () => {
+		const first = pushLogLevel("debug");
+		const second = pushLogLevel("error");
+		second();
+		expect(emitted(() => logger.debug("first still wants this"))).toContain(
+			"first still wants this",
+		);
+		first();
+		expect(emitted(() => logger.debug("nobody wants this"))).toBe("");
+	});
+
+	it("is safe to release twice", () => {
+		const first = pushLogLevel("debug");
+		const second = pushLogLevel("debug");
+		second();
+		second();
+		expect(
+			emitted(() => logger.debug("one is still up")),
+			"a double release must not drop the other server's level",
+		).toContain("one is still up");
+		first();
 	});
 });

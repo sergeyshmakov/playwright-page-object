@@ -18,6 +18,49 @@ export function setLogLevel(level: LogLevel): void {
 	currentLevel = level;
 }
 
+/** Levels requested by servers currently running, in start order. */
+const requestedLevels: LogLevel[] = [];
+
+/**
+ * Registers a server's requested level and returns a function releasing it.
+ *
+ * One process can hold two servers, and the level is one module-level variable.
+ * Plain assignment meant the second server's level replaced the first's for
+ * both — so mounting a `silent` server alongside a running one suppressed that
+ * one's errors — and closing it restored nothing.
+ *
+ * While several are up the most verbose wins. That is the direction that cannot
+ * silently lose someone's output: a server gets at least what it asked for, and
+ * the failure mode is a `silent` server emitting to stderr rather than a
+ * running server's errors disappearing. The alternative needs a logger instance
+ * per server threaded through every call site, which is worth doing the day a
+ * caller wants two different levels honoured at once.
+ */
+export function pushLogLevel(level: LogLevel): () => void {
+	requestedLevels.push(level);
+	applyMostVerbose();
+	let released = false;
+	return () => {
+		if (released) {
+			return;
+		}
+		released = true;
+		const at = requestedLevels.indexOf(level);
+		if (at >= 0) {
+			requestedLevels.splice(at, 1);
+		}
+		applyMostVerbose();
+	};
+}
+
+function applyMostVerbose(): void {
+	currentLevel = requestedLevels.reduce<LogLevel>(
+		(loudest, level) =>
+			LEVEL_ORDER[level] > LEVEL_ORDER[loudest] ? level : loudest,
+		"error",
+	);
+}
+
 function write(level: Exclude<LogLevel, "silent">, message: string): void {
 	if (LEVEL_ORDER[currentLevel] < LEVEL_ORDER[level]) {
 		return;
