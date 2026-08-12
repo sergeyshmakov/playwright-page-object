@@ -1328,3 +1328,39 @@ describe("scopeMessage — who is claimed to have sources here", () => {
 		expect(message).not.toContain("first 2 by name");
 	});
 });
+
+describe("buildCoverageReport - a scoped page-object side and raw locators", () => {
+	/**
+	 * `poInclude` narrows whose selectors are being audited. It does not narrow
+	 * what counts as evidence that an id is used - and scoping the raw sweep to
+	 * the page-object file made `includeRawLocators` nearly inert on a scoped
+	 * call, because a page-object file rarely contains `page.getByTestId`. The
+	 * report then said an id was uncovered while a spec selected it by name.
+	 */
+	const files = {
+		"e2e/promo.spec.ts": [
+			'import { test } from "@playwright/test";',
+			'test("promo", async ({ page }) => {',
+			'  await page.getByTestId("Orphan").click();',
+			"});",
+		].join("\n"),
+	};
+
+	it("counts a raw locator in a spec file the scope excludes", () => {
+		const scoped = report(files, {
+			poInclude: ["e2e/HomePage.ts"],
+			includeRawLocators: true,
+		});
+		expect(
+			scoped.matched.some((one) => one.ui.id === "Orphan"),
+			"a spec selects it by name, so it is not uncovered",
+		).toBe(true);
+	});
+
+	it("still reports it uncovered when the sweep is off", () => {
+		const scoped = report(files, { poInclude: ["e2e/HomePage.ts"] });
+		expect(scoped.uncoveredTestIds.some((one) => one.id === "Orphan")).toBe(
+			true,
+		);
+	});
+});

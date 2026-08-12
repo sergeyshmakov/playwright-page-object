@@ -515,9 +515,13 @@ function computeCoverageReport(
 	const partition = partitionInventory(uiTree.inventory, assumeForwarded);
 	const usages = [
 		...collectSelectorUsages(discovery),
-		...(options.includeRawLocators
-			? sweepRawLocators(ws, options.poInclude)
-			: []),
+		// Deliberately unscoped, even when `poInclude` is set. `poInclude` narrows
+		// *whose selectors are being audited*; it does not narrow what counts as
+		// evidence that an id is used. Scoping the sweep to the page-object file
+		// made `includeRawLocators` nearly inert on a scoped call - a page-object
+		// file rarely contains `page.getByTestId` - and reported an id as
+		// uncovered while a spec three directories away selected it by name.
+		...(options.includeRawLocators ? sweepRawLocators(ws, undefined) : []),
 	];
 
 	const matched: CoverageReport["matched"] = [];
@@ -1032,13 +1036,6 @@ function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 			info(
 				"raw-locators-disabled",
 				"Direct locator calls (getByTestId, getItemByTestId, filterByItemTestId, filterByHasTestId) were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them.",
-			),
-		);
-	} else if (inputs.poInclude && inputs.poInclude.length > 0) {
-		out.push(
-			info(
-				"raw-locators-disabled",
-				`The direct-locator sweep was limited to the same file scope as the page-object side (${inputs.poInclude.join(", ")}), so calls written anywhere else were not counted.`,
 			),
 		);
 	}
