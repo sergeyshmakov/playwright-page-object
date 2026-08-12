@@ -83,7 +83,22 @@ export interface ResolveOptions {
 	maxHops?: number;
 }
 
-const DEFAULT_HOPS = 4;
+/**
+ * Re-export hops one lookup may follow.
+ *
+ * Was 4, and it was doing two jobs: bounding cost *and* stopping a cyclic
+ * re-export (`index.ts` and `a.ts` re-exporting each other) from recursing
+ * forever. The second job is why it could not simply be raised - and why it
+ * was too low for a design system whose public name reaches its declaration
+ * through five nested index files.
+ *
+ * `visitedExports` now decides termination, so this is a budget again. What
+ * made the old value expensive to be wrong about: exhaustion does not produce
+ * a "too deep" answer, it produces `identifier-unresolved`, and the hint for
+ * that code tells the caller to root a tree at the component - which runs the
+ * same lookup with the same budget and fails the same way.
+ */
+const DEFAULT_HOPS = 64;
 
 const EXTENSION_CANDIDATES = [
 	".ts",
@@ -936,6 +951,7 @@ function resolveDefaultExport(
 	project: Project,
 	sourceFile: SourceFile,
 	hops: number,
+	visited: Set<string>,
 ): ResolvedRef | undefined {
 	for (const declaration of sourceFile.getClasses()) {
 		if (hasDefaultKeyword(declaration)) {
@@ -1000,6 +1016,7 @@ function resolveDefaultExport(
 				target,
 				specifier.getName(),
 				hops - 1,
+				visited,
 			);
 			if (resolved?.resolved) {
 				return resolved;
@@ -1039,18 +1056,30 @@ function asResolved(
 	};
 }
 
-/** Looks up `exportName` in `sourceFile`, following re-export hops. */
+/**
+ * Looks up `exportName` in `sourceFile`, following re-export hops.
+ *
+ * `visited` carries the `(file, name)` pairs already on the current lookup, so
+ * a cyclic re-export terminates on the cycle rather than on the hop budget.
+ * Callers never pass it; it exists so the budget can be a budget.
+ */
 export function resolveExportedName(
 	project: Project,
 	sourceFile: SourceFile,
 	exportName: string,
 	hops = DEFAULT_HOPS,
+	visited: Set<string> = new Set(),
 ): ResolvedRef | undefined {
 	if (hops < 0) {
 		return undefined;
 	}
+	const visitKey = `${sourceFile.getFilePath()}\u0000${exportName}`;
+	if (visited.has(visitKey)) {
+		return undefined;
+	}
+	visited.add(visitKey);
 	if (exportName === "default") {
-		return resolveDefaultExport(project, sourceFile, hops);
+		return resolveDefaultExport(project, sourceFile, hops, visited);
 	}
 
 	const local = localDeclaration(sourceFile, exportName);
@@ -1104,6 +1133,7 @@ export function resolveExportedName(
 					target,
 					named.getName(),
 					hops - 1,
+					visited,
 				);
 				if (resolved) {
 					return resolved;
@@ -1121,6 +1151,7 @@ export function resolveExportedName(
 					target,
 					exportName,
 					hops - 1,
+					visited,
 				);
 				if (resolved) {
 					return resolved;

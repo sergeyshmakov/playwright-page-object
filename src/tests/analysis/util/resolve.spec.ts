@@ -716,3 +716,54 @@ describe("isInNodeModules", () => {
 		expect(isInNodeModules("/repo/src/index.ts")).toBe(false);
 	});
 });
+
+describe("how far a re-export chain may go", () => {
+	/**
+	 * The hop count used to be doing two jobs: bounding cost, and stopping a
+	 * cyclic re-export from recursing forever. That is why it sat at 4 - low
+	 * enough that a design system whose public name reaches its declaration
+	 * through six index files never resolved.
+	 *
+	 * And exhaustion does not say "too deep". It returns `identifier-unresolved`,
+	 * whose hint tells the caller to root a tree at the component - which runs
+	 * the same lookup with the same budget and fails the same way.
+	 */
+	it("resolves a name through eight nested index files", () => {
+		const files: Record<string, string> = {
+			"src/deep/Button.tsx": "export class Button {}\n",
+		};
+		let previous = "deep/Button";
+		for (let level = 7; level >= 0; level -= 1) {
+			const here = `src/i${level}.ts`;
+			files[here] = `export * from "./${previous}";\n`;
+			previous = `i${level}`;
+		}
+		files["src/App.tsx"] = [
+			'import { Button } from "./i0";',
+			"export const used = Button;",
+			"",
+		].join("\n");
+
+		const ws = makeWorkspace(files);
+		const entry = ws.project.getSourceFileOrThrow(memoryPath("src/App.tsx"));
+		const resolution = resolveIdentifier(ws.project, entry, "Button");
+		expect(resolution.resolved).toBe(true);
+	});
+
+	it("terminates on two modules re-exporting each other", () => {
+		// `visited` is the termination argument now, so this must not depend on
+		// the budget running out - and must not hang if the budget is raised.
+		const ws = makeWorkspace({
+			"src/a.ts": 'export * from "./b";\n',
+			"src/b.ts": 'export * from "./a";\n',
+			"src/App.tsx": [
+				'import { Missing } from "./a";',
+				"export const used = Missing;",
+				"",
+			].join("\n"),
+		});
+		const entry = ws.project.getSourceFileOrThrow(memoryPath("src/App.tsx"));
+		const resolution = resolveIdentifier(ws.project, entry, "Missing");
+		expect(resolution.resolved).toBe(false);
+	});
+});
