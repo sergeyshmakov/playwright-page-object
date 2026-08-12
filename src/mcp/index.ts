@@ -21,12 +21,28 @@ export interface RunMcpServerOptions extends McpServerOptions {
  */
 export function runMcpServer(options: RunMcpServerOptions): StdioServerHandle {
 	setLogLevel(options.logLevel ?? "error");
-	redirectConsoleToStderr();
+	// Global, and the process may not be ours: this is exported, so a host
+	// application mounting the server has its own logging taken over for as long
+	// as the transport is up. Undone on close, or it stays taken over — and at
+	// the default `error` level a redirected `console.log` is not moved to
+	// stderr, it is dropped.
+	const restoreConsole = redirectConsoleToStderr();
 
 	const handle = serveStdio(() => createMcpServer(options), {
 		onerror: (error) => logger.error(error.message),
 	});
 
 	logger.info(`serving MCP over stdio (root: ${options.projectRoot})`);
-	return handle;
+	return {
+		...handle,
+		close: async () => {
+			try {
+				await handle.close();
+			} finally {
+				// In `finally`: a transport that failed to shut down cleanly is
+				// exactly when the caller most needs their own logging back.
+				restoreConsole();
+			}
+		},
+	};
 }
