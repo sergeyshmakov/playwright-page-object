@@ -38,6 +38,15 @@ export interface TreeOptions {
 const DEFAULT_MAX_DEPTH = 8;
 const DEFAULT_MAX_NODES = 300;
 /** A candidate list is for choosing from, not for enumerating a repository. */
+/**
+ * Candidate keys carried on a not-found error, where the *message* does not
+ * already state the total.
+ *
+ * The two sites that keep it both say `${n} classes are named …` in the
+ * message, so the number survives the trim. The third did not, and slicing to
+ * exactly `MAX_ERROR_LIST` also made `fail()`'s own `moreCandidates` count
+ * unreachable - a list of ten with nothing saying fifteen more existed.
+ */
 const MAX_CANDIDATES = 10;
 const MAX_FILE_SUGGESTIONS = 8;
 
@@ -98,11 +107,11 @@ function resolveTarget(
 			throw new AnalysisTargetError(
 				"file_not_found",
 				`No class "${name}" in "${file}".`,
-				{
-					candidates: sameName
-						.map((candidate) => candidate.key)
-						.slice(0, MAX_CANDIDATES),
-				},
+				// Not sliced here. `fail()` trims to its own ceiling and reports
+				// `moreCandidates`; pre-trimming to the same number made that count
+				// unreachable, so this was the one candidate list that said nothing
+				// about what it dropped. The other two carry the total in the message.
+				{ candidates: sameName.map((candidate) => candidate.key) },
 			);
 		}
 		throw new AnalysisTargetError(

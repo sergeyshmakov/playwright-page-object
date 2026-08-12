@@ -814,9 +814,13 @@ export interface UnknownSelectorEvidence {
 	raw?: string;
 	/**
 	 * Ids the selector would also have matched, outranked by the evidence above.
-	 * Nothing is silently dropped: the weaker match is reported, not deleted.
+	 * The weaker match is reported rather than deleted - but the list itself is
+	 * trimmed, so read {@link alsoMatchesRenderedTotal} before treating its
+	 * length as the count.
 	 */
 	alsoMatchesRendered?: string[];
+	/** How many there were, when more matched than the list carries. */
+	alsoMatchesRenderedTotal?: number;
 }
 
 /** The six lists a {@link CoverageReport} ships, as addressable names. */

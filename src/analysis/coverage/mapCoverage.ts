@@ -643,6 +643,15 @@ function computeCoverageReport(
 			}
 			if (classification.outranked.length > 0) {
 				evidence.alsoMatchesRendered = labelsOf(classification.outranked);
+				// The list is trimmed to `MAX_EVIDENCE_IDS`, and its own type doc used
+				// to promise nothing was dropped. A `@ListSelector` prefix over forty
+				// rendered ids reported five and said so nowhere.
+				const distinct = new Set(
+					classification.outranked.map((match) => labelOf(match.ui)),
+				).size;
+				if (distinct > evidence.alsoMatchesRendered.length) {
+					evidence.alsoMatchesRenderedTotal = distinct;
+				}
 				for (const match of classification.outranked) {
 					const credited = speculativeCredit.get(match.ui);
 					if (credited) {
