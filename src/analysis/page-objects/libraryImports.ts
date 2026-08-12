@@ -1,8 +1,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Decorator, Project, SourceFile } from "ts-morph";
+import type {
+	Decorator,
+	ImportDeclaration,
+	Project,
+	SourceFile,
+} from "ts-morph";
 import type { Diagnostic } from "../types";
-import { isRelativeSpecifier, type ResolveOptions } from "../util/resolve";
+import {
+	isRelativeSpecifier,
+	type ResolveOptions,
+	resolveRelativeModule,
+} from "../util/resolve";
 import type { Workspace } from "../workspace";
 
 export const LIBRARY_PACKAGE = "playwright-page-object";
@@ -127,13 +136,166 @@ export function createAnalysisContext(
 	};
 }
 
-function isLibrarySpecifier(specifier: string, ctx: AnalysisContext): boolean {
+/** The package itself, by name. Says nothing about barrels or the repo's own sources. */
+function isDirectLibrarySpecifier(
+	specifier: string,
+	ctx: AnalysisContext,
+): boolean {
 	for (const module of ctx.libraryModules) {
 		if (specifier === module || specifier.startsWith(`${module}/`)) {
 			return true;
 		}
 	}
-	return ctx.acceptRelative && isRelativeSpecifier(specifier);
+	return false;
+}
+
+function isLibrarySpecifier(specifier: string, ctx: AnalysisContext): boolean {
+	return (
+		isDirectLibrarySpecifier(specifier, ctx) ||
+		(ctx.acceptRelative && isRelativeSpecifier(specifier))
+	);
+}
+
+/**
+ * How many local re-export hops to follow looking for the library.
+ *
+ * Barrels nest — `./testing` re-exports `./testing/pom`, which re-exports the
+ * package — but not deeply, and each hop is a module resolution.
+ */
+const MAX_BARREL_HOPS = 5;
+
+/**
+ * The canonical library export a local barrel publishes under `exported`.
+ *
+ * Re-exporting the library through one project module — `export { Selector }
+ * from "playwright-page-object"` in `src/testing/pom.ts`, imported everywhere
+ * as `from "../testing/pom"` — is a normal convention, and it used to defeat
+ * discovery completely: the specifier is relative, so no name was recognised,
+ * the decorator map came back empty, and every class in the repository
+ * disappeared from `list_page_objects`, the trees and coverage at once.
+ *
+ * Only `export ... from` and `export *` are followed, plus the two-step
+ * `import { X } from "the-library"; export { X };`. A barrel that renames on
+ * the way out — `export { Selector as PomSelector }` — is still missed, because
+ * finding it would mean resolving every relative import in the repository
+ * rather than only those already naming a canonical export.
+ */
+function canonicalThroughBarrel(
+	file: SourceFile,
+	exported: string,
+	ctx: AnalysisContext,
+	seen: Set<string>,
+): string | undefined {
+	if (seen.size >= MAX_BARREL_HOPS || seen.has(file.getFilePath())) {
+		return undefined;
+	}
+	seen.add(file.getFilePath());
+
+	/** One hop: the library ends the walk, a relative module continues it. */
+	const through = (specifier: string, inward: string): string | undefined => {
+		if (isDirectLibrarySpecifier(specifier, ctx)) {
+			return CANONICAL_EXPORTS.has(inward) ? inward : undefined;
+		}
+		const next = resolveRelativeModule(ctx.project, file, specifier);
+		return next ? canonicalThroughBarrel(next, inward, ctx, seen) : undefined;
+	};
+
+	for (const declaration of file.getExportDeclarations()) {
+		if (declaration.isTypeOnly()) {
+			continue;
+		}
+		const specifier = declaration.getModuleSpecifierValue();
+		const named = declaration.getNamedExports();
+		if (named.length === 0) {
+			// `export * from "..."`: the name passes through unchanged.
+			const found = specifier ? through(specifier, exported) : undefined;
+			if (found) {
+				return found;
+			}
+			continue;
+		}
+		for (const one of named) {
+			if (one.isTypeOnly()) {
+				continue;
+			}
+			const outward = (one.getAliasNode() ?? one.getNameNode()).getText();
+			if (outward !== exported) {
+				continue;
+			}
+			const inward = one.getName();
+			// `export { X } from "..."`, or a bare `export { X }` re-publishing
+			// something this file imported.
+			const hop = specifier ?? importedFrom(file, inward);
+			const found = hop ? through(hop, inward) : undefined;
+			if (found) {
+				return found;
+			}
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Adds any canonical names a relative import turns out to have come from the
+ * library, following {@link canonicalThroughBarrel}.
+ *
+ * The `CANONICAL_EXPORTS` test on the *imported* name is what keeps this cheap:
+ * a repository's ordinary relative imports are dismissed without resolving
+ * anything, and only a name that could be ours pays for a module load.
+ */
+function collectThroughBarrel(
+	sourceFile: SourceFile,
+	declaration: ImportDeclaration,
+	ctx: AnalysisContext,
+	aliases: Map<string, string>,
+): void {
+	const wanted = declaration
+		.getNamedImports()
+		.filter((named) => !named.isTypeOnly())
+		.filter((named) => CANONICAL_EXPORTS.has(named.getName()));
+	if (wanted.length === 0) {
+		return;
+	}
+	const barrel = resolveRelativeModule(
+		ctx.project,
+		sourceFile,
+		declaration.getModuleSpecifierValue(),
+	);
+	if (!barrel) {
+		return;
+	}
+	for (const named of wanted) {
+		const canonical = canonicalThroughBarrel(
+			barrel,
+			named.getName(),
+			ctx,
+			new Set(),
+		);
+		if (canonical === undefined) {
+			continue;
+		}
+		const alias = named.getAliasNode();
+		aliases.set(alias ? alias.getText() : named.getName(), canonical);
+	}
+}
+
+/** The module `local` was imported from in `file`, for a bare `export { local }`. */
+function importedFrom(file: SourceFile, local: string): string | undefined {
+	for (const declaration of file.getImportDeclarations()) {
+		if (declaration.isTypeOnly()) {
+			continue;
+		}
+		for (const named of declaration.getNamedImports()) {
+			if (named.isTypeOnly()) {
+				continue;
+			}
+			const bound = (named.getAliasNode() ?? named.getNameNode()).getText();
+			if (bound === local) {
+				return declaration.getModuleSpecifierValue();
+			}
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -152,6 +314,13 @@ export function collectLibraryImports(
 	for (const declaration of sourceFile.getImportDeclarations()) {
 		const specifier = declaration.getModuleSpecifierValue();
 		if (!isLibrarySpecifier(specifier, ctx)) {
+			// Not the package by name — but it may be a project barrel that
+			// re-exports it. Only worth resolving when a name being imported could
+			// be one of ours; every other relative import in the repository is
+			// dismissed on a set lookup.
+			if (isRelativeSpecifier(specifier) && !declaration.isTypeOnly()) {
+				collectThroughBarrel(sourceFile, declaration, ctx, aliases);
+			}
 			continue;
 		}
 		// `import type { Selector }` is erased before runtime: it can never be a

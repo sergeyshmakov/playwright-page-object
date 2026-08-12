@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { Project, ts } from "ts-morph";
 import { describe, expect, it } from "vitest";
+import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import {
 	CANONICAL_EXPORTS,
 	FIXED_ARITY_DECORATORS,
@@ -9,6 +10,7 @@ import {
 	ROOT_DECORATORS,
 } from "../../../analysis/page-objects/libraryImports";
 import { REPO_ROOT } from "../helpers/example";
+import { makeWorkspace } from "../helpers/inMemory";
 
 /**
  * The analyser's mirror of the library's public API, held to the real thing.
@@ -101,5 +103,103 @@ describe("the analyser's mirror of the library API", () => {
 				true,
 			);
 		}
+	});
+});
+
+/**
+ * Re-exporting the library through one project module is a normal convention:
+ * `src/testing/pom.ts` does `export { Selector } from "playwright-page-object"`
+ * and every page object imports from there. The specifier is relative, so none
+ * of the names were recognised, the decorator map came back empty, and the
+ * whole repository disappeared from `list_page_objects`, the trees and the
+ * coverage denominator at once — with no diagnostic saying why.
+ */
+describe("the library reached through a project barrel", () => {
+	it("finds a page object importing from a re-exporting barrel", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/pom.ts": [
+					'export { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+				].join("\n"),
+				"e2e/HomePage.ts": [
+					'import { RootPageObject, RootSelector, Selector } from "./pom";',
+					'@RootSelector("Root")',
+					"export class HomePage extends RootPageObject {",
+					'  @Selector("Title")',
+					"  accessor Title!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		const home = discovery.pageObjects.find(
+			(one) => one.className === "HomePage",
+		);
+		expect(home).toBeDefined();
+		expect(home?.counts.members).toBe(1);
+	});
+
+	it("follows a nested barrel and an outward alias on the import", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/inner.ts": 'export * from "playwright-page-object";',
+				"e2e/pom.ts": 'export * from "./inner";',
+				"e2e/HomePage.ts": [
+					'import { RootPageObject, RootSelector, Selector as Sel } from "./pom";',
+					'@RootSelector("Root")',
+					"export class HomePage extends RootPageObject {",
+					'  @Sel("Title")',
+					"  accessor Title!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage")?.counts
+				.members,
+		).toBe(1);
+	});
+
+	it("follows the two-step import-then-export form", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/pom.ts": [
+					'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+					"export { RootPageObject, RootSelector, Selector };",
+				].join("\n"),
+				"e2e/HomePage.ts": [
+					'import { RootPageObject, RootSelector, Selector } from "./pom";',
+					'@RootSelector("Root")',
+					"export class HomePage extends RootPageObject {",
+					'  @Selector("Title")',
+					"  accessor Title!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage")?.counts
+				.members,
+		).toBe(1);
+	});
+
+	it("still ignores a relative import that reaches no library", () => {
+		// The cheap name test admits `Selector` for resolution; the walk has to be
+		// what rejects it, or every project type named `Selector` becomes ours.
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/pom.ts":
+					"export const Selector = 1;\nexport class RootPageObject {}",
+				"e2e/HomePage.ts": [
+					'import { RootPageObject, Selector } from "./pom";',
+					"export class HomePage extends RootPageObject {",
+					'  @Selector("Title")',
+					"  accessor Title!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage"),
+		).toBeUndefined();
 	});
 });
