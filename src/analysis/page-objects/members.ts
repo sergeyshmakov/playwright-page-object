@@ -41,6 +41,16 @@ export interface ClassRef {
 	className: string | null;
 	declaration: ClassDeclaration | null;
 	external: boolean;
+	/**
+	 * `true` when the name resolved to something constructable that is *not* a
+	 * class - a function, or a variable holding one.
+	 *
+	 * Distinct from `declaration: null` with this unset, which means the walk
+	 * lost the trail. That difference decides whether a `new X()` member gets
+	 * the benefit of the doubt: an unfollowed chain might extend `PageObject`,
+	 * while a resolved function provably does not.
+	 */
+	resolvedNonClass?: true;
 }
 
 /** Turns a resolution into a def key, without ever reading `node_modules`. */
@@ -61,6 +71,13 @@ export function refFromResolution(
 		const declaration = Node.isClassDeclaration(resolution.declaration)
 			? resolution.declaration
 			: null;
+		// A class *expression* - `const Ctrl = class extends PageObject {}`, which
+		// `hostKind` treats as a page object - is neither. It keeps the benefit of
+		// the doubt below rather than being called a locator, because widening
+		// `declaration` to `ClassLike` here would have to widen the whole
+		// discovery pipeline with it. Known gap, deliberately not this change.
+		const constructableNonClass =
+			!declaration && !Node.isClassExpression(resolution.declaration);
 		const name = declaration?.getName() ?? resolution.name;
 		const file = ctx.ws.rel(resolution.sourceFile.getFilePath());
 		return {
@@ -68,6 +85,10 @@ export function refFromResolution(
 			className: name,
 			declaration,
 			external: false,
+			// Resolved, but not to a class at all: a constructable function, or a
+			// variable holding one. Reachable in JavaScript and in TypeScript with
+			// `noImplicitAny: false`.
+			...(constructableNonClass ? { resolvedNonClass: true as const } : {}),
 		};
 	}
 	if (resolution.external) {
@@ -300,11 +321,21 @@ export function inferResult(
 				warnings,
 			};
 		}
-		// A class we resolved and that extends nothing from the library: the
-		// runtime hands back the raw locator, so that is what this member is.
+		// Something we resolved that provably has none of the library's API: the
+		// runtime's `getSelector` clones a PageObject instance and lets everything
+		// else fall through as the raw Locator, so that is what this member is.
+		// Calling it a page object makes `apiHints` promise `.$` and the waits on
+		// a value that has neither.
+		//
+		// Two ways to be sure. A class whose heritage reaches no library base, and
+		// a resolved non-class - `new Widget()` where `Widget` is a function -
+		// which cannot extend anything at all. The second used to slip through
+		// because a non-class resolution carries no `declaration` to test, and an
+		// absent declaration read as "the walk lost the trail", which is the one
+		// case that keeps the benefit of the doubt.
 		if (
-			listRef.declaration &&
-			provablyNotPageObject(listRef.declaration, ctx)
+			listRef.resolvedNonClass ||
+			(listRef.declaration && provablyNotPageObject(listRef.declaration, ctx))
 		) {
 			return { result: { kind: "locator" }, edges, warnings };
 		}

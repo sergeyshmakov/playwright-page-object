@@ -298,3 +298,67 @@ describe("members typed wrongly", () => {
 		}
 	});
 });
+
+describe("constructables that are not classes", () => {
+	function memberKind(
+		files: Record<string, string>,
+		member: string,
+	): string | undefined {
+		const tree = buildPageObjectTree(makeWorkspace(files), "HomePage");
+		return tree.defs[tree.root]?.members.find((one) => one.name === member)
+			?.result.kind;
+	}
+
+	/**
+	 * The earlier fix covered a plain *class*: heritage reaches no library base,
+	 * so the member is a locator. A constructable *function* never reached that
+	 * guard - `refFromResolution` keeps `declaration` only for a class, and an
+	 * absent declaration reads as "the walk lost the trail", which is the one
+	 * case that keeps the benefit of the doubt. So `new Widget()` came back as a
+	 * page object and `apiHints` promised `.$` and the waits on a raw Locator.
+	 */
+	it("reports `new Widget()` on a function as a locator", () => {
+		expect(
+			memberKind(
+				{
+					"e2e/Widget.ts": [
+						"export function Widget(this: never) {",
+						"  return undefined as never;",
+						"}",
+					].join("\n"),
+					"e2e/HomePage.ts": [
+						libImport("RootPageObject", "RootSelector", "Selector"),
+						'import { Widget } from "./Widget";',
+						"@RootSelector()",
+						"export class HomePage extends RootPageObject {",
+						'  @Selector("Thing")',
+						"  accessor Thing = new Widget();",
+						"}",
+					].join("\n"),
+				},
+				"Thing",
+			),
+		).toBe("locator");
+	});
+
+	it("still gives an unresolved name the benefit of the doubt", () => {
+		// A chain the walk could not follow is a gap in the analysis, not evidence
+		// about anyone's code - it might well extend `PageObject`.
+		expect(
+			memberKind(
+				{
+					"e2e/HomePage.ts": [
+						libImport("RootPageObject", "RootSelector", "Selector"),
+						'import { Widget } from "somewhere-unresolvable";',
+						"@RootSelector()",
+						"export class HomePage extends RootPageObject {",
+						'  @Selector("Thing")',
+						"  accessor Thing = new Widget();",
+						"}",
+					].join("\n"),
+				},
+				"Thing",
+			),
+		).not.toBe("locator");
+	});
+});
