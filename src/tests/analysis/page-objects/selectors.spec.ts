@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { canonicalDecoratorName } from "../../../analysis/page-objects/libraryImports";
+import {
+	canonicalDecoratorName,
+	MEMBER_DECORATORS,
+	ROOT_DECORATORS,
+} from "../../../analysis/page-objects/libraryImports";
 import {
 	readPattern,
 	readSelector,
@@ -7,20 +11,16 @@ import {
 import { isDynamicValue } from "../../../analysis/util/literal";
 import { classFixture, libImport } from "../helpers/inMemory";
 
-const ALL_DECORATORS = [
-	"Selector",
-	"SelectorBy",
-	"SelectorByAltText",
-	"SelectorByLabel",
-	"SelectorByPlaceholder",
-	"SelectorByRole",
-	"SelectorByText",
-	"SelectorByTitle",
-	"ListSelector",
-	"RootSelector",
-	"ListRootSelector",
-	"RootSelectorByRole",
-];
+/**
+ * Every decorator the analyser knows, read from the analyser rather than
+ * re-typed here.
+ *
+ * A third hand-copy of this list meant the decorator spec could not notice a
+ * decorator the library gained - the one thing it is best placed to catch. The
+ * fixtures import all of them; naming one the analyser does not know would
+ * simply not be a decorator, so there is nothing to lose by importing the lot.
+ */
+const ALL_DECORATORS = [...ROOT_DECORATORS, ...MEMBER_DECORATORS];
 
 function readMemberSelector(decoratorSource: string, alias?: string) {
 	const code = [

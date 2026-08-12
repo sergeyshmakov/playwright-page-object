@@ -51,23 +51,17 @@ export const CANONICAL_EXPORTS = new Set<string>([
  * `Selector(id?, factory?)`, `SelectorByText(text, factory?)` and
  * `ListSelector(mask, factory?)` are declared with fixed arity, so the runtime
  * never applies the `typeof lastArg === "function"` test to them.
+ *
+ * There is deliberately no set for the variadic half. Every other member
+ * decorator forwards `...args` and picks the factory off the end with that
+ * runtime test, and `decoratorArgs.ts` reads it as the fall-through case - so a
+ * list of them would have to be edited to change nothing, which is worse than
+ * having none.
  */
 export const FIXED_ARITY_DECORATORS = new Set([
 	"Selector",
 	"SelectorByText",
 	"ListSelector",
-]);
-
-/**
- * Variadic decorators forward `...args` to the matching `getBy*` call and pick
- * the factory off the end with a runtime `typeof` test (`selectors.ts:128-131`).
- */
-export const VARIADIC_DECORATORS = new Set([
-	"SelectorByRole",
-	"SelectorByLabel",
-	"SelectorByPlaceholder",
-	"SelectorByAltText",
-	"SelectorByTitle",
 ]);
 
 export interface LibraryImports {
