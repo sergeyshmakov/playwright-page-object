@@ -34,6 +34,23 @@ describe("evaluateStatic", () => {
 		expect(evaluate("`plain`")).toEqual({ ok: true, value: "plain" });
 	});
 
+	it("sees through every transparent wrapper, including `<T>x`", () => {
+		// The narrowing this closes. `evaluateStatic` is the one reader that runs
+		// over `.ts` page objects, where the angle-bracket assertion is legal - it
+		// is unparseable in the `.tsx` the other peels read - so it was the single
+		// caller that could meet the form, and the single one that stopped at it.
+		// `@Selector(<string>"Hello")` reported a plainly static id as dynamic.
+		for (const code of [
+			'<string>"Hello"',
+			'"Hello" as string',
+			'("Hello")',
+			'"Hello" satisfies string',
+			'("Hello" as string)!',
+		]) {
+			expect(evaluate(code), code).toEqual({ ok: true, value: "Hello" });
+		}
+	});
+
 	it("reads numerics including a leading sign", () => {
 		expect(evaluate("42")).toEqual({ ok: true, value: 42 });
 		expect(evaluate("-1")).toEqual({ ok: true, value: -1 });

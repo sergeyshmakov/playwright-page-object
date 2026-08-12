@@ -6,6 +6,7 @@ import type {
 	RegexValue,
 	StaticValue,
 } from "../types";
+import { unwrapTransparent } from "./ast";
 
 export type EvalResult =
 	| { ok: true; value: StaticValue }
@@ -27,34 +28,6 @@ function fail(node: Node, reason: DynamicReason): EvalResult {
 }
 
 /**
- * Strips `as T`, `satisfies T`, `x!` and redundant parentheses.
- *
- * Deliberately *narrower* than {@link unwrapTransparent} in `util/ast.ts`,
- * which is the general rule: this one omits `Node.isTypeAssertion`, so the
- * angle-bracket `<T>x` spelling stops the walk here while the general peel
- * sees through it. Whether that is right is an open question - the form is
- * unparseable in `.tsx`, and this evaluator is the one caller that reads `.ts`
- * page objects, where it is legal - so the divergence is recorded rather than
- * silently inherited. The eight-hop cap is likewise local to this file.
- */
-function unwrap(node: Node): Node {
-	let current = node;
-	for (let guard = 0; guard < 8; guard += 1) {
-		if (
-			Node.isAsExpression(current) ||
-			Node.isSatisfiesExpression(current) ||
-			Node.isParenthesizedExpression(current) ||
-			Node.isNonNullExpression(current)
-		) {
-			current = current.getExpression();
-			continue;
-		}
-		return current;
-	}
-	return current;
-}
-
-/**
  * Evaluates a syntax node to a JSON value without executing anything.
  *
  * A failure at any depth fails the whole expression — half of a
@@ -62,7 +35,7 @@ function unwrap(node: Node): Node {
  * `dynamic` marker.
  */
 export function evaluateStatic(node: Node): EvalResult {
-	const target = unwrap(node);
+	const target = unwrapTransparent(node);
 
 	if (Node.isStringLiteral(target)) {
 		return { ok: true, value: target.getLiteralValue() };
@@ -90,7 +63,7 @@ export function evaluateStatic(node: Node): EvalResult {
 	}
 	if (Node.isPrefixUnaryExpression(target)) {
 		const operator = target.getOperatorToken();
-		const operand = unwrap(target.getOperand());
+		const operand = unwrapTransparent(target.getOperand());
 		if (
 			Node.isNumericLiteral(operand) &&
 			(operator === SyntaxKind.MinusToken || operator === SyntaxKind.PlusToken)
