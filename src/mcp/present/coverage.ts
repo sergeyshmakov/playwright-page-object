@@ -299,7 +299,11 @@ export function coverageShrinkHint(
 		// advice above would send them to re-send the call they just sent — the
 		// same loop the one-bucket case below was written to end, one step
 		// further in.
-		return `This response is summary and scope alone, so neither \`limit\` nor \`buckets\` can make it smaller - the scope block itself is over the cap. Narrow what the server scans (--src-dir) or analyse one package at a time.${handle}`;
+		// No handle clause here, unlike every other branch. `query_coverage` ships
+		// `{ summary, scope }` at offset 0 — the same envelope that just
+		// overflowed — so its first page fails `too_large` identically, and
+		// offering it would contradict the sentence it is appended to.
+		return `This response is summary and scope alone, so neither \`limit\` nor \`buckets\` can make it smaller - the scope block itself is over the cap. Narrow what the server scans (--src-dir) or analyse one package at a time.`;
 	}
 	if (buckets.length > 1) {
 		return `Re-call with ${lowerLimit}, or fewer \`buckets\` - one at a time pages cleanly through \`offset\`. (\`includeUnused\` is ignored while \`buckets\` is set.)${handle}`;

@@ -240,3 +240,22 @@ describe("what to advise when even summary and scope overflow", () => {
 		expect(coverageShrinkHint(undefined, 50)).toContain("`buckets: []`");
 	});
 });
+
+describe("the handle clause and the branch that cannot use it", () => {
+	it("offers no handle when summary and scope alone overflow", () => {
+		// `query_coverage` ships `{ summary, scope }` at offset 0 - the same
+		// envelope that just overflowed - so its first page fails `too_large`
+		// identically, and offering it contradicts the sentence it is appended to.
+		const hint = coverageShrinkHint([], 50, "cov_abc");
+		expect(hint).not.toContain("query_coverage");
+	});
+
+	it("still offers it on the branches where a page can fit", () => {
+		expect(coverageShrinkHint(["matched"], 50, "cov_abc")).toContain(
+			"query_coverage",
+		);
+		expect(coverageShrinkHint(undefined, 50, "cov_abc")).toContain(
+			"query_coverage",
+		);
+	});
+});
