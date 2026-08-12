@@ -1537,8 +1537,21 @@ class TreeBuilder {
 			// the walk cannot follow, so it is unknown - and the caller's
 			// `local-render-function` marker already reports that honestly.
 			const inner = unwrapTransparent(blockScoped);
-			return isInlineFunction(inner) && containsJsx(inner)
-				? { fn: inner, parameters: parameterNames(inner), nested: true }
+			// A `function` statement inside the block is as much the helper as a
+			// `const` arrow is. `blockScopedBinding` goes to the trouble of finding
+			// one and this branch used to throw it away, so its ids left the tree
+			// over the spelling alone.
+			const callable = Node.isFunctionDeclaration(inner)
+				? inner
+				: isInlineFunction(inner)
+					? inner
+					: null;
+			return callable && containsJsx(callable)
+				? {
+						fn: callable,
+						parameters: parameterNames(callable),
+						nested: true,
+					}
 				: null;
 		}
 		const found = this.helperIndexOf(owner).get(name);
@@ -2714,6 +2727,48 @@ function shadowsWholeBody(declaration: VariableDeclaration, fn: Node): boolean {
 }
 
 /**
+ * A binding `scope` introduces on its own header rather than inside its block.
+ *
+ * `for (const render of rows)` and `catch (render)` both scope a name to the
+ * statement, and neither is a `Block`, so a walk that only inspects blocks
+ * looks straight past them. Returns the declaration itself: it is not a
+ * function, which is precisely the answer — the call is shadowed by a value the
+ * walk cannot follow, and reporting it as unknown beats attributing a module
+ * helper's subtree to it.
+ */
+function headerBinding(scope: Node, name: string): Node | null {
+	if (Node.isCatchClause(scope)) {
+		const declaration = scope.getVariableDeclaration();
+		return declaration?.getName() === name ? declaration : null;
+	}
+	if (
+		!Node.isForStatement(scope) &&
+		!Node.isForOfStatement(scope) &&
+		!Node.isForInStatement(scope)
+	) {
+		return null;
+	}
+	const initializer = scope.getInitializer();
+	if (
+		initializer === undefined ||
+		!Node.isVariableDeclarationList(initializer)
+	) {
+		return null;
+	}
+	// `var` is function-scoped; `shadowsWholeBody` owns it at the body level.
+	if (initializer.getDeclarationKind() === VariableDeclarationKind.Var) {
+		return null;
+	}
+	for (const declaration of initializer.getDeclarations()) {
+		const nameNode = declaration.getNameNode();
+		if (Node.isIdentifier(nameNode) && nameNode.getText() === name) {
+			return declaration;
+		}
+	}
+	return null;
+}
+
+/**
  * A declaration of `name` in a block between the call site and the component
  * body, or `null` when the nearest binding is not block-scoped.
  *
@@ -2731,6 +2786,15 @@ function blockScopedBinding(from: Node, name: string, body: Node): Node | null {
 	for (let scope = from.getParent(); scope; scope = scope.getParent()) {
 		if (scope === body) {
 			return null;
+		}
+		// A binding on the *header* of the enclosing statement, which has no block
+		// of its own to hold it: `for (const render of rows)` and `catch (render)`.
+		// Skipping these let the call fall through to a same-named module helper
+		// and report that function's subtree — the exact mis-attribution the
+		// block case exists to prevent, one syntax away.
+		const header = headerBinding(scope, name);
+		if (header) {
+			return header;
 		}
 		if (!Node.isBlock(scope) && !Node.isCaseClause(scope)) {
 			continue;

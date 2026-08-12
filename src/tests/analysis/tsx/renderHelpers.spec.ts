@@ -287,3 +287,90 @@ describe("budgets still bound the walk", () => {
 		expect(capped.truncated).toBe(true);
 	});
 });
+
+/**
+ * Which enclosing binding the call actually refers to.
+ *
+ * `blockScopedBinding` exists because a name declared between the call and the
+ * component body decides what the call means, and resolving it against the
+ * module-scope helper of the same name reports one function's subtree — and its
+ * ids — at a site that renders something else. Two spellings were missing from
+ * that walk.
+ */
+describe("bindings between the call and the body", () => {
+	it("inlines a `function` declared inside a block", () => {
+		// `blockScopedBinding` goes to the trouble of returning a
+		// FunctionDeclaration and the caller then required an arrow or a function
+		// *expression*, so these ids left the tree over the spelling alone.
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"export function Page({ on }: { on: boolean }) {",
+				"  if (on) {",
+				"    function renderBadge() {",
+				'      return <span data-testid="Badge" />;',
+				"    }",
+				"    return <div>{renderBadge()}</div>;",
+				"  }",
+				'  return <div data-testid="Off" />;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toContain("Badge");
+	});
+
+	it("does not attribute a `for` loop variable to a module helper", () => {
+		// The binding is on the statement header, which is not a Block, so the
+		// walk fell through to `helperIndexOf` and reported ModuleRow's subtree at
+		// a site that renders whatever the loop variable holds.
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"function renderRow() {",
+				'  return <span data-testid="ModuleRow" />;',
+				"}",
+				"export function Page({ rows }: { rows: (() => never)[] }) {",
+				"  for (const renderRow of rows) {",
+				'    return <div data-testid="Host">{renderRow()}</div>;',
+				"  }",
+				'  return <div data-testid="Empty" />;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toContain("Host");
+		expect(ids(tree), "the module helper renders somewhere else").not.toContain(
+			"ModuleRow",
+		);
+	});
+
+	it("does not attribute a `catch` parameter to a module helper", () => {
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"function renderError() {",
+				'  return <span data-testid="ModuleError" />;',
+				"}",
+				"export function Page({ run }: { run: () => void }) {",
+				"  try {",
+				"    run();",
+				"  } catch (renderError: never) {",
+				'    return <div data-testid="Caught">{renderError()}</div>;',
+				"  }",
+				'  return <div data-testid="Ok" />;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).not.toContain("ModuleError");
+	});
+
+	it("still reaches the module helper when nothing shadows it", () => {
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"function renderRow() {",
+				'  return <span data-testid="ModuleRow" />;',
+				"}",
+				"export function Page() {",
+				"  return <div>{renderRow()}</div>;",
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toContain("ModuleRow");
+	});
+});
