@@ -472,3 +472,51 @@ describe("tsConfigChain", () => {
 		expect(names(root)).toEqual(["tsconfig.json"]);
 	});
 });
+
+describe("tsConfigChain and the package manifest", () => {
+	function names(root: string): string[] {
+		return tsConfigChain(path.join(root, "tsconfig.json")).map((one) =>
+			path.relative(root, one).split(path.sep).join("/"),
+		);
+	}
+
+	it("prefers the `types` condition, as TypeScript does", () => {
+		// TypeScript resolves an `extends` specifier with both `types` and
+		// `require` in its condition set, so taking only one watches whichever
+		// target the other would have won - and an edit to the config actually in
+		// force then changes no stamp at all.
+		const root = scratch({
+			"node_modules/@repo/tsconfig/package.json": JSON.stringify({
+				name: "@repo/tsconfig",
+				exports: { ".": { types: "./typed.json", default: "./plain.json" } },
+			}),
+			"node_modules/@repo/tsconfig/typed.json": JSON.stringify({
+				compilerOptions: { target: "ES2022" },
+			}),
+			"node_modules/@repo/tsconfig/plain.json": JSON.stringify({
+				compilerOptions: { target: "ES5" },
+			}),
+			"tsconfig.json": JSON.stringify({ extends: "@repo/tsconfig" }),
+		});
+		const chain = names(root);
+		expect(chain).toContain("node_modules/@repo/tsconfig/typed.json");
+		expect(chain).not.toContain("node_modules/@repo/tsconfig/plain.json");
+	});
+
+	it("watches the manifest that decided which config that was", () => {
+		// Editing `exports` remaps the target without touching either end of the
+		// chain, so a fingerprint that skipped the manifest left the workspace on
+		// the old base until something else happened to move.
+		const root = scratch({
+			"node_modules/@repo/tsconfig/package.json": JSON.stringify({
+				name: "@repo/tsconfig",
+				exports: { ".": "./base.json" },
+			}),
+			"node_modules/@repo/tsconfig/base.json": JSON.stringify({
+				compilerOptions: { target: "ES2022" },
+			}),
+			"tsconfig.json": JSON.stringify({ extends: "@repo/tsconfig" }),
+		});
+		expect(names(root)).toContain("node_modules/@repo/tsconfig/package.json");
+	});
+});

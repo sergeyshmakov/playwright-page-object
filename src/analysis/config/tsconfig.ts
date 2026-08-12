@@ -212,12 +212,17 @@ function packageExtends(fromDirectory: string, specifier: string): string[] {
 		// config published as `exports: {".": "./base.json"}` or under `main` has
 		// no `tsconfig.json` at the path above — which read as "no base config at
 		// all", leaving every later call on compiler options that had moved.
-		const declared = manifestExtends(
-			path.join(directory, "node_modules"),
-			specifier,
-		);
+		const nodeModules = path.join(directory, "node_modules");
+		const declared = manifestExtends(nodeModules, specifier);
 		if (declared) {
-			return [declared];
+			// The manifest is watched alongside the config it names. Editing
+			// `exports` remaps which file `extends` resolves to without touching
+			// either end of the chain, so a fingerprint that skipped it left the
+			// workspace on the old base until something else happened to move.
+			return [
+				path.join(nodeModules, splitSpecifier(specifier).name, "package.json"),
+				declared,
+			];
 		}
 		const parent = path.dirname(directory);
 		if (parent === directory) {
@@ -255,10 +260,16 @@ function manifestExtends(
 	const targets: string[] = [];
 	if (manifest.exports !== undefined) {
 		try {
-			// `require` because a tsconfig is JSON, and TypeScript reads it with no
-			// condition of its own that `resolve.exports` would know about.
+			// `types` *and* `require`, because TypeScript resolves an `extends`
+			// specifier with both in its condition set. Taking only `require` (or,
+			// as suggested, only `types`) watches whichever target the other
+			// condition would have won — so an edit to the config actually in force
+			// changes no stamp at all.
 			targets.push(
-				...(resolveExports(manifest, subpath, { require: true }) ?? []),
+				...(resolveExports(manifest, subpath, {
+					require: true,
+					conditions: ["types"],
+				}) ?? []),
 			);
 		} catch {
 			// An exports map that does not cover this subpath. The `main` fallback
