@@ -53,9 +53,15 @@ import {
 import { planWarnings, type WarningLedger } from "./warnings";
 
 /**
- * The per-server state a tool call may consult. Optional throughout: a handler
- * called without one behaves exactly as it did before sessions existed, which
- * is what keeps the direct-call tests honest about the payload shape.
+ * The per-server state a tool call may consult.
+ *
+ * Optional throughout, so a handler called without one behaves exactly as it
+ * did before sessions existed - which is what makes the handlers callable
+ * directly, with a `Workspace` and nothing else, rather than only through a
+ * booted server.
+ *
+ * That is a property of the signature, not a claim about the suite: every test
+ * today goes through a client, so the direct path is available and unused.
  */
 export interface ToolSession {
 	warnings?: WarningLedger;

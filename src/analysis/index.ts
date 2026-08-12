@@ -1,9 +1,16 @@
 /**
  * Static-analysis engine for `playwright-page-object`.
  *
- * This is the only module `src/mcp/**` imports. `ts-morph` is reachable from
- * `src/analysis/**` and nowhere else, which keeps `src/index.ts` — the shipped
- * runtime — at zero runtime dependencies. A guard spec enforces that.
+ * The module `src/mcp/**` imports the engine through. `ts-morph` is reachable
+ * from `src/analysis/**` and nowhere else, which keeps `src/index.ts` — the
+ * shipped runtime — at zero runtime dependencies.
+ *
+ * What the guard spec enforces is that *reachability*, not this barrel's
+ * exclusivity: `src/mcp/options.ts` deliberately deep-imports `util/paths`
+ * instead, because it runs on the startup path and must not pull the analyser
+ * in to stat four paths — and it has a guard of its own proving ts-morph stays
+ * out of its import graph. Anything that already loads the engine comes through
+ * here.
  *
  * Every entry point is `(Workspace, options) => JSON`. Problems in user code
  * become `warnings: Diagnostic[]`; only a missing target throws, as
