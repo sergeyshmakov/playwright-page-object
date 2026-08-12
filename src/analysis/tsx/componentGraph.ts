@@ -628,17 +628,6 @@ export interface ExternalModuleEvidence {
 
 const MAX_EXTERNAL_MODULES = 10;
 
-/**
- * Importing directories probed per external specifier.
- *
- * The probe answers "is this package linked to sources in this repository", and
- * the answer depends on which directory asks. Four distinct importers is enough
- * to find a link in any monorepo layout that has one, and small enough that a
- * specifier imported from three hundred files does not turn one warning into
- * three hundred filesystem walks. Every probe is memoized per epoch besides.
- */
-const MAX_SAMPLE_DIRS = 4;
-
 /** Workspace memo slot holding the shared "outside the workspace" answers. */
 const CENSUS_CACHE_KEY = "external-module-census";
 
@@ -686,7 +675,7 @@ export class ExternalModuleCensus {
 	/** Specifiers behind those paths, so the remedy can name only them. */
 	private readonly linked = new Set<string>();
 	/**
-	 * Importing directories per specifier that resolved to no source.
+	 * Every importing directory per specifier that resolved to no source.
 	 *
 	 * A set, not one directory. `packageSourceOutsideRoot` walks up from the
 	 * *importer*, so in a monorepo where one package links `@acme/ui` to its own
@@ -696,8 +685,8 @@ export class ExternalModuleCensus {
 	 * repository, and a specifier could be reported as linked while the sources
 	 * named beside it belong to a package nothing in that scope imports.
 	 *
-	 * Bounded per specifier: the point is to find *a* link, and beyond a handful
-	 * of distinct importers the extra probes buy nothing but stats.
+	 * Uncapped, because the numbers derived from it have to be true. See
+	 * {@link add}.
 	 */
 	private readonly sampleDirs = new Map<string, Set<string>>();
 	private tagCount = 0;
@@ -735,16 +724,24 @@ export class ExternalModuleCensus {
 				this.sourcePaths.add(placement.sourcePath);
 				this.linked.add(specifier);
 			} else {
-				// Keeping every importer would be a map the size of the repository;
-				// keeping one answered the wrong question in a monorepo.
+				// Every distinct importing directory, not a sample. `linkedCount` and
+				// `sourceRoot` are computed from what these probes find, and a capped
+				// probe makes both of them lie - the count low, and the remedy's
+				// common ancestor narrower than the sources it has to cover. "A
+				// capped list is fine; a capped number is a false statement" applies
+				// to this module's own output as much as to anything it reports.
+				//
+				// Directories, not files, so the set is a fraction of the repository
+				// (1,621 for 4,924 files on the app this was measured against). Each
+				// probe is memoized per (directory, package) and the `node_modules`
+				// presence check per directory, so importers under a shared ancestor
+				// cost map lookups rather than syscalls.
 				let dirs = this.sampleDirs.get(specifier);
 				if (!dirs) {
 					dirs = new Set<string>();
 					this.sampleDirs.set(specifier, dirs);
 				}
-				if (dirs.size < MAX_SAMPLE_DIRS) {
-					dirs.add(sourceFile.getDirectoryPath());
-				}
+				dirs.add(sourceFile.getDirectoryPath());
 			}
 		}
 	}
