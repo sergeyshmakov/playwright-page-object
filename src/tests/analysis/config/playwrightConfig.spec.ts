@@ -704,6 +704,98 @@ describe("defineConfig with several arguments", () => {
 	// Playwright merges the arguments' `use` objects key by key
 	// (`{...result.use, ...config.use}`), so a second argument that writes other
 	// `use` keys leaves the first argument's attribute in place.
+	/**
+	 * Two named exports from one module are two independent layers.
+	 *
+	 * The cycle guard keyed on the file's path, so resolving the first argument
+	 * marked the module seen and the second was rejected as a cycle - discarding a
+	 * layer that carries the attribute the whole analysis runs on. Every existing
+	 * multi-argument test uses a *local* `const base`, which never reaches the
+	 * import path at all, so this intersection was uncovered.
+	 */
+	it("reads two named exports imported from the same module", () => {
+		const ws = workspaceWithConfig({
+			"shared.ts": [
+				'export const base = { testDir: "./base-specs", use: { testIdAttribute: "data-base" } };',
+				'export const overrides = { testDir: "./leaf-specs", use: { testIdAttribute: "data-leaf" } };',
+			].join("\n"),
+			"playwright.config.ts": [
+				'import { defineConfig } from "@playwright/test";',
+				'import { base, overrides } from "./shared";',
+				"export default defineConfig(base, overrides);",
+			].join("\n"),
+		});
+		const info = readPlaywrightConfig(ws);
+		expect(info.testDir).toBe("leaf-specs");
+		expect(info.testIdAttribute).toBe("data-leaf");
+		expect(info.notes.map((note) => note.code)).not.toContain(
+			"config-merge-unresolved",
+		);
+	});
+
+	/**
+	 * The spread spelling of the same shape, which failed *silently*: the
+	 * unfollowable-spread path marks lower layers occluded instead of warning, so
+	 * the base's own attribute was downgraded to unresolved rather than reported.
+	 */
+	it("reads two named exports spread from the same module", () => {
+		const ws = workspaceWithConfig({
+			"shared.ts": [
+				'export const base = { use: { testIdAttribute: "data-base" } };',
+				'export const overrides = { use: { testIdAttribute: "data-leaf" } };',
+			].join("\n"),
+			"playwright.config.ts": [
+				'import { defineConfig } from "@playwright/test";',
+				'import { base, overrides } from "./shared";',
+				"export default defineConfig({ ...base, ...overrides });",
+			].join("\n"),
+		});
+		expect(readPlaywrightConfig(ws).testIdAttribute).toBe("data-leaf");
+	});
+
+	/**
+	 * The same export twice. A visited-set never pops, so the second occurrence
+	 * was a cycle; a path-scoped set reads it both times, which is what JavaScript
+	 * does.
+	 */
+	it("reads the same imported export used as two arguments", () => {
+		const ws = workspaceWithConfig({
+			"shared.ts":
+				'export const base = { use: { testIdAttribute: "data-base" } };',
+			"playwright.config.ts": [
+				'import { defineConfig } from "@playwright/test";',
+				'import { base } from "./shared";',
+				"export default defineConfig(base, base);",
+			].join("\n"),
+		});
+		const info = readPlaywrightConfig(ws);
+		expect(info.testIdAttribute).toBe("data-base");
+		// The value cannot discriminate here - both occurrences are the same
+		// export, so the answer is `data-base` either way. The warning can: a
+		// visited-set called the second one a cycle and said so.
+		expect(info.notes.map((note) => note.code)).not.toContain(
+			"config-merge-unresolved",
+		);
+	});
+
+	/**
+	 * A missing export must not poison the module. The `seen` mark used to be set
+	 * before the export was resolved, so a typo'd name made every *other* export
+	 * of that file unreachable for the rest of the read.
+	 */
+	it("still reads a real export after a missing one from the same module", () => {
+		const ws = workspaceWithConfig({
+			"shared.ts":
+				'export const real = { use: { testIdAttribute: "data-real" } };',
+			"playwright.config.ts": [
+				'import { defineConfig } from "@playwright/test";',
+				'import { missing, real } from "./shared";',
+				"export default defineConfig(missing, real);",
+			].join("\n"),
+		});
+		expect(readPlaywrightConfig(ws).testIdAttribute).toBe("data-real");
+	});
+
 	it("deep-merges `use` across arguments the way Playwright does", () => {
 		const ws = workspaceWithConfig({
 			"playwright.config.ts": [
