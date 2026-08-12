@@ -113,6 +113,15 @@ const IDLE_EVICT_AFTER_MS = 10 * 60_000;
 /** Sentinel for "the running file total has to be recounted". */
 const UNKNOWN_TOTAL = -1;
 /**
+ * Stamp for a scan root that was not on disk at the last sweep.
+ *
+ * Negative, so it can never equal an `mtimeMs`, which makes the transition to a
+ * real stamp compare unequal and register as a change — the point being that a
+ * scan directory coming into existence is exactly as significant as one whose
+ * contents moved.
+ */
+const MISSING_DIR = -1;
+/**
  * Environment warnings ship on every payload, so the list has to stay readable.
  * Eight is more than any single misconfiguration produces; a repository that
  * trips more than that has one root cause and the ranking puts it first.
@@ -293,6 +302,8 @@ export class Workspace {
 	 * last acquire. See {@link projectIdentity}.
 	 */
 	private identity: string | null = null;
+	/** Directories holding a lockfile that governs this root. See {@link lockfileDirectories}. */
+	private lockfileDirs: string[] | null = null;
 	/** Summed lockfile mtimes as of the last sweep. See {@link lockfileChanged}. */
 	private lockfileStamp: number | null = null;
 	/** Last known mtime per scanned directory. See {@link scanDirsChanged}. */
@@ -523,7 +534,12 @@ export class Workspace {
 			try {
 				stamp = fs.statSync(directory).mtimeMs;
 			} catch {
-				// Gone since the sweep, which already reported the files it held.
+				// Not there. Remembered as such rather than skipped: a scan root that
+				// does not exist yet is the one case where *appearing* is the change,
+				// and dropping it here meant the first call after `mkdir e2e` fell
+				// back on the re-glob throttle instead of defeating it.
+				seen.add(directory);
+				this.scanDirMtimes.set(directory, MISSING_DIR);
 				continue;
 			}
 			seen.add(directory);
@@ -592,22 +608,66 @@ export class Workspace {
 	 * something this can afford. Missing entirely is a stable state, not a
 	 * change, so a repository with no lockfile never bumps on this.
 	 *
-	 * Only the root's. A monorepo installs at its root, and a workspace rooted at
-	 * a package below it will see the change on its own lockfile if it has one.
+	 * The analysed root's, and the nearest ancestor's above it.
+	 *
+	 * "A package below the root sees the change on its own lockfile" was wrong
+	 * about how workspaces work: npm, yarn and pnpm all keep one lockfile at the
+	 * repository root and none in the packages. So a server rooted at
+	 * `apps/web` — the normal way to run this on a monorepo — stat'ed nothing
+	 * that any install ever touches, and a `pnpm install` that relinked a package
+	 * left every resolver cache from before it in place, still calling first-party
+	 * source an external dependency, for the rest of the session.
 	 */
 	private lockfileChanged(): boolean {
 		let stamp = 0;
-		for (const name of LOCKFILE_NAMES) {
-			try {
-				stamp += fs.statSync(path.join(this.root, name)).mtimeMs;
-			} catch {
-				// Absent: contributes nothing, and stays contributing nothing.
+		for (const directory of this.lockfileDirectories()) {
+			for (const name of LOCKFILE_NAMES) {
+				try {
+					stamp += fs.statSync(path.join(directory, name)).mtimeMs;
+				} catch {
+					// Absent: contributes nothing, and stays contributing nothing.
+				}
 			}
 		}
 		const previous = this.lockfileStamp;
 		this.lockfileStamp = stamp;
 		// The first sweep establishes the baseline rather than reporting a change.
 		return previous !== null && previous !== stamp;
+	}
+
+	/**
+	 * Where a lockfile that governs this root could live: the root itself, and
+	 * the nearest ancestor holding one.
+	 *
+	 * Only the nearest, and cached for the workspace's lifetime. Stat'ing every
+	 * ancestor on every sweep would put a walk to the filesystem root on the hot
+	 * path for a stamp that changes on install, and a monorepo has exactly one
+	 * lockfile above a package — finding the first is finding it.
+	 */
+	private lockfileDirectories(): string[] {
+		if (this.lockfileDirs !== null) {
+			return this.lockfileDirs;
+		}
+		const directories = [this.root];
+		let current = path.dirname(this.root);
+		for (;;) {
+			const here = current;
+			if (
+				LOCKFILE_NAMES.some(
+					(name) => mtimeOf(path.join(here, name)) !== "missing",
+				)
+			) {
+				directories.push(current);
+				break;
+			}
+			const parent = path.dirname(current);
+			if (parent === current) {
+				break;
+			}
+			current = parent;
+		}
+		this.lockfileDirs = directories;
+		return directories;
 	}
 
 	/** Whether {@link projectIdentity} has moved since the last acquire. */

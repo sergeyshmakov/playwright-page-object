@@ -260,3 +260,77 @@ describe("what a fixed config stops saying", () => {
 		).not.toContain("testid-attribute-unresolved");
 	});
 });
+
+describe("what the freshness stamps have to reach", () => {
+	it("re-globs on the call after a scan root appears", () => {
+		// The re-glob is throttled by `staleAfterMs`, and `scanDirsChanged` is what
+		// defeats the throttle when the scan directories moved. A root that did not
+		// exist at the baseline was skipped rather than remembered, so *appearing*
+		// — the one change that matters most for a directory — was the one change
+		// it could not see, and the files in it waited out the window.
+		//
+		// Scoped with `include` rather than a tsconfig on purpose: those roots come
+		// from the patterns, so a directory that does not exist yet is still one of
+		// them. TypeScript's `wildcardDirectories` only lists directories that are
+		// there, which is a second reason the appearance went unnoticed.
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+			"src/a.ts": "export const a = 1;",
+		});
+		pool.clear();
+		// A long window, so only a directory change can open the throttle - and
+		// three acquires, because `lastGlobAt` starts at 0, so the first
+		// `revalidate` re-globs whatever the window says. The throttle is only
+		// closed from the second one on.
+		const scope = {
+			projectRoot: root,
+			include: ["src", "e2e"],
+			staleAfterMs: 600_000,
+		};
+		const first = pool.acquire(scope);
+		expect(
+			first.sourceFiles().map((one) => first.rel(one.getFilePath())),
+		).toEqual(["src/a.ts"]);
+		pool.acquire(scope);
+
+		write(root, "e2e/spec.ts", "export const b = 1;");
+		const second = pool.acquire(scope);
+		expect(second).toBe(first);
+		expect(
+			second
+				.sourceFiles()
+				.map((one) => second.rel(one.getFilePath()))
+				.sort(),
+		).toEqual(["e2e/spec.ts", "src/a.ts"]);
+	});
+
+	it("watches the monorepo lockfile above a package root", () => {
+		// npm, yarn and pnpm keep one lockfile at the repository root and none in
+		// the packages, so a server rooted at `apps/web` — the normal way to run
+		// this on a monorepo — stat'ed nothing an install ever touches. Resolver
+		// caches filled before a relinking install then survived it, still calling
+		// first-party source an external dependency.
+		const outer = scratch({
+			"package-lock.json": JSON.stringify({ lockfileVersion: 3 }),
+			"apps/web/tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+			"apps/web/src/a.ts": "export const a = 1;",
+		});
+		const root = path.join(outer, "apps", "web");
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
+		// An install bumps the epoch, which is what drops every resolver cache
+		// filled before it. Nothing under `apps/web` changes here.
+		const before = ws.currentEpoch;
+		write(
+			outer,
+			"package-lock.json",
+			JSON.stringify({ lockfileVersion: 3, updated: true }),
+		);
+		ws.revalidate();
+		expect(ws.currentEpoch).toBeGreaterThan(before);
+	});
+});
