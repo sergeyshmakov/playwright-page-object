@@ -88,6 +88,38 @@ if (cli !== undefined && !/require\(["']commander["']\)/.test(cli)) {
 	);
 }
 
+// Both conditions of `playwright-page-object/mcp` must advertise the real
+// version. `readVersion` reads `__dirname`, which does not exist in an ESM
+// module: the reference threw, its `try` swallowed the error, and the ESM
+// entry reported 0.0.0 in the MCP handshake while the CJS entry reported the
+// real number. Nothing in the source distinguishes the two, so the only place
+// this is visible is here, by booting each and asking.
+const expectedVersion = JSON.parse(
+	readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
+for (const [label, specifier] of [
+	["dist/mcp.js", "../dist/mcp.js"],
+	["dist/mcp.mjs", "../dist/mcp.mjs"],
+]) {
+	try {
+		const { createMcpServer } = await import(
+			new URL(specifier, import.meta.url).href
+		);
+		const server = createMcpServer({
+			projectRoot: new URL("..", import.meta.url).pathname,
+		});
+		const reported = (server?.server?._serverInfo ?? server?._serverInfo)
+			?.version;
+		if (reported !== expectedVersion) {
+			errors.push(
+				`${label} advertises version "${reported}" - expected "${expectedVersion}"`,
+			);
+		}
+	} catch (error) {
+		errors.push(`${label} could not be booted: ${error.message}`);
+	}
+}
+
 if (errors.length > 0) {
 	for (const error of errors) {
 		console.error(`verify-dist: ${error}`);

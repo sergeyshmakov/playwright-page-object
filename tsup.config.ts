@@ -28,6 +28,13 @@ export default defineConfig([
 		format: ["cjs", "esm"],
 		dts: true,
 		clean: false,
+		// `readVersion` reads `__dirname`, which does not exist in an ESM module:
+		// the reference threw, the `try` swallowed it, and every server created
+		// through the ESM condition of `playwright-page-object/mcp` advertised
+		// version 0.0.0 in the MCP handshake while the CJS one advertised the real
+		// number. `run/verify-dist.mjs` now boots both and compares, because
+		// nothing about the source says which format it is being read from.
+		shims: true,
 		// Runtime dependencies stay external (tsup default for `dependencies`);
 		// spelled out here as documentation-in-code.
 		external: ["@modelcontextprotocol/server", "ts-morph", "zod"],
