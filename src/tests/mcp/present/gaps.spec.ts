@@ -248,3 +248,38 @@ describe("blindScan", () => {
 		expect(blindScan([], idLess, null)).toBeUndefined();
 	});
 });
+
+describe("a node-budget cut is not a component boundary", () => {
+	/**
+	 * The builder marks a budget cut on a component node, so counting it among
+	 * the boundary reasons made it the widest one and returned the generic "left
+	 * unexpanded" caveat. That hides the `nodes` gap underneath - the only one
+	 * whose advice a caller can act on, because `maxNodes` is an argument they
+	 * control and "a component was not expanded" is not.
+	 */
+	it("reports the nodes gap, not the boundary caveat", () => {
+		const gap = traversalGap(
+			[
+				node({
+					nodeType: "component",
+					unresolved: { reason: "node-budget-reached" },
+				}),
+			],
+			true,
+		);
+		expect(gap?.kind).toBe("nodes");
+	});
+
+	it("still reports a real boundary when one is present", () => {
+		const gap = traversalGap(
+			[
+				node({
+					nodeType: "component",
+					unresolved: { reason: "external-module" },
+				}),
+			],
+			true,
+		);
+		expect(gap?.kind).toBe("boundary");
+	});
+});

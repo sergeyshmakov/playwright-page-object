@@ -61,7 +61,12 @@ export function lookupHint(
 		// renders `Row` itself. Saying only "not found" invites the reader to
 		// conclude the selector is broken.
 		if (families.length > 0) {
-			return `No element renders the exact id "${needle}", but ${families.length === 1 ? "an id family" : "id families"} built on it ${families.length === 1 ? "does" : "do"}: ${families.join(", ")}. A prefix selector such as @ListSelector("${needle}") matches those and is not dead. Look up a concrete one (for example "${needle}_0"), or call get_testid_tree on the component to see them in place.`;
+			// The example is built from a family, not from the needle. `${needle}_0`
+			// only happens to exist when the separator is `_` and the needle is the
+			// whole prefix; for `Row-${i}`, or for a partial needle, it named an id
+			// nothing renders and cost the reader a second empty lookup.
+			const example = `${(families[0] ?? "").replace(/\*$/, "")}0`;
+			return `No element renders the exact id "${needle}", but ${families.length === 1 ? "an id family" : "id families"} built on it ${families.length === 1 ? "does" : "do"}: ${families.join(", ")}. A prefix selector such as @ListSelector("${needle}") matches those and is not dead. Look up a concrete one (for example "${example}"), or call get_testid_tree on the component to see them in place.`;
 		}
 		return `No rendered element with test id "${needle}" was found.${quarantined} Call get_testid_tree without testId to see the full tree, or map_coverage to check for renamed ids.`;
 	}

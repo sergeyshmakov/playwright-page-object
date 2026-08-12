@@ -293,6 +293,14 @@ export function coverageShrinkHint(
 	if (buckets === undefined) {
 		return `Re-call with ${lowerLimit}, \`buckets\` naming only the lists you need, or includeUnused:false. \`buckets: []\` returns summary and scope alone, which always fits.${handle}`;
 	}
+	if (buckets.length === 0) {
+		// Nothing the caller passes can shrink this one: `summary` and `scope` are
+		// the envelope, and they ship whatever `limit` and `buckets` say. The
+		// advice above would send them to re-send the call they just sent — the
+		// same loop the one-bucket case below was written to end, one step
+		// further in.
+		return `This response is summary and scope alone, so neither \`limit\` nor \`buckets\` can make it smaller - the scope block itself is over the cap. Narrow what the server scans (--src-dir) or analyse one package at a time.${handle}`;
+	}
 	if (buckets.length > 1) {
 		return `Re-call with ${lowerLimit}, or fewer \`buckets\` - one at a time pages cleanly through \`offset\`. (\`includeUnused\` is ignored while \`buckets\` is set.)${handle}`;
 	}

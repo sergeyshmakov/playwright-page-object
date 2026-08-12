@@ -120,6 +120,13 @@ export function traversalGap(
 			} else if (
 				reason !== undefined &&
 				reason !== "spread-props" &&
+				// A budget cut is not a boundary. It is marked on a component node
+				// like one, so counting it here made the widest reason
+				// `node-budget-reached` and returned the generic "left unexpanded"
+				// caveat — hiding the `nodes` gap below, which is the only one whose
+				// advice a caller can act on (`maxNodes`). Left to the `truncated`
+				// fallback, which is what the builder sets for exactly this case.
+				reason !== "node-budget-reached" &&
 				(node.nodeType === "component" || node.nodeType === "unresolved")
 			) {
 				boundaries.set(reason, (boundaries.get(reason) ?? 0) + 1);

@@ -4,6 +4,7 @@ import {
 	type BucketSlice,
 	type CoveragePaging,
 	coverageResult,
+	coverageShrinkHint,
 	degradeHint,
 	pagingHint,
 	selectedBuckets,
@@ -216,5 +217,26 @@ describe("pagingHint", () => {
 		const hint = pagingHint(200, 50, 0, 120);
 		expect(hint).toBeDefined();
 		expect(hint).toContain("120");
+	});
+});
+
+describe("what to advise when even summary and scope overflow", () => {
+	/**
+	 * `buckets: []` is the smallest response this tool can produce. Telling that
+	 * caller to lower `limit` or pass `buckets: []` is advice to re-send the call
+	 * they just sent - the same loop the one-bucket branch was written to end,
+	 * one step further in.
+	 */
+	it("does not send a summary-only caller round again", () => {
+		const hint = coverageShrinkHint([], 50);
+		expect(hint).not.toContain("`buckets: []`");
+		expect(hint).toContain("--src-dir");
+	});
+
+	it("still offers the live knobs when buckets are in play", () => {
+		expect(coverageShrinkHint(["matched", "deadSelectors"], 50)).toContain(
+			"fewer `buckets`",
+		);
+		expect(coverageShrinkHint(undefined, 50)).toContain("`buckets: []`");
 	});
 });
