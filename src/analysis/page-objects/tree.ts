@@ -23,7 +23,6 @@ import {
 	type DiscoveryResult,
 	discoverInternal,
 } from "./discover";
-import { toInlineTree } from "./inline";
 import { LIBRARY_PACKAGE } from "./libraryImports";
 import { readMethods } from "./methods";
 
@@ -32,7 +31,6 @@ export interface TreeOptions {
 	maxNodes?: number;
 	includeInherited?: boolean;
 	signatureMode?: "syntactic" | "checked";
-	format?: "refs" | "inline";
 	include?: string[];
 	exclude?: string[];
 }
@@ -212,9 +210,8 @@ function suggestionsFor(discovery: DiscoveryResult, name: string): string[] {
 
 /**
  * Cache identity for one page-object tree: the target plus every option that
- * changes what gets built. `format` is in it because it decides whether the
- * `inline` view is materialised at all; `includeMethods` is not, because that
- * is the MCP handler trimming a finished tree.
+ * changes what gets built. `includeMethods` is deliberately not one of them:
+ * that is the MCP handler trimming a finished tree, not a different tree.
  */
 function treeKey(target: string, options: TreeOptions): string {
 	return `po-tree::${JSON.stringify({
@@ -223,7 +220,6 @@ function treeKey(target: string, options: TreeOptions): string {
 		maxNodes: options.maxNodes ?? DEFAULT_MAX_NODES,
 		includeInherited: options.includeInherited ?? null,
 		signatureMode: options.signatureMode ?? "syntactic",
-		format: options.format ?? "refs",
 		include: options.include ?? null,
 		exclude: options.exclude ?? null,
 	})}`;
@@ -433,9 +429,6 @@ function computePageObjectTree(
 	};
 	if (truncated) {
 		tree.truncated = true;
-	}
-	if (options.format === "inline") {
-		tree.inline = toInlineTree(tree, { maxDepth: options.maxDepth });
 	}
 	return tree;
 }

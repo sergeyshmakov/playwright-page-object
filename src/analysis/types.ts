@@ -313,25 +313,6 @@ export interface PageObjectNode {
 	warnings?: Diagnostic[];
 }
 
-/** Nested projection of {@link PageObjectTree.defs}, produced by `format: "inline"`. */
-export interface InlinePageObjectNode {
-	ref: string;
-	className: string;
-	file?: string;
-	hostKind?: HostKind;
-	repeated?: boolean;
-	cyclic?: boolean;
-	truncated?: boolean;
-	members?: Array<{
-		name: string;
-		selector: SelectorInfo;
-		result: MemberResult;
-		child?: InlinePageObjectNode;
-		item?: InlinePageObjectNode;
-	}>;
-	methods?: MethodInfo[];
-}
-
 export interface PageObjectTree {
 	schemaVersion: 1;
 	projectRoot: string;
@@ -340,8 +321,6 @@ export interface PageObjectTree {
 	/** Key into {@link defs}. */
 	root: string;
 	defs: Record<string, PageObjectNode>;
-	/** Present only when `format: "inline"` was requested. */
-	inline?: InlinePageObjectNode;
 	warnings: Diagnostic[];
 	truncated?: boolean;
 	stats: {

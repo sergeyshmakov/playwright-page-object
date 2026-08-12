@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { AnalysisTargetError } from "../../../analysis/diagnostics";
-import { toInlineTree } from "../../../analysis/page-objects/inline";
 import { buildPageObjectTree } from "../../../analysis/page-objects/tree";
 import {
 	libImport,
@@ -414,82 +413,6 @@ describe("buildPageObjectTree — target resolution", () => {
 			expect(error.code).toBe("ambiguous_class");
 			expect(error.candidates).toHaveLength(10);
 		}
-	});
-});
-
-describe("inline projection", () => {
-	it("nests members and marks a repeat", () => {
-		const tree = buildPageObjectTree(makeWorkspace(SHARED), "HomePage", {
-			format: "inline",
-		});
-		expect(tree.inline).toBeDefined();
-		const inline = tree.inline;
-		if (!inline) {
-			throw new Error("inline view missing");
-		}
-		expect(inline.className).toBe("HomePage");
-		const apply = inline.members?.find((member) => member.name === "Apply");
-		expect(apply?.child?.className).toBe("Button");
-		const rows = inline.members?.find((member) => member.name === "Rows");
-		expect(rows?.item?.className).toBe("Row");
-		// Button appears under HomePage.Apply first, so the copy under Row is a repeat.
-		const remove = rows?.item?.members?.find(
-			(member) => member.name === "Remove",
-		);
-		expect(remove?.child?.repeated).toBe(true);
-	});
-
-	it("marks a back-edge as cyclic", () => {
-		const tree = buildPageObjectTree(
-			makeWorkspace({
-				"e2e/Node.ts": [
-					PRELUDE,
-					'@RootSelector("Node")',
-					"export class Tree extends RootPageObject {",
-					'  @Selector("child")',
-					"  accessor Child = new Tree();",
-					"}",
-				].join("\n"),
-			}),
-			"Tree",
-		);
-		const inline = toInlineTree(tree);
-		expect(inline.members?.[0].child).toMatchObject({ cyclic: true });
-	});
-
-	it("truncates at its own depth limit", () => {
-		const tree = buildPageObjectTree(makeWorkspace(SHARED), "HomePage");
-		const inline = toInlineTree(tree, { maxDepth: 1 });
-		const apply = inline.members?.find((member) => member.name === "Apply");
-		expect(apply?.child).toMatchObject({ truncated: true });
-	});
-
-	// A class the budget refused is absent from `defs` entirely, so the inline
-	// view has only the ref to go on. Unmarked it reads as a control with no
-	// members, which is a different claim from "we never looked at it".
-	it("marks a class the budget refused as truncated, not as a complete leaf", () => {
-		const tree = buildPageObjectTree(makeWorkspace(SHARED), "HomePage", {
-			maxNodes: 2,
-		});
-		const inline = toInlineTree(tree, { maxDepth: 10 });
-		const missing: string[] = [];
-		const walk = (node: typeof inline): void => {
-			if (!tree.defs[node.ref]) {
-				missing.push(node.ref);
-				expect(node.truncated).toBe(true);
-				expect(node.members).toBeUndefined();
-			}
-			for (const member of node.members ?? []) {
-				if (member.child) {
-					walk(member.child);
-				}
-				if (member.item) {
-					walk(member.item);
-				}
-			}
-		};
-		walk(inline);
-		expect(missing.length).toBeGreaterThan(0);
 	});
 });
 

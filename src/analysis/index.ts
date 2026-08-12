@@ -58,7 +58,6 @@ export {
 	type DiscoverOptions,
 	discoverPageObjects,
 } from "./page-objects/discover";
-export { toInlineTree } from "./page-objects/inline";
 export {
 	buildPageObjectTree,
 	isDynamicMember,
