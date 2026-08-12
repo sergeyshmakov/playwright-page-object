@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { exports as resolveExports } from "resolve.exports";
 import type { CompilerOptions } from "ts-morph";
 import { ts } from "ts-morph";
 import {
@@ -83,8 +84,25 @@ export function locateTsConfig(
 	return { path: null, source: "none" };
 }
 
-/** `extends` hops followed when fingerprinting a config for freshness. */
+/**
+ * `extends` hops followed when fingerprinting a config for freshness.
+ *
+ * Counts configs actually *read*, not paths enqueued. An extensionless
+ * `extends: "./base"` has two legal spellings and both are watched — a config
+ * coming into existence changes the effective options as much as an edit does —
+ * so counting enqueued paths spent the budget twice per hop and truncated a
+ * four-deep chain at the halfway mark, silently dropping the outermost bases
+ * from the fingerprint while TypeScript itself still applied them.
+ */
 const MAX_EXTENDS_HOPS = 8;
+
+/**
+ * Hard ceiling on watched paths, including the spellings that do not exist.
+ *
+ * The hop budget bounds the depth of the walk; this bounds its width, so an
+ * `extends` array of many entries cannot make the list unbounded.
+ */
+const MAX_WATCHED_CONFIGS = 64;
 
 /**
  * Every tsconfig whose contents decide this one's effective options: the file
@@ -104,7 +122,12 @@ export function tsConfigChain(tsConfigFilePath: string): string[] {
 	const chain: string[] = [];
 	const seen = new Set<string>();
 	const queue = [tsConfigFilePath];
-	while (queue.length > 0 && chain.length < MAX_EXTENDS_HOPS) {
+	let hops = 0;
+	while (
+		queue.length > 0 &&
+		hops < MAX_EXTENDS_HOPS &&
+		chain.length < MAX_WATCHED_CONFIGS
+	) {
 		const current = queue.shift();
 		if (current === undefined) {
 			break;
@@ -115,6 +138,16 @@ export function tsConfigChain(tsConfigFilePath: string): string[] {
 		}
 		seen.add(key);
 		chain.push(current);
+		if (!existsFile(current)) {
+			// A spelling that is not on disk. Watched — that is the whole point of
+			// enqueueing both — but it contributes no `extends`, so charging it to
+			// the hop budget would let phantoms decide how deep a real chain is
+			// followed. Tested by existence rather than by the read result:
+			// `ts.readConfigFile` hands back an empty config plus an error for a
+			// file that is not there, so the config alone cannot tell them apart.
+			continue;
+		}
+		hops += 1;
 		const read = ts.readConfigFile(current, (file) => ts.sys.readFile(file));
 		const extended: unknown = read.config?.extends;
 		const specifiers =
@@ -174,12 +207,80 @@ function packageExtends(fromDirectory: string, specifier: string): string[] {
 				return [candidate];
 			}
 		}
+		// The layout candidates missed, so ask the package itself. TypeScript
+		// resolves an `extends` package specifier through the manifest, and a
+		// config published as `exports: {".": "./base.json"}` or under `main` has
+		// no `tsconfig.json` at the path above — which read as "no base config at
+		// all", leaving every later call on compiler options that had moved.
+		const declared = manifestExtends(
+			path.join(directory, "node_modules"),
+			specifier,
+		);
+		if (declared) {
+			return [declared];
+		}
 		const parent = path.dirname(directory);
 		if (parent === directory) {
 			return [];
 		}
 		directory = parent;
 	}
+}
+
+/** Package name and subpath of an `extends` specifier: `@a/b/c.json` -> `@a/b`, `./c.json`. */
+function splitSpecifier(specifier: string): { name: string; subpath: string } {
+	const parts = specifier.split("/");
+	const count = specifier.startsWith("@") ? 2 : 1;
+	const name = parts.slice(0, count).join("/");
+	const rest = parts.slice(count).join("/");
+	return { name, subpath: rest ? `./${rest}` : "." };
+}
+
+/** The config a package's own manifest points `specifier` at, if it exists. */
+function manifestExtends(
+	nodeModules: string,
+	specifier: string,
+): string | undefined {
+	const { name, subpath } = splitSpecifier(specifier);
+	const packageRoot = path.join(nodeModules, name);
+	let manifest: Record<string, unknown>;
+	try {
+		manifest = JSON.parse(
+			fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+		) as Record<string, unknown>;
+	} catch {
+		return undefined;
+	}
+
+	const targets: string[] = [];
+	if (manifest.exports !== undefined) {
+		try {
+			// `require` because a tsconfig is JSON, and TypeScript reads it with no
+			// condition of its own that `resolve.exports` would know about.
+			targets.push(
+				...(resolveExports(manifest, subpath, { require: true }) ?? []),
+			);
+		} catch {
+			// An exports map that does not cover this subpath. The `main` fallback
+			// below is still worth trying.
+		}
+	}
+	if (subpath === ".") {
+		for (const field of ["tsconfig", "main"]) {
+			const value = manifest[field];
+			if (typeof value === "string") {
+				targets.push(value);
+			}
+		}
+	}
+
+	for (const target of targets) {
+		const resolved = path.join(packageRoot, target);
+		if (existsFile(resolved)) {
+			return resolved;
+		}
+	}
+	return undefined;
 }
 
 /**

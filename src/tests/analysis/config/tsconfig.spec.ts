@@ -8,6 +8,7 @@ import {
 	SCAN_EXTENSIONS,
 	SCAN_GLOB,
 	synthesizedCompilerOptions,
+	tsConfigChain,
 	tsConfigFileNames,
 } from "../../../analysis/config/tsconfig";
 import { AnalysisLimitError } from "../../../analysis/diagnostics";
@@ -382,5 +383,92 @@ describe("maxFiles pre-scan", () => {
 		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
 			"src/a.ts",
 		]);
+	});
+});
+
+/**
+ * The list of configs whose contents decide the located one's options. It is
+ * the freshness fingerprint: anything missing from it is a file the server
+ * keeps using stale options from, while promising every caller that "results
+ * reflect the files on disk at the moment of the call".
+ */
+describe("tsConfigChain", () => {
+	/** Basenames in the chain, so assertions do not care about the temp root. */
+	function names(root: string): string[] {
+		return tsConfigChain(path.join(root, "tsconfig.json")).map((one) =>
+			path.relative(root, one).split(path.sep).join("/"),
+		);
+	}
+
+	it("follows a deep extensionless chain to the end", () => {
+		// Each extensionless hop has two legal spellings and both are watched, so
+		// counting *enqueued paths* against the hop budget spent it twice per hop
+		// and cut the chain at the halfway mark. The budget now counts configs
+		// actually read.
+		const files: Record<string, string> = {
+			"tsconfig.json": JSON.stringify({ extends: "./a" }),
+		};
+		const letters = ["a", "b", "c", "d", "e"];
+		letters.forEach((letter, index) => {
+			const next = letters[index + 1];
+			files[`${letter}.json`] = JSON.stringify(
+				next
+					? { extends: `./${next}` }
+					: { compilerOptions: { target: "ES2022" } },
+			);
+		});
+		const chain = names(scratch(files));
+		for (const letter of letters) {
+			expect(chain, `${letter}.json must be watched`).toContain(
+				`${letter}.json`,
+			);
+		}
+	});
+
+	it("resolves a package config published through `exports`", () => {
+		// A config package with no `tsconfig.json` at the path the layout guess
+		// builds reads as "no base config at all", which is how a live server ends
+		// up on compiler options that moved.
+		const root = scratch({
+			"node_modules/@repo/tsconfig/package.json": JSON.stringify({
+				name: "@repo/tsconfig",
+				exports: { ".": "./base.json" },
+			}),
+			"node_modules/@repo/tsconfig/base.json": JSON.stringify({
+				compilerOptions: { target: "ES2022" },
+			}),
+			"tsconfig.json": JSON.stringify({ extends: "@repo/tsconfig" }),
+		});
+		expect(names(root)).toContain("node_modules/@repo/tsconfig/base.json");
+	});
+
+	it("falls back to the manifest `main` when there is no exports map", () => {
+		const root = scratch({
+			"node_modules/@repo/tsconfig/package.json": JSON.stringify({
+				name: "@repo/tsconfig",
+				main: "./configs/base.json",
+			}),
+			"node_modules/@repo/tsconfig/configs/base.json": JSON.stringify({
+				compilerOptions: { target: "ES2022" },
+			}),
+			"tsconfig.json": JSON.stringify({ extends: "@repo/tsconfig" }),
+		});
+		expect(names(root)).toContain(
+			"node_modules/@repo/tsconfig/configs/base.json",
+		);
+	});
+
+	it("still watches a relative base that does not exist yet", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ extends: "./base.json" }),
+		});
+		expect(names(root)).toContain("base.json");
+	});
+
+	it("terminates on a config that extends itself", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ extends: "./tsconfig.json" }),
+		});
+		expect(names(root)).toEqual(["tsconfig.json"]);
 	});
 });
