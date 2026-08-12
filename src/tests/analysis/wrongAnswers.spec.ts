@@ -1,5 +1,3 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { readPlaywrightConfig } from "../../analysis/config/playwrightConfig";
@@ -9,6 +7,7 @@ import { buildPageObjectTree } from "../../analysis/page-objects/tree";
 import { Workspace } from "../../analysis/workspace";
 import { validateServerOptions } from "../../mcp/options";
 import { libImport, makeWorkspace } from "./helpers/inMemory";
+import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
 
 /**
  * Questions the tools answered confidently and wrongly.
@@ -20,23 +19,12 @@ import { libImport, makeWorkspace } from "./helpers/inMemory";
  * reports no members because a loop counter ran out.
  */
 
-const roots: string[] = [];
-
 function scratch(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-wrong-"));
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		const absolute = path.join(root, relativePath);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, contents, "utf8");
-	}
-	return root;
+	return scratchRepo(files, { prefix: "ppo-wrong-" });
 }
 
 afterAll(() => {
-	for (const root of roots) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 	Workspace.reset();
 });
 

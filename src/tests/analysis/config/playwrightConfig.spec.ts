@@ -1,14 +1,10 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { MAX_CONFIG_CANDIDATES } from "../../../analysis/config/configDiscovery";
 import { readPlaywrightConfig } from "../../../analysis/config/playwrightConfig";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import { Workspace, type WorkspaceOptions } from "../../../analysis/workspace";
 import { exampleWorkspace } from "../helpers/example";
-
-const temporaryRoots: string[] = [];
+import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
 
 /**
  * Playwright configs live outside the tsconfig `include` in practice, so they
@@ -19,21 +15,13 @@ function workspaceWithConfig(
 	files: Record<string, string>,
 	options: Partial<WorkspaceOptions> = {},
 ): Workspace {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-pwcfg-"));
-	temporaryRoots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		const absolute = path.join(root, relativePath);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, contents, "utf8");
-	}
+	const root = scratchRepo(files, { prefix: "ppo-pwcfg-" });
 	Workspace.reset();
 	return Workspace.acquire({ projectRoot: root, ...options });
 }
 
 afterAll(() => {
-	for (const root of temporaryRoots) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 	Workspace.reset();
 });
 

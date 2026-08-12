@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { Node } from "ts-morph";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,6 +16,7 @@ import {
 	makeWorkspace,
 	memoryPath,
 } from "../helpers/inMemory";
+import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
 
 function resolveIn(
 	files: Record<string, string>,
@@ -607,24 +607,13 @@ describe("resolveIdentifier through baseUrl", () => {
 });
 
 describe("relative module resolution freshness", () => {
-	const roots: string[] = [];
-
 	afterEach(() => {
 		Workspace.reset();
-		for (const root of roots.splice(0)) {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
+		cleanupScratchRoots();
 	});
 
 	function scratch(files: Record<string, string>): string {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-resolve-"));
-		roots.push(root);
-		for (const [relativePath, contents] of Object.entries(files)) {
-			const absolute = path.join(root, relativePath);
-			fs.mkdirSync(path.dirname(absolute), { recursive: true });
-			fs.writeFileSync(absolute, contents, "utf8");
-		}
-		return root;
+		return scratchRepo(files, { prefix: "ppo-resolve-" });
 	}
 
 	/**

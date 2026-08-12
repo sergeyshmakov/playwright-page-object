@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { Project } from "ts-morph";
 import { afterAll, describe, expect, it } from "vitest";
@@ -10,6 +9,7 @@ import {
 } from "../../analysis/util/workspaceRoot";
 import { Workspace } from "../../analysis/workspace";
 import { libImport, makeWorkspace } from "./helpers/inMemory";
+import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
 
 /**
  * Numbers a caller acts on, and the probe behind the one piece of advice this
@@ -21,23 +21,12 @@ import { libImport, makeWorkspace } from "./helpers/inMemory";
  * action.
  */
 
-const roots: string[] = [];
-
 function scratch(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-probe-"));
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		const absolute = path.join(root, relativePath);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, contents, "utf8");
-	}
-	return root;
+	return scratchRepo(files, { prefix: "ppo-probe-" });
 }
 
 afterAll(() => {
-	for (const root of roots) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 	Workspace.reset();
 });
 

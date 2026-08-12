@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { Project } from "ts-morph";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +13,12 @@ import {
 	registerWorkspaceRoot,
 } from "../../../analysis/util/workspaceRoot";
 import { Workspace } from "../../../analysis/workspace";
+import {
+	canLink,
+	cleanupScratchRoots,
+	scratchRepo,
+	trackScratchRoot,
+} from "../helpers/onDisk";
 
 /**
  * Telling a linked workspace package apart from an installed dependency.
@@ -28,42 +33,8 @@ import { Workspace } from "../../../analysis/workspace";
  * no links at all.
  */
 
-const roots: string[] = [];
-
 function scratch(files: Record<string, string>): string {
-	const root = fs.realpathSync.native(
-		fs.mkdtempSync(path.join(os.tmpdir(), "ppo-link-")),
-	);
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		const absolute = path.join(root, relativePath);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, contents, "utf8");
-	}
-	return root;
-}
-
-/**
- * `fs.symlinkSync(target, link, "junction")` makes a directory junction on
- * Windows — which needs no elevation, unlike a *file* symlink — and an ordinary
- * directory symlink everywhere else, because POSIX ignores the type argument.
- * Restricted containers and some overlay mounts still refuse; those skip.
- */
-function canLink(): boolean {
-	const probe = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-linkprobe-"));
-	try {
-		fs.mkdirSync(path.join(probe, "target"));
-		fs.symlinkSync(
-			path.join(probe, "target"),
-			path.join(probe, "link"),
-			"junction",
-		);
-		return fs.existsSync(path.join(probe, "link"));
-	} catch {
-		return false;
-	} finally {
-		fs.rmSync(probe, { recursive: true, force: true });
-	}
+	return scratchRepo(files, { prefix: "ppo-link-", real: true });
 }
 
 const LINKS_WORK = canLink();
@@ -85,7 +56,7 @@ function link(root: string, from: string, to: string): void {
 function aliasOf(root: string): string {
 	const alias = path.join(path.dirname(root), `${path.basename(root)}-alias`);
 	fs.symlinkSync(root, alias, "junction");
-	roots.push(alias);
+	trackScratchRoot(alias);
 	return alias;
 }
 
@@ -120,9 +91,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-	for (const root of roots) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 });
 
 describe.skipIf(!LINKS_WORK)("isWorkspaceLocal", () => {

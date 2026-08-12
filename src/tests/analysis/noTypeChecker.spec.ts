@@ -1,6 +1,3 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { Project } from "ts-morph";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildCoverageReport } from "../../analysis/coverage/mapCoverage";
@@ -9,6 +6,7 @@ import { buildPageObjectTree } from "../../analysis/page-objects/tree";
 import { buildTestIdTree } from "../../analysis/tsx/tree";
 import { Workspace } from "../../analysis/workspace";
 import { EXAMPLE_ROOT } from "./helpers/example";
+import { cleanupScratchRoots, scratchRepo } from "./helpers/onDisk";
 
 /**
  * The type checker must never be materialised by a default tool call.
@@ -36,24 +34,13 @@ function programCreated(project: Project): boolean {
 	return context.program._isCompilerProgramCreated();
 }
 
-const roots: string[] = [];
-
 function scratch(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-checker-"));
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		const absolute = path.join(root, relativePath);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, contents, "utf8");
-	}
-	return root;
+	return scratchRepo(files, { prefix: "ppo-checker-" });
 }
 
 afterEach(() => {
 	Workspace.reset();
-	for (const root of roots.splice(0)) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 });
 
 describe("no type checker on the default path", () => {

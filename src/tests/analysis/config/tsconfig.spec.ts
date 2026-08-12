@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -14,24 +13,14 @@ import {
 import { AnalysisLimitError } from "../../../analysis/diagnostics";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import { Workspace } from "../../../analysis/workspace";
-
-const roots: string[] = [];
+import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
 
 function scratch(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-tscfg-"));
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		const absolute = path.join(root, relativePath);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, contents, "utf8");
-	}
-	return root;
+	return scratchRepo(files, { prefix: "ppo-tscfg-" });
 }
 
 afterAll(() => {
-	for (const root of roots) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 	Workspace.reset();
 });
 

@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { buildCoverageReport } from "../../../analysis/coverage/mapCoverage";
 import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import { Workspace } from "../../../analysis/workspace";
+import { canLink, cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
 
 /**
  * Which modules the scanned sources do not contain.
@@ -21,37 +21,8 @@ import { Workspace } from "../../../analysis/workspace";
  * Real filesystem, because ts-morph's in-memory host models no links at all.
  */
 
-const roots: string[] = [];
-
 function scratch(files: Record<string, string>): string {
-	const root = fs.realpathSync.native(
-		fs.mkdtempSync(path.join(os.tmpdir(), "ppo-census-")),
-	);
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		const absolute = path.join(root, relativePath);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, contents, "utf8");
-	}
-	return root;
-}
-
-/** A directory junction on Windows, an ordinary directory symlink elsewhere. */
-function canLink(): boolean {
-	const probe = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-censusprobe-"));
-	try {
-		fs.mkdirSync(path.join(probe, "target"));
-		fs.symlinkSync(
-			path.join(probe, "target"),
-			path.join(probe, "link"),
-			"junction",
-		);
-		return fs.existsSync(path.join(probe, "link"));
-	} catch {
-		return false;
-	} finally {
-		fs.rmSync(probe, { recursive: true, force: true });
-	}
+	return scratchRepo(files, { prefix: "ppo-census-", real: true });
 }
 
 const LINKS_WORK = canLink();
@@ -108,9 +79,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-	for (const root of roots) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 });
 
 describe.skipIf(!LINKS_WORK)("external module census", () => {

@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TestIdTree } from "../../analysis";
@@ -7,6 +6,11 @@ import { buildCoverageReport } from "../../analysis/coverage/mapCoverage";
 import { buildPageObjectTree } from "../../analysis/page-objects/tree";
 import { buildTestIdTree } from "../../analysis/tsx/tree";
 import { Workspace } from "../../analysis/workspace";
+import {
+	cleanupScratchRoots,
+	scratchRepo,
+	writeIn as write,
+} from "./helpers/onDisk";
 
 /**
  * The three builders are memoized per epoch, which is the whole reason a repeat
@@ -15,28 +19,13 @@ import { Workspace } from "../../analysis/workspace";
  * files the answer was computed from have moved on.
  */
 
-const roots: string[] = [];
-
 function scratch(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-memo-"));
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		write(root, relativePath, contents);
-	}
-	return root;
-}
-
-function write(root: string, relativePath: string, contents: string): void {
-	const absolute = path.join(root, relativePath);
-	fs.mkdirSync(path.dirname(absolute), { recursive: true });
-	fs.writeFileSync(absolute, contents, "utf8");
+	return scratchRepo(files, { prefix: "ppo-memo-" });
 }
 
 afterEach(() => {
 	Workspace.reset();
-	for (const root of roots.splice(0)) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 });
 
 const PAGE_OBJECT = [

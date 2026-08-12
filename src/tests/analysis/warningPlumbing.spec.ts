@@ -1,6 +1,3 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildCoverageReport } from "../../analysis/coverage/mapCoverage";
 import { discoverPageObjects } from "../../analysis/page-objects/discover";
@@ -8,6 +5,7 @@ import { buildPageObjectTree } from "../../analysis/page-objects/tree";
 import { buildTestIdTree } from "../../analysis/tsx/tree";
 import type { Diagnostic } from "../../analysis/types";
 import { Workspace } from "../../analysis/workspace";
+import { cleanupScratchRoots, scratchRepo, writeIn } from "./helpers/onDisk";
 
 /**
  * The regression this whole cluster exists for.
@@ -28,12 +26,9 @@ import { Workspace } from "../../analysis/workspace";
 let root: string;
 
 beforeAll(() => {
-	root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-plumbing-"));
-	const write = (relative: string, body: string) => {
-		const absolute = path.join(root, relative);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, body, "utf8");
-	};
+	root = scratchRepo({}, { prefix: "ppo-plumbing-" });
+	const write = (relative: string, body: string) =>
+		writeIn(root, relative, body);
 
 	// Nested, non-canonical basename, and the attribute is computed — so it is
 	// found, read, and still yields nothing usable. The analysis falls back to
@@ -78,7 +73,7 @@ beforeAll(() => {
 
 afterAll(() => {
 	Workspace.reset();
-	fs.rmSync(root, { recursive: true, force: true });
+	cleanupScratchRoots();
 });
 
 function workspace(): Workspace {

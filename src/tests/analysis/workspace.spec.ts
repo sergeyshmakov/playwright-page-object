@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
-import * as os from "node:os";
 import * as path from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,11 @@ import { toPosix } from "../../analysis/util/paths";
 import { resolveRelativeModule } from "../../analysis/util/resolve";
 import { Workspace } from "../../analysis/workspace";
 import { makeWorkspace } from "./helpers/inMemory";
+import {
+	cleanupScratchRoots,
+	scratchRepo,
+	writeIn as write,
+} from "./helpers/onDisk";
 
 /**
  * The `fs` ts-morph reads through.
@@ -24,21 +28,8 @@ const readingFs = createRequire(path.join(process.cwd(), "package.json"))(
 	"node:fs",
 ) as typeof fs;
 
-const roots: string[] = [];
-
 function scratch(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-ws-"));
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		write(root, relativePath, contents);
-	}
-	return root;
-}
-
-function write(root: string, relativePath: string, contents: string): void {
-	const absolute = path.join(root, relativePath);
-	fs.mkdirSync(path.dirname(absolute), { recursive: true });
-	fs.writeFileSync(absolute, contents, "utf8");
+	return scratchRepo(files, { prefix: "ppo-ws-" });
 }
 
 /** Workspace-relative posix paths of everything the workspace analyses. */
@@ -78,9 +69,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	Workspace.reset();
-	for (const root of roots.splice(0)) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 });
 
 describe("Workspace.acquire", () => {

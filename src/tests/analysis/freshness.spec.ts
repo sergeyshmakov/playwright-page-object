@@ -1,8 +1,11 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { Workspace } from "../../analysis/workspace";
+import {
+	cleanupScratchRoots,
+	scratchRepo,
+	writeIn as write,
+} from "./helpers/onDisk";
 
 /**
  * What a tool call is allowed to keep from the last one.
@@ -19,29 +22,12 @@ import { Workspace } from "../../analysis/workspace";
  * immediately asks again is the opposite of silent.
  */
 
-const roots: string[] = [];
-
 function scratch(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppo-fresh-"));
-	roots.push(root);
-	for (const [relativePath, contents] of Object.entries(files)) {
-		const absolute = path.join(root, relativePath);
-		fs.mkdirSync(path.dirname(absolute), { recursive: true });
-		fs.writeFileSync(absolute, contents, "utf8");
-	}
-	return root;
-}
-
-function write(root: string, relativePath: string, contents: string): void {
-	const absolute = path.join(root, relativePath);
-	fs.mkdirSync(path.dirname(absolute), { recursive: true });
-	fs.writeFileSync(absolute, contents, "utf8");
+	return scratchRepo(files, { prefix: "ppo-fresh-" });
 }
 
 afterAll(() => {
-	for (const root of roots) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	cleanupScratchRoots();
 	Workspace.reset();
 });
 
