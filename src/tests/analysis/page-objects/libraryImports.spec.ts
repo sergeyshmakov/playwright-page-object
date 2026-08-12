@@ -265,3 +265,82 @@ describe("barrel shapes that must not be over-read", () => {
 		).toBeUndefined();
 	});
 });
+
+describe("what a namespace import of a barrel is allowed to claim", () => {
+	/**
+	 * A boolean "does this barrel reach the library" made the whole namespace
+	 * trusted, so a barrel that re-exports `PageObject` from the package while
+	 * defining its own `Selector` had `po.Selector` read as the library's
+	 * decorator. The project's own decorator was never seen, and the class was
+	 * reported with members it does not have.
+	 */
+	it("does not claim a name the barrel defines itself", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/pom.ts": [
+					'export { RootPageObject, RootSelector } from "playwright-page-object";',
+					"export const Selector = (_id: string) => (..._a: never[]) => {};",
+				].join("\n"),
+				"e2e/HomePage.ts": [
+					'import * as po from "./pom";',
+					"@po.RootSelector()",
+					"export class HomePage extends po.RootPageObject {",
+					'  @po.Selector("Title")',
+					"  accessor Title!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		const home = discovery.pageObjects.find(
+			(one) => one.className === "HomePage",
+		);
+		// The class is still found - `po.RootPageObject` and `po.RootSelector`
+		// really are the library's - but the local `Selector` is not ours.
+		expect(home).toBeDefined();
+		expect(home?.counts.members).toBe(0);
+	});
+
+	it("still claims the names the barrel does take from the library", () => {
+		const discovery = discoverPageObjects(
+			makeWorkspace({
+				"e2e/pom.ts": 'export * from "playwright-page-object";',
+				"e2e/HomePage.ts": [
+					'import * as po from "./pom";',
+					"@po.RootSelector()",
+					"export class HomePage extends po.RootPageObject {",
+					'  @po.Selector("Title")',
+					"  accessor Title!: never;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		expect(
+			discovery.pageObjects.find((one) => one.className === "HomePage")?.counts
+				.members,
+		).toBe(1);
+	});
+
+	it("follows a chain of six barrels", () => {
+		// `seen` is what makes the walk terminate, so the hop cap is a cost bound
+		// and five of them cut a real chain off before its exports were read.
+		const files: Record<string, string> = {
+			"e2e/b5.ts": 'export * from "playwright-page-object";',
+		};
+		for (let level = 4; level >= 0; level -= 1) {
+			files[`e2e/b${level}.ts`] = `export * from "./b${level + 1}";`;
+		}
+		files["e2e/HomePage.ts"] = [
+			'import { RootPageObject, RootSelector, Selector } from "./b0";',
+			'@RootSelector("Root")',
+			"export class HomePage extends RootPageObject {",
+			'  @Selector("Title")',
+			"  accessor Title!: never;",
+			"}",
+		].join("\n");
+		expect(
+			discoverPageObjects(makeWorkspace(files)).pageObjects.find(
+				(one) => one.className === "HomePage",
+			)?.counts.members,
+		).toBe(1);
+	});
+});

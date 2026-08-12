@@ -159,45 +159,53 @@ function isLibrarySpecifier(specifier: string, ctx: AnalysisContext): boolean {
 /**
  * How many local re-export hops to follow looking for the library.
  *
- * Barrels nest — `./testing` re-exports `./testing/pom`, which re-exports the
- * package — but not deeply, and each hop is a module resolution.
+ * A cost bound, not the termination argument - `seen` is that, and it holds
+ * however deep the chain goes. It was 5, which cut a six-barrel chain off
+ * before its exports were read; a monorepo that re-exports through a package
+ * index, a testing index and a per-app shim reaches that without trying.
  */
-const MAX_BARREL_HOPS = 5;
+const MAX_BARREL_HOPS = 32;
 
 /**
- * The canonical library export a local barrel publishes under `exported`.
+ * Every canonical library name a local barrel publishes, by the name it
+ * publishes it under.
  *
- * Re-exporting the library through one project module — `export { Selector }
+ * Re-exporting the library through one project module - `export { Selector }
  * from "playwright-page-object"` in `src/testing/pom.ts`, imported everywhere
- * as `from "../testing/pom"` — is a normal convention, and it used to defeat
+ * as `from "../testing/pom"` - is a normal convention, and it used to defeat
  * discovery completely: the specifier is relative, so no name was recognised,
  * the decorator map came back empty, and every class in the repository
  * disappeared from `list_page_objects`, the trees and coverage at once.
  *
+ * A map rather than a per-name lookup or a "does this barrel reach the
+ * library" boolean. The boolean was the bug behind namespace imports: a barrel
+ * that re-exports `PageObject` from the package *and* defines its own
+ * `Selector` made the whole namespace trusted, so `po.Selector` resolved to the
+ * library's decorator and the project's own was never seen. Name by name is the
+ * only honest answer, and one walk produces all of them.
+ *
  * Only `export ... from` and `export *` are followed, plus the two-step
- * `import { X } from "the-library"; export { X };`. A barrel that renames on
- * the way out — `export { Selector as PomSelector }` — is still missed, because
- * finding it would mean resolving every relative import in the repository
- * rather than only those already naming a canonical export.
+ * `import { X } from "the-library"; export { X };`. A local `export const
+ * Selector = ...` is not in the map, which is exactly the point.
  */
-function canonicalThroughBarrel(
+function barrelExports(
 	file: SourceFile,
-	exported: string,
 	ctx: AnalysisContext,
 	seen: Set<string>,
-): string | undefined {
+): Map<string, string> {
+	const out = new Map<string, string>();
 	if (seen.size >= MAX_BARREL_HOPS || seen.has(file.getFilePath())) {
-		return undefined;
+		return out;
 	}
 	seen.add(file.getFilePath());
 
-	/** One hop: the library ends the walk, a relative module continues it. */
-	const through = (specifier: string, inward: string): string | undefined => {
+	/** What `specifier` publishes, by outward name. */
+	const through = (specifier: string): Map<string, string> => {
 		if (isDirectLibrarySpecifier(specifier, ctx)) {
-			return CANONICAL_EXPORTS.has(inward) ? inward : undefined;
+			return new Map([...CANONICAL_EXPORTS].map((name) => [name, name]));
 		}
 		const next = resolveRelativeModule(ctx.project, file, specifier);
-		return next ? canonicalThroughBarrel(next, inward, ctx, seen) : undefined;
+		return next ? barrelExports(next, ctx, seen) : new Map();
 	};
 
 	for (const declaration of file.getExportDeclarations()) {
@@ -207,19 +215,14 @@ function canonicalThroughBarrel(
 		const specifier = declaration.getModuleSpecifierValue();
 		const named = declaration.getNamedExports();
 		if (named.length === 0) {
-			// `export * as controls from "the-library"` also has no named exports,
-			// and it publishes exactly one name — `controls`. Treating it as a plain
-			// star export said the barrel re-exported `Selector`, so a *local*
-			// export of that name elsewhere in the barrel would be read as the
-			// library's decorator. Skipped rather than followed: what it binds is a
-			// namespace, and this function answers with canonical names.
-			if (declaration.getNamespaceExport()) {
+			// `export * as controls from "the-library"` publishes exactly one name -
+			// `controls` - and treating it as a star export claimed the barrel
+			// re-exported every library name directly.
+			if (declaration.getNamespaceExport() || specifier === undefined) {
 				continue;
 			}
-			// `export * from "..."`: the name passes through unchanged.
-			const found = specifier ? through(specifier, exported) : undefined;
-			if (found) {
-				return found;
+			for (const [name, canonical] of through(specifier)) {
+				out.set(name, canonical);
 			}
 			continue;
 		}
@@ -227,37 +230,33 @@ function canonicalThroughBarrel(
 			if (one.isTypeOnly()) {
 				continue;
 			}
-			const outward = (one.getAliasNode() ?? one.getNameNode()).getText();
-			if (outward !== exported) {
-				continue;
-			}
 			const inward = one.getName();
+			const outward = (one.getAliasNode() ?? one.getNameNode()).getText();
 			// `export { X } from "..."`, or a bare `export { X }` re-publishing
 			// something this file imported.
 			const hop = specifier ?? importedFrom(file, inward);
-			const found = hop ? through(hop, inward) : undefined;
-			if (found) {
-				return found;
+			const canonical = hop ? through(hop).get(inward) : undefined;
+			if (canonical) {
+				out.set(outward, canonical);
 			}
 		}
 	}
-	return undefined;
+	return out;
 }
 
 /**
- * Adds any canonical names a relative import turns out to have come from the
- * library, following {@link canonicalThroughBarrel}.
+ * Adds whatever a relative import turns out to have taken from the library.
  *
- * The `CANONICAL_EXPORTS` test on the *imported* name is what keeps this cheap:
- * a repository's ordinary relative imports are dismissed without resolving
- * anything, and only a name that could be ours pays for a module load.
+ * Named imports are filtered on the imported name before anything is resolved,
+ * so a repository's ordinary relative imports are dismissed on a set lookup and
+ * never load a module. A namespace import has no such name and always resolves
+ * its barrel - which is why {@link barrelExports} answers in one walk.
  */
 function collectThroughBarrel(
 	sourceFile: SourceFile,
 	declaration: ImportDeclaration,
 	ctx: AnalysisContext,
 	aliases: Map<string, string>,
-	namespaces: Set<string>,
 ): void {
 	const namespaceImport = declaration.getNamespaceImport();
 	const wanted = declaration
@@ -275,61 +274,28 @@ function collectThroughBarrel(
 	if (!barrel) {
 		return;
 	}
-	// `import * as po from "./pom"` binds every export at once, so there is no
-	// imported name to test cheaply and no canonical name to map it to. The
-	// question is only whether this barrel leads to the library at all; if it
-	// does, `canonicalLocalName` resolves `po.Selector` from the suffix, and a
-	// suffix outside `CANONICAL_EXPORTS` is rejected there as it always was.
-	if (namespaceImport && barrelReachesLibrary(barrel, ctx, new Set())) {
-		namespaces.add(namespaceImport.getText());
+	const published = barrelExports(barrel, ctx, new Set());
+	if (published.size === 0) {
+		return;
+	}
+
+	if (namespaceImport) {
+		// Recorded per member rather than by trusting the namespace wholesale:
+		// `po.Selector` is the library's only if *this barrel* got `Selector` from
+		// the library. `canonicalLocalName` reads these dotted keys.
+		const prefix = namespaceImport.getText();
+		for (const [name, canonical] of published) {
+			aliases.set(`${prefix}.${name}`, canonical);
+		}
 	}
 	for (const named of wanted) {
-		const canonical = canonicalThroughBarrel(
-			barrel,
-			named.getName(),
-			ctx,
-			new Set(),
-		);
+		const canonical = published.get(named.getName());
 		if (canonical === undefined) {
 			continue;
 		}
 		const alias = named.getAliasNode();
 		aliases.set(alias ? alias.getText() : named.getName(), canonical);
 	}
-}
-
-/**
- * Whether any export of this barrel comes from the library.
- *
- * One walk rather than one per canonical name: a namespace import binds the
- * whole module, so the question is about the barrel and not about a name.
- */
-function barrelReachesLibrary(
-	file: SourceFile,
-	ctx: AnalysisContext,
-	seen: Set<string>,
-): boolean {
-	if (seen.size >= MAX_BARREL_HOPS || seen.has(file.getFilePath())) {
-		return false;
-	}
-	seen.add(file.getFilePath());
-	for (const declaration of file.getExportDeclarations()) {
-		if (declaration.isTypeOnly()) {
-			continue;
-		}
-		const specifier = declaration.getModuleSpecifierValue();
-		if (specifier === undefined) {
-			continue;
-		}
-		if (isDirectLibrarySpecifier(specifier, ctx)) {
-			return true;
-		}
-		const next = resolveRelativeModule(ctx.project, file, specifier);
-		if (next && barrelReachesLibrary(next, ctx, seen)) {
-			return true;
-		}
-	}
-	return false;
 }
 
 /** The module `local` was imported from in `file`, for a bare `export { local }`. */
@@ -372,7 +338,7 @@ export function collectLibraryImports(
 			// be one of ours; every other relative import in the repository is
 			// dismissed on a set lookup.
 			if (isRelativeSpecifier(specifier) && !declaration.isTypeOnly()) {
-				collectThroughBarrel(sourceFile, declaration, ctx, aliases, namespaces);
+				collectThroughBarrel(sourceFile, declaration, ctx, aliases);
 			}
 			continue;
 		}
@@ -433,7 +399,10 @@ export function canonicalLocalName(
 		if (imports.namespaces.has(namespace) && CANONICAL_EXPORTS.has(member)) {
 			return member;
 		}
-		return undefined;
+		// A namespace import of a project *barrel* is recorded member by member,
+		// because only some of what it publishes may be ours. See
+		// `collectThroughBarrel`.
+		return imports.aliases.get(localName);
 	}
 	return imports.aliases.get(localName);
 }
