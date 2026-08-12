@@ -122,6 +122,13 @@ const UNKNOWN_TOTAL = -1;
  */
 const MISSING_DIR = -1;
 /**
+ * How far above the analysed root to look for the lockfile that governs it.
+ *
+ * A backstop only - the walk normally stops at the first lockfile or at the
+ * `.git` boundary, both of which are within a hop or two of any real package.
+ */
+const MAX_LOCKFILE_ANCESTORS = 16;
+/**
  * Environment warnings ship on every payload, so the list has to stay readable.
  * Eight is more than any single misconfiguration produces; a repository that
  * trips more than that has one root cause and the ranking puts it first.
@@ -302,8 +309,6 @@ export class Workspace {
 	 * last acquire. See {@link projectIdentity}.
 	 */
 	private identity: string | null = null;
-	/** Directories holding a lockfile that governs this root. See {@link lockfileDirectories}. */
-	private lockfileDirs: string[] | null = null;
 	/** Summed lockfile mtimes as of the last sweep. See {@link lockfileChanged}. */
 	private lockfileStamp: number | null = null;
 	/** Last known mtime per scanned directory. See {@link scanDirsChanged}. */
@@ -639,34 +644,47 @@ export class Workspace {
 	 * Where a lockfile that governs this root could live: the root itself, and
 	 * the nearest ancestor holding one.
 	 *
-	 * Only the nearest, and cached for the workspace's lifetime. Stat'ing every
-	 * ancestor on every sweep would put a walk to the filesystem root on the hot
-	 * path for a stamp that changes on install, and a monorepo has exactly one
-	 * lockfile above a package — finding the first is finding it.
+	 * Only the nearest: a monorepo has exactly one lockfile above a package, so
+	 * finding the first is finding it. The walk stops there, or at the repository
+	 * boundary — going past `.git` would stat a user's home directory every sweep
+	 * and could only ever find a lockfile belonging to something else.
+	 *
+	 * Deliberately not cached, which the first version of this got wrong. A
+	 * negative result is not stable: a monorepo whose lockfile does not exist
+	 * when the server starts gets one on the next install, and a cache would
+	 * never look again. What is left is a handful of stats that stop at the first
+	 * hit, which is cheaper than being wrong for the rest of the session.
+	 *
+	 * Deliberately not cached. A negative result is not stable: a monorepo whose
+	 * lockfile does not exist when the server starts gets one on the next
+	 * install, and a cache would never look again. The walk is a handful of stats
+	 * that stops at the first lockfile or at the repository boundary, so paying
+	 * it per sweep is cheaper than being wrong for the rest of the session.
 	 */
 	private lockfileDirectories(): string[] {
-		if (this.lockfileDirs !== null) {
-			return this.lockfileDirs;
-		}
 		const directories = [this.root];
 		let current = path.dirname(this.root);
-		for (;;) {
+		for (let hop = 0; hop < MAX_LOCKFILE_ANCESTORS; hop += 1) {
 			const here = current;
-			if (
-				LOCKFILE_NAMES.some(
-					(name) => mtimeOf(path.join(here, name)) !== "missing",
-				)
-			) {
-				directories.push(current);
+			const hasLockfile = LOCKFILE_NAMES.some(
+				(name) => mtimeOf(path.join(here, name)) !== "missing",
+			);
+			if (hasLockfile) {
+				directories.push(here);
 				break;
 			}
-			const parent = path.dirname(current);
-			if (parent === current) {
+			// The repository boundary. Walking past it would stat a user's home
+			// directory on every sweep and could only ever find a lockfile that has
+			// nothing to do with this project.
+			if (mtimeOf(path.join(here, ".git")) !== "missing") {
+				break;
+			}
+			const parent = path.dirname(here);
+			if (parent === here) {
 				break;
 			}
 			current = parent;
 		}
-		this.lockfileDirs = directories;
 		return directories;
 	}
 

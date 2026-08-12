@@ -334,3 +334,26 @@ describe("what the freshness stamps have to reach", () => {
 		expect(ws.currentEpoch).toBeGreaterThan(before);
 	});
 });
+
+describe("a lockfile that arrives after the server does", () => {
+	it("notices an ancestor lockfile created mid-session", () => {
+		// The ancestor search was cached for the workspace's lifetime, so a
+		// negative result was permanent: a monorepo whose lockfile did not exist
+		// at startup never got one as far as the freshness stamp was concerned.
+		const outer = scratch({
+			".git/HEAD": "ref: refs/heads/main",
+			"apps/web/tsconfig.json": JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+			"apps/web/src/a.ts": "export const a = 1;",
+		});
+		const root = path.join(outer, "apps", "web");
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
+		const before = ws.currentEpoch;
+
+		write(outer, "package-lock.json", JSON.stringify({ lockfileVersion: 3 }));
+		ws.revalidate();
+		expect(ws.currentEpoch).toBeGreaterThan(before);
+	});
+});
