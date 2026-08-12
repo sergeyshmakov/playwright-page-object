@@ -513,8 +513,11 @@ function computeCoverageReport(
 
 	const assumeForwarded = options.assumeForwarded === true;
 	const partition = partitionInventory(uiTree.inventory, assumeForwarded);
+	// Kept apart from the raw sweep below: `scope.pageObjectFilesScanned` counts
+	// these and only these.
+	const pageObjectUsages = collectSelectorUsages(discovery);
 	const usages = [
-		...collectSelectorUsages(discovery),
+		...pageObjectUsages,
 		// Deliberately unscoped, even when `poInclude` is set. `poInclude` narrows
 		// *whose selectors are being audited*; it does not narrow what counts as
 		// evidence that an id is used. Scoping the sweep to the page-object file
@@ -827,8 +830,14 @@ function computeCoverageReport(
 			// scope-narrowed warning repeated it in prose. Same defect as counting a
 			// display-capped array: a number derived from the input rather than from
 			// what the run did.
-			pageObjectFilesScanned: new Set(usages.map((usage) => usage.loc.file))
-				.size,
+			// Page-object selectors only. `usages` also carries the raw-locator
+			// sweep when `includeRawLocators` is on, and counting those made every
+			// spec file with a `getByTestId` in it a "page-object file" — one page
+			// object and forty specs reported forty-one, in the block a reader
+			// consults precisely to judge how much the report covers.
+			pageObjectFilesScanned: new Set(
+				pageObjectUsages.map((usage) => usage.loc.file),
+			).size,
 			externalComponentModules: uiTree.externalModules,
 			externalComponentTags: uiTree.stats.externalComponentTags,
 		},

@@ -1364,3 +1364,40 @@ describe("buildCoverageReport - a scoped page-object side and raw locators", () 
 		);
 	});
 });
+
+describe("what scope.pageObjectFilesScanned counts", () => {
+	/**
+	 * The block a reader consults to judge how much of the repository a report
+	 * covers. `usages` carries the raw-locator sweep too once
+	 * `includeRawLocators` is on, so counting it made every spec file holding a
+	 * `getByTestId` a "page-object file" - one page object and forty specs
+	 * reporting forty-one.
+	 */
+	const SPECS = {
+		"e2e/a.spec.ts": [
+			'import { test } from "@playwright/test";',
+			'test("a", async ({ page }) => {',
+			'  await page.getByTestId("Orphan").click();',
+			"});",
+		].join("\n"),
+		"e2e/b.spec.ts": [
+			'import { test } from "@playwright/test";',
+			'test("b", async ({ page }) => {',
+			'  await page.getByTestId("PromoCodeInput").click();',
+			"});",
+		].join("\n"),
+	};
+
+	it("counts page-object files, not the specs the sweep visited", () => {
+		const withRaw = report(SPECS, { includeRawLocators: true });
+		const withoutRaw = report(SPECS);
+		expect(withRaw.scope.pageObjectFilesScanned).toBe(
+			withoutRaw.scope.pageObjectFilesScanned,
+		);
+		expect(withRaw.scope.pageObjectFilesScanned).toBe(1);
+	});
+
+	it("still counts the page-object file that contributed the selectors", () => {
+		expect(report().scope.pageObjectFilesScanned).toBe(1);
+	});
+});
