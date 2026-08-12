@@ -64,8 +64,10 @@ import { planWarnings, type WarningLedger } from "./warnings";
  * directly, with a `Workspace` and nothing else, rather than only through a
  * booted server.
  *
- * That is a property of the signature, not a claim about the suite: every test
- * today goes through a client, so the direct path is available and unused.
+ * `src/tests/mcp/handlers.spec.ts` is that caller: it asks what a payload
+ * contains without booting anything, and it is the only place the session's own
+ * behaviour - a warning sent in full once and abbreviated after - is visible,
+ * because that only appears across two calls sharing one ledger.
  */
 export interface ToolSession {
 	warnings?: WarningLedger;
