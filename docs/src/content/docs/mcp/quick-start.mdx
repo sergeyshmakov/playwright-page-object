@@ -32,7 +32,7 @@ You should see the available flags. If this command fails, fix that error first;
 
 The server uses the MCP stdio transport. Choose your client below and add the matching configuration.
 
-### Claude Code
+### [Claude Code](https://code.claude.com/docs/en/mcp)
 
 For a project-scoped configuration that the team can share, create `.mcp.json` at the repository root:
 
@@ -50,10 +50,10 @@ For a project-scoped configuration that the team can share, create `.mcp.json` a
 Or add it with one command:
 
 ```bash
-claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
+claude mcp add --transport stdio --scope project playwright-page-object -- npx playwright-page-object mcp
 ```
 
-### Cursor
+### [Cursor](https://docs.cursor.com/context/model-context-protocol)
 
 `.cursor/mcp.json`, same shape:
 
@@ -68,7 +68,7 @@ claude mcp add playwright-page-object --scope project -- npx playwright-page-obj
 }
 ```
 
-### VS Code
+### [VS Code](https://code.visualstudio.com/docs/agents/reference/mcp-configuration)
 
 `.vscode/mcp.json`. Note the different top-level key and the explicit `type`:
 
@@ -84,9 +84,15 @@ claude mcp add playwright-page-object --scope project -- npx playwright-page-obj
 }
 ```
 
-### Codex CLI
+### [Codex CLI](https://developers.openai.com/codex/mcp)
 
-`~/.codex/config.toml`:
+Add the server with the CLI:
+
+```bash
+codex mcp add playwright-page-object -- npx playwright-page-object mcp
+```
+
+Or edit `~/.codex/config.toml`. For a project-scoped server in a trusted repository, use `.codex/config.toml` instead.
 
 ```toml
 [mcp_servers.playwright-page-object]
@@ -154,7 +160,7 @@ An agent calls `list_page_objects` before it globs anything, and before it creat
 		"attribute": "data-testid",
 		"attributeSource": "default",
 		"playwrightConfig": "playwright.config.ts",
-		"scanned": 17,
+		"scanned": 18,
 		"total": 6
 	}
 }
@@ -194,7 +200,7 @@ test("removes the first cart item", async ({ checkoutPage }) => {
 });
 ```
 
-No file was opened, and no method name was guessed.
+The agent did not need to open the page-object source files or guess a method name.
 
 ### 3. Which test IDs does static analysis find?
 
@@ -219,7 +225,7 @@ No file was opened, and no method name was guessed.
             Remove  button  :13 (conditional, repeated)
 ```
 
-A leading `-` marks a node with no test ID. `CartItem_*` is a template-literal ID reported as a pattern with its source expression, which explains why the rows use `@ListSelector("CartItem_")`. This response has `meta.fidelity: "full"`, so the tree has no unresolved component boundary under its root.
+A leading `-` marks a node with no test ID. `CartItem_*` is a template-literal ID reported as a pattern with its source expression, which explains why the rows use `@ListSelector("CartItem_")`. This response has `meta.fidelity: "full"`, so the tree has no unresolved component boundary under its root within the scanned source.
 
 ## Next
 

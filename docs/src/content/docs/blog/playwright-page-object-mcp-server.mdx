@@ -5,6 +5,7 @@ head:
   - tag: title
     content: "Why AI Agents Guess Playwright Selectors | POM MCP"
 date: 2026-08-06
+lastUpdated: 2026-08-12
 authors: sergei
 tags:
   - Playwright
@@ -14,8 +15,6 @@ tags:
   - Test Automation
 ---
 
-*Last updated: 2026-08-07 · by Sergei Shmakov*
-
 AI agents guess Playwright selectors when they cannot see the Page Object Model (POM) relationships and test IDs already declared in a repository. The local `playwright-page-object` [MCP](https://modelcontextprotocol.io/) server exposes both through five read-only static-analysis tools. Run `npx playwright-page-object mcp` from a stdio MCP client to query page-object classes and JSX or TSX test IDs before editing a test.
 
 The analyzer reads source with [ts-morph](https://ts-morph.com/). It does not launch a browser, execute project code, or make network requests. It returns compact results to your MCP client, which controls where those results are processed. The server ships in the same MIT-licensed package as the [page-object decorators](/getting-started/quick-start/).
@@ -24,7 +23,7 @@ The analyzer reads source with [ts-morph](https://ts-morph.com/). It does not la
 
 Two gaps lead to bad selectors: the agent has not followed your page-object graph, and it has not opened the components that declare your test IDs. Asked to "test the promo flow," it may read several files and still write `getByTestId("promo-input")` for an app whose source declares `PromoCodeInput`.
 
-The first failure is cost. A chain like `checkoutPage.CartItems.first().RemoveButton` spans three classes in three files, and the agent has to load all of them into context to learn it exists. Repeat that for every task, every session.
+The first cost is repeated source discovery. A chain like `checkoutPage.CartItems.first().RemoveButton` spans three classes in three files, and the agent has to load all of them into context to learn it exists. Repeat that for every task and every session.
 
 The second failure is harder to spot because the code looks valid. The agent writes a plausible selector, the test compiles, and it fails at runtime with a timeout. Nothing in the agent's context contained the real `data-testid` value. Playwright's [test-ID guidance](https://playwright.dev/docs/locators#locate-by-test-id) works when the author checks the component first; the MCP tool makes that check explicit for an agent.
 
@@ -42,11 +41,11 @@ The server answers four source-level questions: which page objects exist, what o
 
 The decorator API makes the page-object side possible. `@Selector("PromoCodeInput")` is a static declaration, so the server can extract the selector graph without executing the class. On the app side, it reads `data-testid` attributes from JSX or TSX, including template literals such as `` `CartItem_${item.id}` ``, which become the pattern `CartItem_*` with the original expression attached.
 
-The server checks tracked files on each call, so edits and deletions are visible without a restart. It searches for new files at most once per second.
+The server checks files already loaded in the workspace on each call, so edits and deletions are visible without a restart. A directory change also triggers a rescan for new files. The one-second rescan interval is a backstop for a new file inside a pre-existing nested directory that contains no loaded source.
 
 ## How is this different from Playwright MCP?
 
-Microsoft's [Playwright MCP](https://playwright.dev/docs/getting-started-mcp) drives a live browser through accessibility snapshots. This server never opens a browser. It analyzes page-object classes and JSX or TSX source so an agent can reuse existing test APIs and selectors while writing code. The two servers solve different parts of the same workflow.
+Microsoft's [Playwright MCP](https://playwright.dev/mcp/introduction) drives a live browser through accessibility snapshots. This server never opens a browser. It analyzes page-object classes and JSX or TSX source so an agent can reuse existing test APIs and selectors while writing code. The two servers solve different parts of the same workflow.
 
 ## How do I connect the MCP server to a coding agent?
 
@@ -54,7 +53,7 @@ Install the package, then register its stdio command in your client. Claude Code
 
 ```sh
 $ npm i -D playwright-page-object
-$ claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp
+$ claude mcp add --transport stdio --scope project playwright-page-object -- npx playwright-page-object mcp
 ```
 
 Or the committed file version:
@@ -136,11 +135,11 @@ No. The analyzer reads TypeScript, JSX, and TSX source without running your app,
 
 ### Do I need the playwright-page-object decorators for it to be useful?
 
-The page-object tools, `list_page_objects` and `get_page_object_tree`, need classes the library can identify through decorators, base classes, fixtures, or factory arguments. `get_testid_tree` can build a flat inventory from JSX or TSX without those decorators, although tree fidelity depends on component patterns it can resolve. `map_coverage` needs both page-object selectors and UI source.
+The page-object tools, `list_page_objects` and `get_page_object_tree`, need classes the library can identify through decorators, base classes, or fixtures. Factory relationships can then expand the nested controls of those discovered classes. `get_testid_tree` can build a flat inventory from JSX or TSX without those decorators, although tree fidelity depends on component patterns it can resolve. `map_coverage` needs both page-object selectors and UI source.
 
 ### Which MCP clients does it support?
 
-Any stdio MCP client: Claude Code, Cursor, VS Code, Codex CLI, and others. The server speaks the standard protocol over stdin/stdout. Registration snippets for each client are in the [quick start](/mcp/quick-start/).
+Any MCP client that can launch a local stdio server, including Claude Code, Cursor, VS Code, and Codex CLI. The server speaks the standard protocol over stdin/stdout. Registration snippets for each client are in the [quick start](/mcp/quick-start/).
 
 ### Does it work in a monorepo?
 
@@ -148,7 +147,7 @@ Yes, per app. Run one server per package with `--project-root apps/web`, and add
 
 ### How fresh are the results?
 
-Edits to tracked files and deletions are reflected on the next tool call. New files and new Playwright configs are discovered on the first call after the one-second re-glob window. No restart is required for source changes. Restart the process only when you change server flags such as `--project-root`, `--src-dir`, or `--attribute`.
+Edits to files already loaded in the workspace and deletions are reflected on the next tool call. Creating a file normally changes a scanned directory and triggers immediate discovery. In the remaining case, a new file inside a pre-existing nested directory with no loaded source, the one-second rescan interval is the backstop. New Playwright configs follow the same rescan. No restart is required for source changes; restart only when you change server flags such as `--project-root`, `--src-dir`, or `--attribute`.
 
 ---
 

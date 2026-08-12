@@ -44,7 +44,7 @@ Failure, with the MCP `isError` flag set:
 
 `candidates` and `suggestions` contain at most 10 entries. When more exist, `moreCandidates` or `moreSuggestions` reports how many were omitted. Meta keys whose value is `undefined`, `null`, `false`, or an empty array are removed before serialization, so an absent field usually means the server has nothing to report for it.
 
-Responses are capped at 200,000 **bytes** of UTF-8 — what actually goes over stdio, so a non-ASCII test ID costs more than one character. That is larger than most clients accept whole; the client is the right place to decide that, and `get_page_object_tree`, `map_coverage` and `query_coverage` declare a raised per-tool ceiling that Claude Code honours. The two coverage tools never refuse an oversized page — they trim it, keeping `summary` and `scope` and reporting what was cut in `meta.truncatedBuckets`. The other tools return a `too_large` error naming the knobs they actually have; see [Troubleshooting](/mcp/troubleshooting/#how-do-i-fix-a-too_large-response) for the reduction path in each mode.
+Responses are capped at 200,000 UTF-8 **bytes**, the payload sent over stdio, so non-ASCII text can use more than one byte per character. MCP clients can impose lower limits. `get_page_object_tree`, `map_coverage`, and `query_coverage` advertise a raised per-tool ceiling that Claude Code honors. The coverage tools trim oversized pages, preserve `summary` and `scope`, and report cuts in `meta.truncatedBuckets`. The other tools return `too_large` with a recovery hint; see [Troubleshooting](/mcp/troubleshooting/#how-do-i-fix-a-too_large-response).
 
 ### Repeated warnings
 
@@ -54,16 +54,16 @@ Each distinct warning is sent in full once per session. After that the same warn
 { "code": "playwright-config-ambiguous", "severity": "warning", "repeat": 1 }
 ```
 
-That means `repeat` warnings of this code are still in force and their text has not changed since it was sent in full. A warning whose details change — a different candidate attribute, a moved line — counts as new and is sent in full again, so an abbreviated entry never hides a changed verdict.
+That means `repeat` warnings of this code are still in force and their text has not changed since it was sent in full. A warning with changed details, such as a different candidate attribute or moved line, counts as new and is sent in full again. An abbreviated entry therefore never hides a changed verdict.
 
-`meta.hint` is never abbreviated. It is rebuilt from the full warnings on every call, so the sentence naming the flag that fixes your environment ships whole every time. Act on the hint; treat a bare code as a reminder. On a production repository this cut the warning block of a repeat call by 87%.
+`meta.hint` is never abbreviated. It is rebuilt from the full warnings on every call, so the sentence naming the flag that fixes your environment ships whole every time. Act on the hint; treat a bare code as a reminder. In one internal-repository measurement, this cut the warning block of a repeat call by 87%; the saving depends on the warnings in your project.
 
 ### Common meta fields
 
 | Field | Tools | Meaning |
 | --- | --- | --- |
 | `root` | `list_page_objects`, `get_page_object_tree` | Absolute path of the analyzed project root |
-| `attribute` | all | Test-id attribute this call read the sources with |
+| `attribute` | all | Test-ID attribute this call read the sources with |
 | `attributeSource` | all | `"param"`, `"playwright-config"`, or `"default"` |
 | `playwrightConfig` | all | Project-relative path of the config that was read; absent when none was found |
 | `scanned` | `list_page_objects`, `get_testid_tree` | Files parsed — **two different sets**: every source the project holds on `list_page_objects`, and JSX/TSX sources only on `get_testid_tree`. The second is legitimately the smaller number |
@@ -96,9 +96,9 @@ That means `repeat` warnings of this code are still in force and their text has 
 | `class_not_found` | `get_page_object_tree`, `map_coverage` | Read `suggestions` (nearest names by edit distance), or call `list_page_objects` |
 | `ambiguous_class` | `get_page_object_tree`, `map_coverage` | Several classes share the name. Re-call with `file` set to one of the `candidates` — which are `path.ts#ClassName` keys from `get_page_object_tree` and bare file paths from `map_coverage`. Both are accepted as `file` |
 | `ambiguous_component` | `get_testid_tree` | Several files declare that component name, or `file` named only a trailing segment that fits more than one scanned file. `candidates` lists them; re-call with the full project-relative `file` |
-| `incomplete_tree` | `get_testid_tree` | The named component could not be rooted. `candidates` lists the other components in that file; or pass `testId` to look the id up across the whole scan |
+| `incomplete_tree` | `get_testid_tree` | The named component could not be rooted. `candidates` lists the other components in that file; or pass `testId` to look the ID up across the whole scan |
 | `file_not_found` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | The path or component name selects nothing. Use `suggestions` / `candidates`, or drop the argument to widen the search |
-| `expired_handle` | `query_coverage` | The `coverageId` is unknown, unused for 10 minutes, or was invalidated because an analysed file changed. Re-call `map_coverage` with the arguments that produced it — the scope is not recoverable from the id — and use the new `meta.coverageId` |
+| `expired_handle` | `query_coverage` | The `coverageId` is unknown, unused for 10 minutes, or was invalidated because an analyzed file changed. Re-call `map_coverage` with the arguments that produced it because the scope is not recoverable from the ID, then use the new `meta.coverageId` |
 | `too_large` | `list_page_objects`, `get_page_object_tree`, `get_testid_tree` | Apply the `hint`; it names the knobs that tool has. The coverage tools trim instead of raising this |
 | `max_files_exceeded` | all | Restart the server with a higher `--max-files`, or narrow the scan as described in [Configuration](/mcp/configuration/#how-do-i-control-the-scanned-files) |
 | `internal_error` | all | An unexpected failure, returned in-band rather than as a transport error. The message is the thrown error's; the server also logs it to stderr |
@@ -107,7 +107,7 @@ That means `repeat` warnings of this code are still in force and their text has 
 
 ## `list_page_objects`
 
-`list_page_objects` returns each class that the scanner can identify through the library's decorators, base classes, fixtures, or factory arguments. Call it before searching files or creating a page object that may already exist.
+`list_page_objects` returns each class that the scanner can identify through the library's decorators, base classes, or fixtures. Factory relationships help expand a discovered selector graph, but a class whose only evidence is a factory argument is omitted from this index. Call the tool before searching files or creating a page object that may already exist.
 
 ### Parameters
 
@@ -156,7 +156,7 @@ Against the example app, with no arguments:
 		"attribute": "data-testid",
 		"attributeSource": "default",
 		"playwrightConfig": "playwright.config.ts",
-		"scanned": 17,
+		"scanned": 18,
 		"total": 6
 	}
 }
@@ -184,11 +184,11 @@ An empty page gets a `hint` that distinguishes the three reasons it can be empty
 
 ### Response
 
-With `format: "json"`, `data` is `{ root, defs, stats }`. `root` is a key into `defs`, and `defs` is a flat map of `path.ts#ClassName` to node. Shared controls appear once and are referenced by id everywhere else, so a control used by ten members costs one definition.
+With `format: "json"`, `data` is `{ root, defs, stats }`. `root` is a key into `defs`, and `defs` is a flat map of `path.ts#ClassName` to node. Shared controls appear once and are referenced by ID everywhere else, so a control used by ten members costs one definition.
 
 Each member carries `name`, `loc`, `visibility`, the full `selector` (decorator name, raw source text, and the parsed value), and a `result` describing what the accessor resolves to: `locator`, `pageObject`, `list` (with `itemClassName`), `control`, or `unknown` with the source text.
 
-Two things about addressing and locations, both deliberate. `class` is matched exactly, unlike `list_page_objects`' `filter`, which is a case-insensitive substring — a near miss comes back as `class_not_found` with the right name in `suggestions`, so it costs one extra call rather than a wrong answer. And a node's `loc` points at the **decorator** line, not at the `class` or `accessor` line, because the decorator is what made it a page object.
+Two things about addressing and locations are deliberate. `class` is matched exactly, unlike the case-insensitive substring used by `list_page_objects.filter`. A near miss returns `class_not_found` with the closest names in `suggestions`. A member's `loc` begins at its decorated declaration. A class node's `loc` begins at the class declaration, or at its class decorator when present.
 
 With `format: "outline"`, `data` is an indented string. It costs far fewer tokens and is not machine-parseable. `(see above)` marks a definition already printed, and `(not expanded: depth limit)` or `(not expanded: node budget)` marks one the walk did not reach.
 
@@ -209,7 +209,7 @@ The tree is the call chain: members are plain properties, so `defs` nesting read
 }
 ```
 
-Two things follow from a member's `result` kind. A `locator` result **is** a Playwright `Locator`, so Playwright calls go on it directly (`po.PromoCodeInput.fill("SAVE20")`). Every other kind is a page object, whose raw locator is `.$` (`po.ApplyPromoButton.$.click()`).
+A member's `result` determines how to call it. A `locator` is a Playwright `Locator`, so Playwright calls go on it directly (`po.PromoCodeInput.fill("SAVE20")`). `pageObject` and `list` use the library API, including `.$`. For `control`, inspect its definition and extends chain: it has `.$` only when it extends `PageObject`. Do not infer a callable API for `unknown`; read the source text carried in the payload.
 
 The `methods` in each node are the ones that class declares, plus any on a project-local base. Library helpers are not repeated on every class — `inheritedApi` names the base that supplies them and `apiHints` gives their syntax. The block is present in both formats, since `outline` needs it no less.
 
@@ -288,23 +288,23 @@ With neither `file` nor `component`, the walk starts from the auto-detected app 
 
 ### Fidelity
 
-`meta.fidelity` describes the completeness of the **node tree**, not of individual ids:
+`meta.fidelity` describes the completeness of the **node tree**, not of individual IDs:
 
 Here, "rendered" means the scanner traced a test ID to a host JSX element. The tool does not observe a browser or guarantee that a conditional element appears in a particular run.
 
 | Value | Meaning |
 | --- | --- |
-| `"full"` | The walk reached everything. Absence from the tree is proof the id is not rendered under that root |
+| `"full"` | The structural walk reached every node under the selected root in the scanned source. It can still contain unresolved value holes such as spread props |
 | `"partial"` | At least one subtree is missing or its placement is unproven. `roots` is real but has holes, and `meta.fidelityReason` counts them |
 | `"flat"` | No entry component could be rooted. `roots` is empty and only `inventory` is meaningful |
 
-For the full decision procedure — every response shape and what absence means in each — see [when "not found" is proof](/mcp/workflows/#when-can-i-treat-not-found-as-proof).
+For the full decision procedure across every response shape, see [when "not found" is proof](/mcp/workflows/#when-can-i-treat-not-found-as-proof).
 
-A traversal gap is a successful response, not an error: the tool returns the part of the tree it could build and describes the hole. So read `meta.fidelity` and `meta.truncated` before treating `roots` as the whole picture — only `"full"` with no `truncated` flag makes absence from the tree evidence that an ID is not rendered. The one gap that does fail is a `component` the walk could not root at all, which returns `incomplete_tree`.
+A traversal gap is a successful response, not an error: the tool returns the part of the tree it could build and describes the hole. Read `meta.fidelity`, `meta.truncated`, node-level `unresolved` flags, and environment warnings before drawing a conclusion from absence. Even a full, untruncated structural walk cannot reveal a value hidden in spread props or source outside the scan. A `component` that cannot be rooted at all returns `incomplete_tree`.
 
-The flat inventory is complete in all three states, so a `testId` lookup answers correctly whatever the walk did.
+The flat inventory is independent of the component walk in all three states. A `testId` lookup is authoritative for explicit static or pattern declarations found in the scanned JSX/TSX. An empty lookup does not rule out unresolved spread props, the wrong attribute, unsupported file types, or sources outside the scan.
 
-Two things the walk resolves that are easy to assume it does not. A same-file function returning JSX — `{getCheckinIcon()}` — is inlined at its call site, so the ids inside it appear in the tree at their real lines. What it does **not** do is bind the call's arguments: a helper's parameters shadow the caller's values, so an id built from one resolves to unknown rather than to a guess. And a component rendered through a call the walk cannot inline is marked `local-render-function` with the call in `raw`, so a hole is always named rather than silently dropped.
+Two things the walk resolves are easy to miss. A same-file function returning JSX, such as `{getCheckinIcon()}`, is inlined at its call site, so the IDs inside it appear in the tree at their real lines. The walk does **not** bind the call's arguments: a helper's parameters shadow the caller's values, so an ID built from one resolves to unknown rather than to a guess. A component rendered through a call the walk cannot inline is marked `local-render-function` with the call in `raw`, so a hole is always named rather than silently dropped.
 
 ### Node flags
 
@@ -322,16 +322,16 @@ Two things the walk resolves that are easy to assume it does not. A same-file fu
 
 In the outline format the same flags appear in parentheses, and `-` stands for a node with no test ID.
 
-The outline also summarises where repeating itself would cost more than it says. Four rules, none of which can drop an ID or a hole:
+The outline also summarizes where repeating itself would cost more than it says. Four rules, none of which can drop an ID or a hole:
 
 | You see | It means |
 | --- | --- |
-| `:106` with no path | The file is the nearest one named above it. Paths are printed only where they change — on one production page that was 40% of the outline |
+| `:106` with no path | The file is the nearest one named above it. Paths are printed only where they change; in one internal page measurement, paths accounted for 40% of the outline |
 | `(contents as at src/Modal.tsx:10)` | This node's children are the ones already printed at that location. The call site and its own ID are still shown |
 | `... 12 boundaries not expanded (external module: Modal, Button, +3 more)` | Twelve sibling holes with the same reason, as one line. `meta.fidelityReason` still counts them exactly |
 | A provider or layout wrapper is missing | A node with no ID, no hole and no flags is spliced out and its children move up. Nesting in an outline means "renders inside", not "is a direct DOM child" |
 
-None of this applies to `format: "json"`, which stays complete: every node, every `loc`, every field. Measured on one production page component, the four rules together took the response from 74,763 to 43,388 bytes.
+None of this applies to `format: "json"`, which stays complete: every node, every `loc`, every field. In one internal page-component measurement, the four rules together reduced the response from 74,763 to 43,388 bytes. Other component trees will differ.
 
 A `testId` lookup returns `{ occurrences }`, each with the source location, the enclosing component, and `reach`:
 
@@ -341,7 +341,7 @@ A `testId` lookup returns `{ occurrences }`, each with the source location, the 
 | `"forwarded"` | Written as a prop and proven to land on a host element. It renders |
 | `"component-prop"` | Written on a component tag with nothing proving it goes further. It renders only if that component passes the prop down |
 
-When every occurrence is `component-prop`, the response says so in `meta.hint` rather than letting you read the hit as proof. Patterns that match every possible id are excluded from a lookup and counted in the hint, because reporting them as hits would claim your id is rendered at a line the source writes `data-testid={anything}` on.
+When every occurrence is `component-prop`, the response says so in `meta.hint` rather than letting you read the hit as proof. Patterns that match every possible ID are excluded from a lookup and counted in the hint, because reporting them as hits would claim your ID is rendered at a line where the source writes `data-testid={anything}`.
 
 ### Example
 
@@ -354,7 +354,7 @@ CartItem_*  div  src/components/CartItem.tsx:10 (dynamic `CartItem_${item.id}`)
   Remove  button  :13
 ```
 
-The bare `:11` inherits the file named above it; see [what the outline summarises](#node-flags).
+The bare `:11` inherits the file named above it; see [what the outline summarizes](#node-flags).
 
 ```json
 {
@@ -399,7 +399,7 @@ The same call with `followComponents: false` from the app entry shows the other 
 | `limit` | integer 1 to 200 | `50` | Per bucket. A coverage entry averages ~800 bytes, so even 200 is a large response; the ceiling exists so the schema cannot advertise a page nobody should ask for |
 | `offset` | integer ≥ 0 | `0` | Applied to every returned bucket. To page one list, prefer `query_coverage` |
 
-Start with `buckets: []`. It returns the totals and the scope for a small fraction of the full report — measured on this repository's example app, 1.4 KB against 15 KB, and on a 4,924-file application 5 KB against 146 KB — which is enough to see the shape of the answer before asking for a list — six buckets at `limit: 200` was 527 KB on a 4,924-file repository, past every client's ceiling.
+Start with `buckets: []`. It returns totals and scope without any bucket lists: 1.4 KB instead of 15 KB on this repository's example app, and 5 KB instead of 146 KB in one 4,924-file internal-repository measurement. Read the shape first, then request one bucket. In the same internal measurement, six buckets at `limit: 200` produced 527 KB before the server cap was applied. Your repository and client limits will differ.
 
 Omit `class` and `file` to scan the whole project. Scoping happens by path, so `class` also pulls in page objects sharing that file, and `meta.alsoIncluded` names them. A `file` that declares no page object fails with `file_not_found` rather than returning a report in which everything looks uncovered.
 
@@ -409,7 +409,7 @@ Omit `class` and `file` to scan the whole project. Scoping happens by path, so `
 
 | Bucket | Contents |
 | --- | --- |
-| `matched` | Selector/id pairs with a `confidence` of `exact`, `pattern`, `regex`, `probe`, or `prefix` — see below, `confidence` is not certainty |
+| `matched` | Selector/ID pairs with a `confidence` of `exact`, `pattern`, `regex`, `probe`, or `prefix`; see below, because `confidence` is not certainty |
 | `uncoveredTestIds` | Host-element test IDs that no page-object test-ID selector covers, each with a ready-to-paste decorator `suggestion` |
 | `deadSelectors` | Page-object test-ID selectors with no match among visible host-element IDs, with `nearestTestIds` suggestions |
 | `nonTestIdSelectors` | Role, text, label, placeholder, alt and title selectors. Reported for awareness and never counted as dead |
@@ -427,13 +427,13 @@ That matters when the same ID lives on both sides of the forwarding line. Two fi
 | `unprovenOccurrences` | The same ID is also written this many times as a component prop that nothing proved reaches the DOM |
 | `unprovenAt` | The first of those sites, so you can go and look |
 
-A real example from a production repository: `GuestsPageObject.GuestItems[item].Info` came back `confidence: "exact"` against `HistoryEventItem.tsx:48`, an unrelated component, while the `<WithIcon data-tid="Info">` the page object was actually written for is a prop that never reaches the DOM — a genuinely broken selector that read as a clean match. The match is not wrong; it was the whole story that was missing. The entry now carries `unprovenOccurrences: 1` and points at `GuestItemInfo.tsx:94`.
+In one anonymized internal example, `GuestsPageObject.GuestItems[item].Info` came back `confidence: "exact"` against `HistoryEventItem.tsx:48`, an unrelated component. The `<WithIcon data-tid="Info">` the page object targeted was a prop that never reached the DOM, so the selector was broken despite the clean-looking match. The match itself was not wrong; it was incomplete evidence. The entry now carries `unprovenOccurrences: 1` and points at `GuestItemInfo.tsx:94`.
 
 `summary.coverage` is `coveredUiTestIds / matchableUiTestIds`, or **`null`** when nothing was matchable. It is never `1` for a scan that found nothing, which is the failure mode that used to make a misconfigured server look healthy. `scope` reports what the two sides were drawn from, including component tags coming from modules outside the scanned sources.
 
-The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by default. Scoping narrows the selectors, so that list is still every uncovered ID in the application — mostly IDs the page objects you did not name already cover, and 61,788 bytes of them on a real app. `summary.uncoveredTestIds` still counts them, and `includeUnused: true` or `buckets: ["uncoveredTestIds"]` still returns the list.
+The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by default. Scoping narrows the selectors, but that list still contains every uncovered ID in the application, including IDs covered by page objects you did not name. In one internal measurement, the irrelevant list added 61,788 bytes. `summary.uncoveredTestIds` still counts it, and `includeUnused: true` or `buckets: ["uncoveredTestIds"]` still returns it.
 
-`coverage` is also `null` when you scope the call with `class` or `file`, with a `coverage-scope-narrowed` warning. Scoping narrows the selectors but not the rendered ids they are compared against, and there is no honest way to narrow the second half: nothing statically ties a page object to a subset of the UI. The two counts still ship in `summary`, so you can read them; the ratio between them would answer a question nobody asked.
+`coverage` is also `null` when you scope the call with `class` or `file`, with a `coverage-scope-narrowed` warning. Scoping narrows the selectors but not the rendered IDs they are compared against, and there is no honest way to narrow the second half: nothing statically ties a page object to a subset of the UI. The two counts still ship in `summary`, so you can read them; the ratio between them would answer a question nobody asked.
 
 ### Example
 
@@ -518,7 +518,7 @@ The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by def
 
 ### Reading a large report
 
-```json
+```text
 map_coverage   {"buckets": []}
 → meta.coverageId = "cov_9f3c…", summary.deadSelectors = 137
 
@@ -535,14 +535,14 @@ Copy `meta.nextOffset` into the next call's `offset` and stop when that key stop
 
 `map_coverage` with `{"buckets": ["deadSelectors"], "offset": 50}` returns the same entries just as cheaply — the report is memoized. What it cannot do is notice that you are paging. If a file changes between page one and page two, it silently re-derives the report and the list renumbers underneath your offsets: entries are skipped and duplicated, and nothing in the response says so.
 
-A handle turns that into a reported failure. The id is bound to the exact report it was minted from, and the same edit invalidates it:
+A handle turns that into a reported failure. The ID is bound to the exact report it was minted from, and the same edit invalidates it:
 
 - It stays valid for **10 minutes after its last use**, for that server process only. Paging keeps it alive, so a long walk cannot time out half way through it.
-- It is invalidated as soon as any analysed file changes on disk.
-- Spending an invalid one fails with `expired_handle`. Re-call `map_coverage` with the arguments that produced it — the scope is not recoverable from the id — and use the new `meta.coverageId`.
+- It is invalidated as soon as any analyzed file changes on disk.
+- Spending an invalid one fails with `expired_handle`. Re-call `map_coverage` with the arguments that produced it because the scope is not recoverable from the ID, then use the new `meta.coverageId`.
 - At most 8 handles live at once; older ones are evicted.
 
-Results always reflect the files on disk at the moment of the call, so a stale page would report lines that have moved. Refusing it is the point.
+Changed and deleted loaded files are detected on the next call, and new files are usually discovered immediately when a known scan directory changes. The one-second rescan interval covers the remaining nested-directory case. Refusing an invalidated handle avoids returning entries whose source lines may have moved.
 
 ---
 
@@ -561,6 +561,12 @@ Results always reflect the files on disk at the moment of the call, so a stale p
 
 Use `outline` when an agent only has to read the shape, which is most of the time, and `json` when something downstream has to parse it. A `too_large` error on a JSON call is usually solved by switching format before touching `depth`.
 
-What `outline` never summarises away is a test ID or a hole. Every ID the analysis found, and every place it could not see past, has its own line in both formats — the summarising only ever removes a repeat or a node that carried neither.
+What `outline` never summarizes away is a test ID or a hole. Every ID the analysis found, and every place it could not see past, has its own line in both formats; summarization only removes a repeat or a node that carried neither.
 
 `meta` is identical in both formats, so switching to `outline` costs you no warning, hint, or `apiHints`.
+
+## Related guides
+
+- [Workflows](/mcp/workflows/) for the recommended call order and proof checks.
+- [Troubleshooting](/mcp/troubleshooting/) for errors, warnings, and incomplete results.
+- [Configuration](/mcp/configuration/) for project scope, discovery, and server flags.

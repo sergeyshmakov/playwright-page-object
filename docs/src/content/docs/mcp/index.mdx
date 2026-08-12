@@ -27,9 +27,9 @@ Use the page-object tools to find an existing API, the test-ID tree before writi
 
 | Tool | Call it when | Returns |
 | --- | --- | --- |
-| `list_page_objects` | You need to know what page objects exist, instead of globbing | Every decorated class with its file, host kind, root selector, fixture bindings, member and method counts |
+| `list_page_objects` | You need to know what page objects exist, instead of globbing | Every indexed class with its file, host kind, root selector, fixture bindings, member and method counts |
 | `get_page_object_tree` | Before writing or editing a test that touches a page object | One class's selector tree up to the requested depth and budget, with members, resolved types, nested controls, and methods |
-| `get_testid_tree` | Before writing any selector | Test IDs found in the resolved component tree, with dynamic, conditional, and repeated flags |
+| `get_testid_tree` | Before writing a test-ID selector | Test IDs found in the resolved component tree, with dynamic, conditional, and repeated flags |
 | `map_coverage` | After renaming test IDs, or when a locator times out | Matches between page-object test-ID selectors and UI source, plus uncovered IDs and unmatched selectors |
 | `query_coverage` | To read the rest of a long coverage list | One bucket of a report `map_coverage` already built, paged through an opaque handle |
 
@@ -39,17 +39,17 @@ The selector tree also carries the runtime API of the base classes it uses, in `
 
 ## How is this different from Playwright MCP?
 
-Microsoft's [Playwright MCP](https://playwright.dev/docs/getting-started-mcp) uses accessibility snapshots to interact with a live browser. This server does not launch a browser. It analyzes page-object classes and JSX or TSX source so an agent can find existing APIs and test IDs before it writes or edits a test.
+Microsoft's [Playwright MCP](https://playwright.dev/mcp/introduction) uses accessibility snapshots to interact with a live browser. This server does not launch a browser. It analyzes page-object classes and JSX or TSX source so an agent can find existing APIs and test IDs before it writes or edits a test.
 
 You can use both servers in the same workflow: source analysis for test authoring, then browser automation for live interaction and verification.
 
 ## What can the static analysis prove?
 
-The server reports only what it can support from source code. A complete tree can prove that an ID is absent under its root. A partial tree cannot, so the response explains where the walk stopped instead of presenting missing data as a fact.
+The server reports only what it can support from source code. `fidelity: "full"` proves that the structural walk reached every node under the selected root. It does not resolve test-ID values hidden in spread props, and it cannot see sources outside the scan. A partial tree has additional structural gaps, so the response explains where the walk stopped.
 
 - It never executes your Playwright config. A computed `use.testIdAttribute` resolves to unknown plus a diagnostic, not to whatever the analyzing process has in its environment.
-- It never reports "not rendered" from an incomplete walk. A tree with holes is labelled `fidelity: "partial"` and says where the holes are.
-- It never counts a test ID written on a component tag as rendered unless forwarding to a host element was proven. See [prop forwarding](/mcp/configuration/#when-should-i-assume-prop-forwarding).
+- It never reports "not rendered" from an incomplete walk. A tree with holes is labeled `fidelity: "partial"` and says where the holes are.
+- By default, it never counts a test ID written on a component tag as rendered unless forwarding to a host element was proven. See [prop forwarding](/mcp/configuration/#when-should-i-assume-prop-forwarding) for the explicit assumption mode.
 - It never reports role, text or label selectors as dead. They cannot be checked against markup statically, so they get their own bucket.
 
 ## Read next

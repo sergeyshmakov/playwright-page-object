@@ -25,7 +25,7 @@ If the server is not connected yet, follow the [quick start](/mcp/quick-start/) 
 
 ## Which CLI options are available?
 
-```bash
+```text
 npx playwright-page-object mcp [options]
 ```
 
@@ -35,7 +35,7 @@ npx playwright-page-object mcp [options]
 | `--tsconfig <file>` | discovered | The `tsconfig.json` whose compiler options and file set to use |
 | `--playwright-config <file>` | discovered, ranked | The `playwright.config.*` to read. Suppresses discovery entirely |
 | `--src-dir <dir>` | tsconfig `include` | Restrict scanning to this directory. Repeatable |
-| `--attribute <name>` | see below | Test-id attribute name |
+| `--attribute <name>` | see below | Test-ID attribute name |
 | `--max-files <n>` | `8000` | Cap on files parsed. Roughly 0.13 MB of RSS per file, so the default ceiling is about a gigabyte |
 | `--assume-forwarded` | off | Count a test ID written on a component tag as rendered in `map_coverage` |
 | `--log-level <level>` | `error` | stderr verbosity: `silent`, `error`, `info`, `debug` |
@@ -49,7 +49,7 @@ A mistyped path would make every later answer use the wrong scope. The server ch
 - `--project-root` is not a directory,
 - `--tsconfig` is not a file,
 - `--playwright-config` is not a file,
-- a `--src-dir` that is not a glob and not an exclusion does not exist, or resolves outside `--project-root` (the workspace ignores outside-root paths, so such a scope would silently contribute nothing).
+- a non-exclusion `--src-dir` resolves outside `--project-root`, contains a `..` path segment, or names a plain path that does not exist. For a glob, the containment check starts at its static base.
 
 ```console
 $ npx playwright-page-object mcp --project-root example --src-dir nope
@@ -162,15 +162,15 @@ Plain `.js` is not swept, because it would pull in build output and tooling conf
 
 A `--src-dir` naming a directory that is not on disk stops the server at startup. A glob matching nothing does not, since that is indistinguishable from a legitimately empty directory; the census reports it as `scope-empty` instead.
 
-`--src-dir` can only ever narrow. A path resolving outside `--project-root` is refused at startup, so it is not the way to reach a shared UI package in a sibling directory — re-root the server instead, as described under [monorepos](#how-do-i-configure-a-monorepo). When component tags resolve to sources outside the root, the `ui-scope-incomplete` warning names the directory to pass to `--project-root`.
+`--src-dir` can only ever narrow. A path resolving outside `--project-root` is refused at startup, so it is not the way to reach a shared UI package in a sibling directory; re-root the server instead, as described under [monorepos](#how-do-i-configure-a-monorepo). When linked in-repository sources can be resolved, the `ui-scope-incomplete` hint names the directory to pass to `--project-root`. Installed or unresolved modules may have no usable re-root target.
 
 Narrowing the scope usually means fewer files are parsed, and so a lower count against `--max-files`, but the two are not the same set: see below. It does not narrow Playwright config discovery, which always searches the whole root.
 
 ### Limiting the scan with `--max-files`
 
-The default is **8000**, which covers a large application and the monorepo root above it. It was 2000, and that refused every call on the repositories this server exists for — and because it is a startup flag, an agent that hits it cannot do anything but stop and ask you to edit your MCP config. The failure is asymmetric: too low and the tool does not work, too high and a scan uses memory you can see and that is released after ten idle minutes.
+The default is **8000** files. Lower it to fail fast on an unexpectedly broad scope; raise it only when the intended project exceeds the cap. A scan that crosses the cap refuses the call and asks you to raise `--max-files` or narrow the scope. Larger scans use more memory, and the cached workspace is released after ten idle minutes.
 
-A scan past 3000 files reports itself with a `large-scan` info diagnostic naming the count, since that is most of the server's memory and all of its cold start. Lower `--max-files` if you would rather an oversized scope fail fast than run.
+A scan of 3000 files or more reports a `large-scan` info diagnostic with the count because project parsing dominates the cold start and memory use. Lower `--max-files` if you would rather an unexpectedly broad scope fail fast.
 
 The cap governs files **parsed**, not files analyzed: every source the project holds, less declaration files and ignored directories such as `node_modules` and build output. `--src-dir` says which files are analyzed, and the resolver still parses what analyzed code imports — an alias target or a `.js` module outside the scope is parsed, retained, and counted. Counting only the narrowed scope let a project sitting on the cap pull in unlimited siblings for free.
 
@@ -203,9 +203,9 @@ A single server pointed at the monorepo root also works up to `--max-files`. In 
 
 ## When do results refresh?
 
-The server checks tracked files on every tool call. It rereads changed files, removes deleted files, and searches for new files at most once per second. It does not run a file watcher, so a long-lived server can also recover from branch switches and bulk checkouts.
+The server checks files already loaded in the workspace on every tool call. It rereads changed files and removes deleted files immediately. A changed scan directory triggers a rescan for new files; a one-second interval is the backstop for a new file inside a pre-existing nested directory that contains no loaded source. It does not run a file watcher, so a long-lived server can also recover from branch switches and bulk checkouts.
 
-**No restart needed:** editing a page object, editing a component, adding or deleting either, or editing the Playwright config. The server searches for new files and configs at most once per second, so an immediate call can precede discovery; the next call after that interval sees them.
+**No restart needed:** editing a page object, editing a component, adding or deleting either, or editing the Playwright config. New files are normally visible on the next call because their directory changed. If a file is created inside a pre-existing nested directory with no loaded source, discovery can take up to one second. Newly created Playwright configs follow that same rescan path.
 
 **Restart needed:** any change to a CLI flag. The flags define the server's workspace, so a different `--attribute`, `--src-dir`, `--project-root`, `--playwright-config`, `--tsconfig`, `--max-files`, or `--assume-forwarded` requires a new process. Moving page objects outside the scanned directories also requires a new `--src-dir` value.
 
@@ -219,15 +219,15 @@ A test ID written on a component tag reaches the DOM only if that component pass
 
 By default the server does not assume it does. The occurrence is recorded with `reach: "component-prop"`, kept out of the rendered side of `map_coverage`, and any selector matching only it lands in `unknownSelectors` rather than in `matched` or `deadSelectors`.
 
-Component libraries that forward props as a rule make that conservative. `--assume-forwarded` promotes those ids to rendered, with three labelling guarantees:
+Component libraries that forward props as a rule make that conservative. `--assume-forwarded` promotes those IDs to rendered, with three labeling guarantees:
 
 - `meta.assumeForwarded: true` on every `map_coverage` response.
-- A `forwarding-assumed` warning counting the promoted ids.
-- `forwarding: "assumed"` on every affected entry in `matched`, and `assumed: true` on the affected id groups.
+- A `forwarding-assumed` warning counting the promoted IDs.
+- `forwarding: "assumed"` on every affected entry in `matched`, and `assumed: true` on the affected ID groups.
 
 Nothing is silently upgraded, so you can always tell a proven match from an assumed one. It is a server-level flag rather than a tool argument so every `map_coverage` call from that server uses the same classification. Other tools still report the source evidence without applying the assumption.
 
-One number moves in the direction you may not expect: `summary.uiTestIds` **falls**. An id written as a prop and the host element it reaches are one id once forwarding is assumed, where before they were counted separately — on one production app, 1,571 → 1,287. Nothing was lost; two half-facts merged into one. `matched` rises sharply over the same call (627 → 1,430), and `coverage` barely moves, because the assumption grows the numerator and the denominator together.
+One number moves in the direction you may not expect: `summary.uiTestIds` **falls**. An ID written as a prop and the host element it reaches become one ID once forwarding is assumed; before, they were counted separately. In one internal-repository measurement, the count moved from 1,571 to 1,287 while `matched` moved from 627 to 1,430. Nothing was lost: two partial facts merged into one. `coverage` moved little because the assumption grew the numerator and denominator together. Your counts will depend on your component patterns.
 
 When the assumption would help, the server says so without being asked. `forwarding-unproven-widespread` fires when a large share of your test-ID selectors match only component props, which is the signature of a codebase that forwards as a matter of course.
 

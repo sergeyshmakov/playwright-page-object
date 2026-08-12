@@ -1,37 +1,38 @@
 ---
 title: How to Use the Playwright Page Object MCP Server
-description: Task-oriented workflows for the Playwright page-object MCP server - writing a test, fixing a dead locator, renaming test IDs, and knowing when "not found" is proof.
+description: Use the Playwright page-object MCP server to write tests, fix dead locators, rename test IDs safely, and decide when "not found" is proof.
 head:
   - tag: title
     content: Playwright Page Object MCP Workflow Guide
 ---
 
-The [tool reference](/mcp/tools/) says what each call takes and returns. This page says which calls to make, in what order, and — the part that matters most — **when you are allowed to believe the answer**.
+The [tool reference](/mcp/tools/) says what each call takes and returns. This page shows which calls to make, in what order, and how to check whether an answer is complete enough to act on.
 
-The server already tells your agent the rules: it ships an instructions block and five long tool descriptions that cover the invariants, and those are resident in every session. This page is for you, and covers the judgement calls behind them.
+The server publishes an instructions block and detailed descriptions for all five tools. MCP clients decide how those instructions enter the model's context. This page explains the judgment calls behind them for the person configuring or reviewing the workflow.
 
 ## What should I check on the first call of a session?
 
-Every response carries the same four fields, and they say whether the rest of it means anything:
+Start by checking the metadata that validates the analysis environment. The first three fields can appear on every successful tool response; scan counts depend on the tool:
 
-| Field | Read it as |
-| --- | --- |
-| `meta.attribute` | The test-ID attribute this analysis searched for. Wrong here means wrong everywhere |
-| `meta.attributeSource` | `playwright-config` (read from your config), `param` (your `--attribute` flag), or `default` (nothing set it, `data-testid` assumed) |
-| `meta.playwrightConfig` | Which config was actually read, when several exist |
-| `meta.scanned` | How many files the analysis saw. A small number means the scope is wrong |
+| Field | Where | Read it as |
+| --- | --- | --- |
+| `meta.attribute` | All tools | The test-ID attribute this analysis searched for. Wrong here means wrong everywhere |
+| `meta.attributeSource` | All tools | `playwright-config` (read from your config), `param` (a CLI or per-call override), or `default` (nothing set it, so `data-testid` was assumed) |
+| `meta.playwrightConfig` | All tools, when a config was found | Which config was actually read when several exist |
+| `meta.scanned` | `list_page_objects`, `get_testid_tree` | Parsed files for the page-object index, or scanned JSX/TSX files for the test-ID tree. These are different sets |
+| `data.scope.uiFilesScanned` / `pageObjectFilesScanned` | `map_coverage` and the first `query_coverage` page | The UI and page-object file counts used for the report |
 
-`attributeSource: "default"` is correct for most repositories and wrong for every one that migrated away from `data-testid`. If the attribute is wrong, the server usually says so itself with an `attribute-mismatch` warning naming the attribute your sources actually use — but only if it can see your sources, which is what `scanned` tells you.
+`attributeSource: "default"` is correct for repositories that use `data-testid`, and wrong for any that migrated to another attribute. If the attribute is wrong, the server usually adds an `attribute-mismatch` warning naming the attribute your sources use. That diagnosis is only meaningful when the relevant scan count confirms that the server can see the source.
 
-The first call of a session also builds the workspace. On a 4,924-file application that is about 2.3 seconds and roughly 600 MB; every call after it is 65–350 ms. If your client has a short tool timeout, that first call is the one that hits it.
+The first call of a session also builds the workspace. In one internal 4,924-file application, that took about 2.3 seconds and roughly 600 MB; later calls measured 65–350 ms. Your repository and machine will differ. If your client has a short tool timeout, the first call is the likeliest to hit it.
 
 ## How do I write a test for a screen I have not tested?
 
-Four calls, and none of them is a file search.
+Use three tool calls before the final test-writing step:
 
-1. **`list_page_objects {"filter": "guest"}`** — find what already exists. The filter is a case-insensitive substring of the class name *or* the file path. Never glob for page objects; a real suite has hundreds and the index already knows all of them.
-2. **`get_page_object_tree {"class": "GuestsPageObject"}`** — the selector tree of the one you picked. Members are plain properties, so the tree *is* the call chain.
-3. **`get_testid_tree {"component": "GuestsList"}`** — only if you need a selector the page object does not have yet.
+1. **`list_page_objects {"filter": "guest"}`**: find what already exists. The filter is a case-insensitive substring of the class name or file path. Start with the index instead of rediscovering page objects through a broad file search.
+2. **`get_page_object_tree {"class": "GuestsPageObject"}`**: read the selector tree of the class you picked. Members are plain properties, so the tree is the call chain.
+3. **`get_testid_tree {"component": "GuestsList"}`**: use this only if you need a test-ID selector the page object does not expose yet.
 4. Write the test.
 
 Step 2 returns the chain; `meta.apiHints` in the same response returns the syntax for walking it. That combination is the point of the tool:
@@ -45,7 +46,7 @@ CheckoutPage (rootPageObject)  @testId "CheckoutPage"  e2e/page-objects/Checkout
   methods: applyPromoCode(code: string), expectCartEmpty(), expectCartHasItemCount(n: number)
 ```
 
-`fixture: checkoutPage` says take it as a test argument rather than constructing it. `ListPageObject` says `CartItems` has `.first()`. `RemoveButton` resolving to a control rather than a `Locator` says its raw locator is `.$`. None of that is in the tree; all of it is in `apiHints`:
+The tree carries `fixture: checkoutPage`, the `ListPageObject` result, and the resolved `ButtonControl` type. The accompanying `meta.apiHints` explains how to use those facts: take the fixture as a test argument, call `.first()` on the list, and use `.$` for the raw locator of a control that extends `PageObject`.
 
 ```ts
 test("removes the first cart item", async ({ checkoutPage }) => {
@@ -59,9 +60,9 @@ test("removes the first cart item", async ({ checkoutPage }) => {
 
 ## How do I fix a locator that times out?
 
-Ask what the DOM renders before you ask what changed:
+Ask what UI source proves reaches a host element before you ask what changed:
 
-1. **`get_testid_tree {"testId": "TheId"}`** — this answers from the flat inventory, which is complete no matter what the component walk managed to do. It is the most reliable call in the server and one of the cheapest.
+1. **`get_testid_tree {"testId": "TheId"}`**: this searches explicit static or pattern declarations across the scanned JSX/TSX without depending on the component walk. Check unresolved-value, environment, and scope warnings before treating an empty result as proof.
 2. If that returns nothing, **`map_coverage {"class": "ThePageObject", "buckets": ["deadSelectors"]}`** — did the ID get renamed?
 
 Two results look like failures and are not:
@@ -73,16 +74,16 @@ Two results look like failures and are not:
 
 Rename it in the source, then ask the server what broke:
 
-```json
+```text
 map_coverage {"buckets": ["deadSelectors"]}
 ```
 
 Triage each entry by its `nearestTestIds`, and in this order:
 
 - **Non-empty** — this is the actionable case. An ID one edit away from the new spelling is exactly what a rename leaves behind. Update the selector.
-- **Empty, and the entry carries `scopeIncomplete: true`** — the ID is more likely rendered inside a module the scan cannot see than genuinely gone. Do not delete it. Fix the scope first: `meta.hint` names the `--project-root` that would include those sources.
+- **Empty, and the entry carries `scopeIncomplete: true`**: the ID may be rendered inside a module the scan cannot see. Do not delete it. If `meta.hint` names a `--project-root`, restart there. Otherwise inspect the external modules named in the warning; installed or unresolved sources may not be reachable by widening the scan.
 
-That ordering is the opposite of the intuitive one, and it comes from measurement: on a production repository, six of eight selectors that *looked* dead had an empty list, and three of five genuinely dead ones had a near match.
+That ordering comes from one internal measurement: six of eight selectors that looked dead had an empty suggestion list, while three of five genuinely dead selectors had a near match. Treat these counts as an example of why the signal matters, not as expected rates for another repository.
 
 ## How do I audit a whole suite?
 
@@ -92,18 +93,18 @@ Summary first, then one list at a time:
 2. **`query_coverage {"coverageId": "…", "bucket": "deadSelectors"}`** — the handle came back in `meta.coverageId`. One bucket at a time is what makes `offset` mean one thing.
 3. Copy `meta.nextOffset` into the next call's `offset`. Stop when that key stops coming back.
 
-If a file changes mid-walk, step 3 fails with `expired_handle` rather than quietly renumbering the list your offsets point into. That is the failure branch, and it is a step rather than a caveat: re-call `map_coverage` with the same arguments, take the new `coverageId`, and restart the walk. The handle is invalidated by any change to an analysed file, and otherwise lasts ten minutes past its last use, so an active walk never times out.
+If a file changes mid-walk, step 3 fails with `expired_handle` rather than quietly renumbering the list your offsets point into. That is the failure branch, and it is a step rather than a caveat: re-call `map_coverage` with the same arguments, take the new `coverageId`, and restart the walk. The handle is invalidated by any change to an analyzed file, and otherwise lasts ten minutes past its last use, so an active walk never times out.
 
 ## When can I treat "not found" as proof?
 
-This is the question the whole server is built around. Absence means different things in different responses:
+Whether "not found" is conclusive depends on the response type and scan scope:
 
 | You have | Absence means |
 | --- | --- |
-| `get_testid_tree` with `fidelity: "full"` and no `truncated` | **Proof**, under that root. The walk reached everything |
+| `get_testid_tree` with `fidelity: "full"` and no `truncated` | The structural walk reached every node under that root. Check node-level unresolved values, especially spread props, before treating absence as proof |
 | `fidelity: "partial"` | Nothing on its own. Check `meta.idsNotPlaced`, which names IDs the scan found in files this tree walked that did not reach the tree |
 | `meta.suppressed` set | Nothing at all. The walk was cut and reached no ID, or the attribute was wrong; the nodes were omitted because they could not have answered |
-| `get_testid_tree {"testId": …}` | **Authoritative.** The lookup reads the flat inventory, which is complete at any fidelity |
+| `get_testid_tree {"testId": …}` | Independent of tree fidelity and authoritative for explicit static or pattern declarations in the scanned JSX/TSX. It cannot rule out unresolved spreads or out-of-scope source |
 | `deadSelectors` entry with `scopeIncomplete: true` | Unverified. Part of the UI was invisible to this run |
 | An occurrence with `reach: "component-prop"` | Unproven, not absent. It reaches the DOM only if the component forwards it |
 | `uncoveredTestIds` without `includeRawLocators: true` | Not "untested" — direct `getByTestId` calls were not scanned |
@@ -116,7 +117,7 @@ The same care applies to the numbers:
 
 ## What does a session cost?
 
-The server is stateful in ways worth exploiting. Measured on a 4,924-file application:
+The server is stateful in ways worth exploiting. These figures came from one internal 4,924-file application; your repository and machine will differ:
 
 | | Cost |
 | --- | --- |
@@ -126,9 +127,9 @@ The server is stateful in ways worth exploiting. Measured on a 4,924-file applic
 | The same call again | ~1.8 KB — warnings sent in full once collapse to `{code, severity, repeat}` |
 | Second `get_page_object_tree` | Smaller again — `apiHints` collapses to base names |
 
-So: **prefer one long session to several short ones.** A restart pays the cold start again and resets both dedup ledgers. The workspace is dropped after ten idle minutes, which resets the same things — an agent coming back after a break pays one rebuild.
+**Prefer one long session to several short ones.** A restart pays the cold start again and resets warning and API-hint deduplication. After ten idle minutes, the workspace is evicted; the next call rebuilds it and old coverage handles become unusable, but the per-process deduplication state remains.
 
-Results always reflect the files on disk at the moment of the call, so edits are visible to the next call with no restart. Only the server's own flags need one.
+Changed and deleted loaded files are visible on the next call. New files are usually discovered immediately when a known scan directory changes; the one-second rescan interval covers the remaining nested-directory case. Only changes to the server's own flags require a restart.
 
 ## How does this fit with Playwright MCP and the Agent Skill?
 
@@ -136,9 +137,9 @@ Three surfaces, three jobs:
 
 - **[Agent Skills](/ai-tooling/agent-skills/)** teach decorator semantics — what `@ListSelector` means, when to use a fragment. General knowledge, no repository required.
 - **This server** supplies repository facts — which page objects exist, what they select, which IDs the app renders. Static, read-only, no browser.
-- **[Playwright MCP](https://playwright.dev/docs/getting-started-mcp)** drives a real browser. Use it to verify at runtime what this server told you at analysis time.
+- **[Playwright MCP](https://playwright.dev/mcp/introduction)** drives a real browser. Use it to verify at runtime what this server told you at analysis time.
 
-A combined flow: analyse with this server, write the test, run it, and if a locator still misses, check the live DOM with Playwright MCP — a mismatch between the two is usually prop forwarding the static analysis could not prove.
+A combined flow: analyze with this server, write the test, and run it. If a locator still misses, check the live DOM with Playwright MCP. A mismatch between the two is usually prop forwarding that static analysis could not prove.
 
 ## What should I put in my agent instructions?
 
@@ -148,10 +149,12 @@ The server's own descriptions cover most of this, but a rule block in `CLAUDE.md
 ## Playwright page objects
 
 - Never glob or grep for page objects. Call `list_page_objects` first.
-- Never invent a test id. Call `get_testid_tree` before writing a selector.
+- Never invent a test ID. Call `get_testid_tree` before writing a selector.
 - Read `meta.attribute` and `meta.attributeSource` before trusting any result.
-- A tree is only proof of absence at `fidelity: "full"`. Otherwise use
-  `get_testid_tree {"testId": "…"}`, which is always complete.
+- Treat `fidelity: "full"` as structural completeness, not proof that spread
+  props or out-of-scope sources contain no matching test ID.
+- Use `get_testid_tree {"testId": "…"}` for a scan-wide lookup, then check
+  unresolved-value and environment warnings before treating an empty result as proof.
 - Read coverage summary-first: `map_coverage {"buckets": []}`, then page one
   bucket with `query_coverage`.
 - Act on `meta.hint` before acting on any number in the same response.
