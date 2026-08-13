@@ -96,6 +96,53 @@ describe("censusFromText", () => {
 		expect(attributeVerdict(census, "playwright-config")).toBeNull();
 	});
 
+	// The text scan cannot tell a rendered attribute from the same characters in
+	// a CSS selector or a comment. Accepting those as evidence suppresses the
+	// mismatch warning — and then every tree and every coverage number is
+	// computed with an attribute the sources never render.
+	it.each([
+		[
+			"a CSS selector",
+			[
+				'const css = `[data-testid="Root"] { color: red; }`;',
+				'export const App = () => <div data-tid="Root">{css}</div>;',
+			].join("\n"),
+		],
+		[
+			"a comment",
+			[
+				'// every element used to carry data-testid="Root" here',
+				'export const App = () => <div data-tid="Root" />;',
+			].join("\n"),
+		],
+		[
+			"a string prop",
+			[
+				'export const App = () => <div data-tid="Root" title=\'data-testid="Root"\' />;',
+			].join("\n"),
+		],
+	])("does not accept %s as evidence the attribute renders", (_label, src) => {
+		const ws = makeWorkspace({ "src/App.tsx": src });
+		const census = censusFromText(ws, "data-testid");
+		expect(census.resolvedCount).toBe(0);
+		// The point is that the check is no longer silenced. Which warning fires
+		// depends on how many alternatives were counted; that it fires at all is
+		// what the false evidence was suppressing.
+		expect(attributeVerdict(census, "playwright-config")).not.toBeNull();
+	});
+
+	it("still counts the attribute when it really is one", () => {
+		const ws = makeWorkspace({
+			"src/App.tsx": [
+				'const css = `[data-testid="Ignored"] {}`;',
+				'export const App = () => <div data-testid="Root">{css}</div>;',
+			].join("\n"),
+		});
+		const census = censusFromText(ws, "data-testid");
+		expect(census.resolvedCount).toBe(1);
+		expect(attributeVerdict(census, "playwright-config")).toBeNull();
+	});
+
 	it("ranks the alternatives it found, most frequent first", () => {
 		const ws = makeWorkspace({
 			"src/App.tsx": [

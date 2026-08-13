@@ -1,3 +1,4 @@
+import { type SourceFile, SyntaxKind } from "ts-morph";
 import { warn } from "../diagnostics";
 import type { Diagnostic, TestIdAttributeSource } from "../types";
 import type { WorkspaceFiles } from "../workspaceFiles";
@@ -106,15 +107,26 @@ export function censusFromText(
 		const needle = attributeNeedle(attribute);
 
 		for (const sourceFile of files) {
-			const text = sourceFile.getFullText();
+			// The text scan is a filter, not the verdict: a file the needle cannot
+			// find cannot contain the attribute, so most of the repository is
+			// dismissed for the price of one regex. What it cannot do is tell a
+			// rendered attribute from the same characters inside a CSS selector
+			// (`[data-testid="x"]`), a comment, or any other string — and treating
+			// those as evidence suppresses the mismatch warning, which is the one
+			// thing this census exists to raise. Then every tree and every coverage
+			// number is computed with an attribute the sources never render.
 			needle.lastIndex = 0;
-			if (!needle.test(text)) {
+			if (!needle.test(sourceFile.getFullText())) {
+				continue;
+			}
+			const rendered = countJsxAttribute(sourceFile, attribute);
+			if (rendered === 0) {
 				continue;
 			}
 			return {
 				attribute,
 				files: files.length,
-				resolvedCount: countOccurrences(text, needle),
+				resolvedCount: rendered,
 				candidates: [],
 				evidence: "text",
 				sampled: true,
@@ -124,9 +136,7 @@ export function censusFromText(
 		const tally = new Map<string, number>();
 		let capped = false;
 		for (const sourceFile of files) {
-			capped =
-				tallyAttributeNames(sourceFile.getFullText(), attribute, tally) ||
-				capped;
+			capped = tallyAttributeNames(sourceFile, attribute, tally) || capped;
 		}
 		const candidates = [...tally.entries()]
 			.filter(([name]) => name !== attribute)
@@ -160,26 +170,44 @@ function attributeNeedle(attribute: string): RegExp {
 	return new RegExp(String.raw`(?<![\w$:-])${escaped}\s*=`, "g");
 }
 
-function countOccurrences(text: string, needle: RegExp): number {
-	needle.lastIndex = 0;
+/**
+ * How many JSX attributes in this file are actually named `attribute`.
+ *
+ * The AST, because only it knows the difference between an attribute and the
+ * same characters in a comment or a string. The file is already parsed - these
+ * are the workspace's own `SourceFile`s - so this walks a tree rather than
+ * re-reading anything, and it only runs on files the cheap scan already
+ * shortlisted.
+ */
+function countJsxAttribute(sourceFile: SourceFile, attribute: string): number {
 	let count = 0;
-	while (needle.exec(text) !== null) {
-		count += 1;
+	for (const node of sourceFile.getDescendantsOfKind(SyntaxKind.JsxAttribute)) {
+		if (node.getNameNode().getText() === attribute) {
+			count += 1;
+		}
 	}
 	return count;
 }
 
-/** Tallies hyphenated names into `into`. Returns whether the cap turned any away. */
+/**
+ * Tallies hyphenated attribute names into `into`, from the AST for the same
+ * reason phase one uses it: a name harvested out of a CSS selector is a
+ * candidate the repository does not write, and this list is what the mismatch
+ * warning names as the attribute to switch to.
+ *
+ * Returns whether the cap turned any away.
+ */
 function tallyAttributeNames(
-	text: string,
+	sourceFile: SourceFile,
 	attribute: string,
 	into: Map<string, number>,
 ): boolean {
 	let capped = false;
-	HYPHENATED_ATTRIBUTE.lastIndex = 0;
-	let match = HYPHENATED_ATTRIBUTE.exec(text);
-	while (match !== null) {
-		const name = match[1];
+	for (const node of sourceFile.getDescendantsOfKind(SyntaxKind.JsxAttribute)) {
+		const name = node.getNameNode().getText();
+		if (!name.includes("-")) {
+			continue;
+		}
 		// `aria-*` is an accessibility contract, never a test hook: offering
 		// `aria-label` as the repository's test-id attribute would be noise.
 		const skip = name !== attribute && name.startsWith("aria-");
@@ -190,7 +218,6 @@ function tallyAttributeNames(
 				capped = true;
 			}
 		}
-		match = HYPHENATED_ATTRIBUTE.exec(text);
 	}
 	return capped;
 }
