@@ -44,8 +44,37 @@ const child = spawn(process.execPath, [cli, ...process.argv.slice(2)], {
 	cwd: repoRoot,
 	stdio: "inherit",
 });
+
+/**
+ * Stopping the launcher has to stop the server.
+ *
+ * A host that signals this process by pid rather than killing the group would
+ * otherwise leave the CLI reparented and running, holding the inherited stdio
+ * and a parsed workspace — measured at hundreds of megabytes on a large
+ * repository — after the client believes the server is gone. Nothing would ever
+ * reap it.
+ *
+ * The parent does not exit here: `child.on("exit")` below is what ends it, so
+ * the server gets to shut down and the launcher reports its real status.
+ */
+const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"];
+for (const signal of FORWARDED) {
+	process.on(signal, () => {
+		if (child.exitCode === null && child.signalCode === null) {
+			child.kill(signal);
+		}
+	});
+}
+
 child.on("exit", (code, signal) => {
 	if (signal) {
+		// Die the way the child died. The handlers above have to go first: with
+		// them installed, re-raising would call one of them instead of ending
+		// this process, and it would hang holding the pipe it was asked to
+		// release.
+		for (const name of FORWARDED) {
+			process.removeAllListeners(name);
+		}
 		process.kill(process.pid, signal);
 		return;
 	}
