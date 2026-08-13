@@ -1,25 +1,6 @@
-import * as path from "node:path";
-import { exports as resolveExports } from "resolve.exports";
-import {
-	type CompilerOptions,
-	type ModuleDeclaration,
-	Node,
-	type Project,
-	type SourceFile,
-	SyntaxKind,
-} from "ts-morph";
+import { Node, type Project, type SourceFile, SyntaxKind } from "ts-morph";
 import type { DynamicReason } from "../types";
-import { hasDefaultKeyword } from "./exports";
-import { admitAddedFile } from "./fileBudget";
-import { foldPath, isIgnoredPath, toPosix } from "./paths";
-import {
-	clearRealPathCache,
-	hasWorkspaceRoot,
-	isUnderWorkspaceRoot,
-	isWorkspaceLocal,
-	linkedWorkspaceDirectory,
-	linkedWorkspaceFile,
-} from "./workspaceRoot";
+import { isWorkspaceLocal } from "./workspaceRoot";
 
 export type RefKind = "class" | "function" | "variable" | "other";
 

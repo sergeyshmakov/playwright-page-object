@@ -3,7 +3,6 @@ import type { TestIdAttributeOrigin } from "../types";
 import {
 	type ConfigLayer,
 	type ConfigProperty,
-	getProperty,
 	type LayerContext,
 	layersFromExpression,
 	stringLiteralValue,

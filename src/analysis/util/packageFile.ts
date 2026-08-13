@@ -16,7 +16,6 @@ import {
 	isWorkspaceLocal,
 	linkedWorkspaceDirectory,
 	linkedWorkspaceFile,
-	realDirectory,
 } from "./workspaceRoot";
 
 /**

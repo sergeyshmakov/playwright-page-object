@@ -1,22 +1,15 @@
-import { Node, SyntaxKind } from "ts-morph";
-import { dedupeDiagnostics, info, warn } from "../diagnostics";
+import { dedupeDiagnostics } from "../diagnostics";
 import { discoverInternal } from "../page-objects/discover";
-import { readExpressionValue } from "../tsx/scanTestIds";
 import { buildTestIdTree } from "../tsx/tree";
 import type {
 	CoverageReport,
 	Diagnostic,
-	SelectorInfo,
 	SelectorUsage,
 	SourceLoc,
-	TestIdOccurrence,
-	TestIdTree,
 	UiTestId,
 	UnknownSelectorEvidence,
 	UnknownTestId,
 } from "../types";
-import { literalPrefixOf, parseRegexLiteral } from "../util/literal";
-import { keyFold, matchesAnyGlob } from "../util/paths";
 import type { Workspace } from "../workspace";
 import {
 	type ClassifySides,
@@ -26,7 +19,7 @@ import {
 	type Match,
 } from "./classify";
 import { coverageWarnings, uiScopeIncomplete } from "./coverageWarnings";
-import { type InventoryPartition, partitionInventory } from "./inventory";
+import { partitionInventory } from "./inventory";
 import { isCatchAllPattern } from "./match";
 import { nearestIds } from "./suggest";
 import { collectSelectorUsages, sweepRawLocators } from "./usages";

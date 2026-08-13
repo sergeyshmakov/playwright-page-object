@@ -1,12 +1,5 @@
 import * as path from "node:path";
-import {
-	Node,
-	type ObjectLiteralExpression,
-	type PropertyAssignment,
-	type ShorthandPropertyAssignment,
-	type SourceFile,
-	SyntaxKind,
-} from "ts-morph";
+import { Node, type SourceFile } from "ts-morph";
 import { info, makeDiag, warn } from "../diagnostics";
 import type {
 	Diagnostic,
@@ -14,10 +7,8 @@ import type {
 	PlaywrightConfigInfo,
 	TestIdAttributeOrigin,
 } from "../types";
-import { unwrapTransparent } from "../util/ast";
 import { admitAddedFile } from "../util/fileBudget";
 import { toPosix } from "../util/paths";
-import { findImportBinding, resolveModuleSpecifier } from "../util/resolve";
 import type { Workspace } from "../workspace";
 import {
 	type ConfigDiscovery,

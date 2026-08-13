@@ -1,7 +1,6 @@
 import { info, warn } from "../diagnostics";
 import type { buildTestIdTree } from "../tsx/tree";
-import type { Diagnostic, SourceLoc, TestIdTree, UiTestId } from "../types";
-import type { Match } from "./classify";
+import type { Diagnostic, TestIdTree } from "../types";
 import type { InventoryPartition } from "./inventory";
 
 /**

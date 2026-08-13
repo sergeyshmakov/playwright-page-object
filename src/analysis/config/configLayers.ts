@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import {
 	Node,
 	type ObjectLiteralExpression,
@@ -7,22 +6,12 @@ import {
 	type SourceFile,
 	SyntaxKind,
 } from "ts-morph";
-import { info, makeDiag, warn } from "../diagnostics";
-import type {
-	Diagnostic,
-	DiagnosticSeverity,
-	PlaywrightConfigInfo,
-	TestIdAttributeOrigin,
-} from "../types";
+import { warn } from "../diagnostics";
+import type { Diagnostic } from "../types";
 import { unwrapTransparent } from "../util/ast";
-import { admitAddedFile } from "../util/fileBudget";
 import { toPosix } from "../util/paths";
 import { findImportBinding, resolveModuleSpecifier } from "../util/resolve";
 import type { Workspace } from "../workspace";
-import {
-	type ConfigDiscovery,
-	discoverPlaywrightConfigs,
-} from "./configDiscovery";
 
 /**
  * A Playwright config file flattened into an ordered layer stack.
