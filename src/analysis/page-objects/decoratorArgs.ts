@@ -1,6 +1,7 @@
 import { Node, type SourceFile } from "ts-morph";
 import { warn } from "../diagnostics";
 import type { Diagnostic } from "../types";
+import { unwrapTransparent } from "../util/ast";
 import { rawText } from "../util/literal";
 import {
 	type NameRef,
@@ -256,11 +257,16 @@ export function splitFactoryArg(
 }
 
 function looksLikeFactory(
-	node: Node,
+	written: Node,
 	sourceFile: SourceFile,
 	ctx: AnalysisContext,
 	notes: string[],
 ): boolean {
+	// `@Selector("Save", Control as any)` hands the decorator the same
+	// constructor at runtime. Both tests below are syntax tests, so the wrapper
+	// made the fixed-arity form report an unresolved factory and let the
+	// variadic form mistake it for another selector argument.
+	const node = unwrapTransparent(written);
 	if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
 		return true;
 	}
@@ -292,12 +298,15 @@ function looksLikeFactory(
 }
 
 function readFactory(
-	node: Node,
+	written: Node,
 	sourceFile: SourceFile,
 	ctx: AnalysisContext,
 	notes: string[],
 	warnings: Diagnostic[],
 ): FactoryArg {
+	// Unwrapped on the same terms as `looksLikeFactory`: the two have to agree
+	// about what the argument is, or one admits a factory the other cannot read.
+	const node = unwrapTransparent(written);
 	if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
 		const className = inlineFactoryClassName(node);
 		if (className) {

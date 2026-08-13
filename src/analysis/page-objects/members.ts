@@ -8,15 +8,11 @@ import {
 } from "ts-morph";
 import { warn } from "../diagnostics";
 import type { Diagnostic, MemberNode, MemberResult } from "../types";
+import { unwrapTransparent } from "../util/ast";
 import { docSummary } from "../util/jsdoc";
 import { rawText } from "../util/literal";
-import { defKey } from "../util/paths";
-import {
-	type NameRef,
-	type RefResolution,
-	readNameRef,
-	resolveClassRef,
-} from "../util/resolve";
+import { type NameRef, readNameRef, resolveClassRef } from "../util/resolve";
+import { type ClassRef, libraryRef, refFromResolution } from "./classRef";
 import type { FactoryArg } from "./decoratorArgs";
 import { readHeritage } from "./hostKind";
 import {
@@ -25,87 +21,14 @@ import {
 	canonicalLocalName,
 	collectLibraryImports,
 	LIBRARY_BASE_CLASSES,
-	LIBRARY_PACKAGE,
 	type LibraryImports,
 	MEMBER_DECORATORS,
 } from "./libraryImports";
 import { readSelector } from "./selectors";
 
-/** Synthetic def key for a class owned by the library itself. */
-export function libraryRef(name: string): string {
-	return `${LIBRARY_PACKAGE}#${name}`;
-}
-
-export interface ClassRef {
-	ref: string | null;
-	className: string | null;
-	declaration: ClassDeclaration | null;
-	external: boolean;
-	/**
-	 * `true` when the name resolved to something constructable that is *not* a
-	 * class - a function, or a variable holding one.
-	 *
-	 * Distinct from `declaration: null` with this unset, which means the walk
-	 * lost the trail. That difference decides whether a `new X()` member gets
-	 * the benefit of the doubt: an unfollowed chain might extend `PageObject`,
-	 * while a resolved function provably does not.
-	 */
-	resolvedNonClass?: true;
-}
-
-/** Turns a resolution into a def key, without ever reading `node_modules`. */
-export function refFromResolution(
-	resolution: RefResolution | null,
-	ctx: AnalysisContext,
-	fallbackName?: string | null,
-): ClassRef {
-	if (!resolution) {
-		return {
-			ref: null,
-			className: fallbackName ?? null,
-			declaration: null,
-			external: false,
-		};
-	}
-	if (resolution.resolved) {
-		const declaration = Node.isClassDeclaration(resolution.declaration)
-			? resolution.declaration
-			: null;
-		// A class *expression* - `const Ctrl = class extends PageObject {}`, which
-		// `hostKind` treats as a page object - is neither. It keeps the benefit of
-		// the doubt below rather than being called a locator, because widening
-		// `declaration` to `ClassLike` here would have to widen the whole
-		// discovery pipeline with it. Known gap, deliberately not this change.
-		const constructableNonClass =
-			!declaration && !Node.isClassExpression(resolution.declaration);
-		const name = declaration?.getName() ?? resolution.name;
-		const file = ctx.ws.rel(resolution.sourceFile.getFilePath());
-		return {
-			ref: defKey(file, name),
-			className: name,
-			declaration,
-			external: false,
-			// Resolved, but not to a class at all: a constructable function, or a
-			// variable holding one. Reachable in JavaScript and in TypeScript with
-			// `noImplicitAny: false`.
-			...(constructableNonClass ? { resolvedNonClass: true as const } : {}),
-		};
-	}
-	if (resolution.external) {
-		return {
-			ref: `${resolution.module}#${resolution.name}`,
-			className: resolution.name,
-			declaration: null,
-			external: true,
-		};
-	}
-	return {
-		ref: null,
-		className: fallbackName ?? resolution.name,
-		declaration: null,
-		external: false,
-	};
-}
+// `fixtures.ts` imports `refFromResolution` from here; keeping the name on
+// this module's surface means the move is invisible to it.
+export { type ClassRef, libraryRef, refFromResolution } from "./classRef";
 
 export interface MemberEdge {
 	ref: string;
@@ -190,7 +113,9 @@ function provablyNotPageObject(
 	);
 }
 
-function newExpressionClassName(node: Node): NameRef | null {
+function newExpressionClassName(raw: Node): NameRef | null {
+	// `(new Item())` constructs an `Item` exactly as `new Item()` does.
+	const node = unwrapTransparent(raw);
 	if (!Node.isNewExpression(node)) {
 		return null;
 	}
@@ -242,7 +167,14 @@ export function inferResult(
 		return { result, edges, warnings };
 	}
 
-	const initializer = property.getInitializer();
+	/*
+	 * Unwrapped once, then used for both questions below. Testing the raw node
+	 * for `isNewExpression` while reading the name off the unwrapped one made
+	 * `accessor Child = (new ChildPage())` answer "unknown" — or, with an
+	 * explicit type, a raw locator plus a "no initializer" warning.
+	 */
+	const written = property.getInitializer();
+	const initializer = written ? unwrapTransparent(written) : undefined;
 	const newClassName = initializer ? newExpressionClassName(initializer) : null;
 
 	if (initializer && newClassName && Node.isNewExpression(initializer)) {
@@ -416,9 +348,14 @@ function readListItem(
 		};
 	}
 
-	const name = Node.isNewExpression(itemArgument)
-		? newExpressionClassName(itemArgument)
-		: readNameRef(itemArgument);
+	/*
+	 * `new ListPageObject(Item as typeof Item)` and `((new Item()))` both build
+	 * `Item` controls; the wrapper is not part of the answer.
+	 */
+	const item = unwrapTransparent(itemArgument);
+	const name = Node.isNewExpression(item)
+		? newExpressionClassName(item)
+		: readNameRef(item);
 
 	if (!name) {
 		return { ref: null, defaulted: false };

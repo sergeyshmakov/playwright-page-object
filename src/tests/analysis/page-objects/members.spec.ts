@@ -65,6 +65,27 @@ describe("inferResult — lists", () => {
 		});
 	});
 
+	// The runtime builds `Item` controls either way; the wrapper is not part of
+	// the answer. Both branches inspected the wrapper and produced no name, so
+	// the tree lost the item reference and could not advertise the row's API.
+	it.each([
+		["an as-expression", "new ListPageObject(Item as typeof Item)"],
+		["double parentheses", "new ListPageObject((Item))"],
+		["a parenthesised instance", "new ListPageObject((new Item()))"],
+	])("reads a list item passed through %s", (_label, expression) => {
+		const member = readOne(
+			`  @ListSelector("Row_")\n  accessor rows = ${expression};`,
+			"rows",
+			ITEM_FILE,
+			ITEM_IMPORT,
+		);
+		expect(member.result).toMatchObject({
+			kind: "list",
+			itemClassName: "Item",
+			itemRef: "src/Item.ts#Item",
+		});
+	});
+
 	it("defaults the item type when the list is constructed empty", () => {
 		const member = readOne(
 			'  @ListSelector("Row_")\n  accessor rows = new ListPageObject();',
@@ -125,6 +146,27 @@ describe("inferResult — page objects and controls", () => {
 			ref: "playwright-page-object#PageObject",
 			className: "PageObject",
 			external: true,
+		});
+	});
+
+	// The runtime still receives a page-object instance. Testing the raw node for
+	// `isNewExpression` while reading the name off the unwrapped one reported
+	// these as unknown — or, with an explicit type, as a raw locator plus a
+	// "no initializer" warning.
+	it.each([
+		["parentheses", "(new Item())"],
+		["an as-expression", "new Item() as Item"],
+	])("reads an accessor initialized through %s", (_label, expression) => {
+		const member = readOne(
+			`  @Selector("x")\n  accessor field = ${expression};`,
+			"field",
+			ITEM_FILE,
+			ITEM_IMPORT,
+		);
+		expect(member.result).toMatchObject({
+			kind: "pageObject",
+			className: "Item",
+			ref: "src/Item.ts#Item",
 		});
 	});
 

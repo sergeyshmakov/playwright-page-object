@@ -1,6 +1,7 @@
 import type { JsxAttribute } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 import type { DynamicReason, TestIdValue } from "../types";
+import { unwrapTransparent } from "../util/ast";
 import { escapeRegExp } from "../util/paths";
 
 /**
@@ -300,11 +301,17 @@ export function readAttributeValue(attribute: JsxAttribute): {
 	return readExpressionValue(expression);
 }
 
-export function readExpressionValue(expression: Node): {
+export function readExpressionValue(written: Node): {
 	values: TestIdValue[];
 	fromTernary: boolean;
 } {
-	const raw = expression.getText();
+	// `raw` stays what the source says; the classification below reads through
+	// the wrapper. `data-testid={"Root" as const}` and `{("Root")}` render the
+	// literal `Root`, but every test here is a syntax test, so both came back
+	// `dynamic` — a statically known id dropped from the concrete inventory,
+	// which then cannot match its selector and reads as a dead one.
+	const raw = written.getText();
+	const expression = unwrapTransparent(written);
 
 	if (
 		Node.isStringLiteral(expression) ||

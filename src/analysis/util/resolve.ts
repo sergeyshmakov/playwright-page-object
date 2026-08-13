@@ -1,5 +1,6 @@
 import { Node, type Project, type SourceFile, SyntaxKind } from "ts-morph";
 import type { DynamicReason } from "../types";
+import { unwrapTransparent } from "./ast";
 import { isWorkspaceLocal } from "./workspaceRoot";
 
 export type RefKind = "class" | "function" | "variable" | "other";
@@ -43,7 +44,13 @@ export interface NameRef {
 }
 
 /** Reads `X` or `ns.X` from an expression position. */
-export function readNameRef(node: Node): NameRef | null {
+export function readNameRef(raw: Node): NameRef | null {
+	// `(Control)`, `Control as any` and `Control!` all name `Control`. Testing
+	// the raw node returned null for every one of them, which read downstream as
+	// "no name here" — a decorator's factory argument reported unresolved, a
+	// list's item reference lost, a fixture entry called dynamic. Unwrapping is
+	// this reader's job, not each caller's; several of them did not know to.
+	const node = unwrapTransparent(raw);
 	if (Node.isIdentifier(node)) {
 		const text = node.getText();
 		return { qualified: text, simple: text };

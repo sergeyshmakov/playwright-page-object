@@ -67,17 +67,6 @@ const MAX_REPORTED_CANDIDATES = 5;
 const MIN_CANDIDATE_COUNT = 2;
 
 /**
- * Hyphenated attribute names in JSX-ish text.
- *
- * A hyphen is the whole filter: JavaScript identifiers cannot contain one, so
- * `foo-bar=` in a `.tsx` file is an attribute and essentially nothing else,
- * while `className=` / `onClick=` / `value=` never qualify. That keeps the
- * candidate list to the family test ids actually belong to (`data-*`, `qa-*`,
- * `test-*`) without parsing anything.
- */
-const HYPHENATED_ATTRIBUTE = /\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+)\s*=/g;
-
-/**
  * Counts the resolved attribute in the scanned JSX sources, and — only when it
  * is nowhere to be found — what the sources use instead.
  *

@@ -74,6 +74,20 @@ describe("splitFactoryArg — fixed-arity decorators", () => {
 		expect(result.valueArgs).toHaveLength(1);
 	});
 
+	// The decorator receives the same constructor at runtime. `readNameRef` saw
+	// an `AsExpression` and returned null, so the fixed-arity form reported an
+	// unresolved factory and the variadic form could mistake it for another
+	// selector argument.
+	it.each([
+		["an as-expression", '@Selector("x", Ctrl as any)'],
+		["parentheses", '@Selector("x", (Ctrl))'],
+		["a non-null assertion", '@Selector("x", Ctrl!)'],
+	])("reads a factory passed through %s", (_label, source) => {
+		const { result } = split(source, CTRL_FILE);
+		expect(result.factory?.className).toBe("Ctrl");
+		expect(result.valueArgs).toHaveLength(1);
+	});
+
 	it("applies the same positional rule to @ListSelector", () => {
 		const { result } = split('@ListSelector("Item_", Ctrl)', CTRL_FILE);
 		expect(result.factory?.className).toBe("Ctrl");

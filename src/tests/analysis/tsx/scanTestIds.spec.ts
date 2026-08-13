@@ -49,6 +49,20 @@ describe("scanFileTestIds — value forms", () => {
 		expect(occurrences[0].component).toBe("Widget");
 	});
 
+	// Every classification below is a syntax test, so a transparent wrapper made
+	// a statically known id come back `dynamic` — dropped from the concrete
+	// inventory, unable to match its selector, and read as a dead one.
+	it.each([
+		["an as-const", '<div data-testid={"Panel" as const} />'],
+		["parentheses", '<div data-testid={("Panel")} />'],
+		["a non-null assertion", '<div data-testid={"Panel"!} />'],
+	])("reads a static id written with %s", (_label, element) => {
+		expect(scan(`    ${element}`).occurrences[0].value).toMatchObject({
+			kind: "static",
+			value: "Panel",
+		});
+	});
+
 	it("reads a braced string and a plain template as static", () => {
 		expect(
 			scan('    <div data-testid={"Panel"} />').occurrences[0].value,
