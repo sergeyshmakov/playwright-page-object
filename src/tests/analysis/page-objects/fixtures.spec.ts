@@ -129,6 +129,33 @@ describe("readFixtureMaps", () => {
 		);
 	});
 
+	// `getDescendantsOfKind` finds document order, not scope. The nested helper's
+	// `result` is out of scope at the factory's return, but it was matched first
+	// and the fixture came out bound to a class the factory never returns —
+	// silently, with no warning to say the answer was a guess.
+	it("ignores a same-named local declared inside a nested helper", () => {
+		const map = readFixtures({
+			"src/other.ts": "export class OtherPage {}",
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				'import { OtherPage } from "./other";',
+				"export const fixtures = createFixtures({",
+				"  homePage: (page) => {",
+				"    function helper() { const result = new OtherPage(); return result; }",
+				"    void helper;",
+				"    const result = new HomePage(page);",
+				"    return result;",
+				"  },",
+				"});",
+			].join("\n"),
+		});
+		expect(map.byName.get("homePage")).toBe(
+			keyFold("src/HomePage.ts#HomePage"),
+		);
+		expect(map.byClass.has(keyFold("src/other.ts#OtherPage"))).toBe(false);
+	});
+
 	it("resolves a constructor reached through a namespace import", () => {
 		const map = readFixtures({
 			"src/pages.ts": 'export { HomePage } from "./HomePage";',

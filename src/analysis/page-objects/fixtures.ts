@@ -66,6 +66,14 @@ function isFunctionLike(node: Node): boolean {
 	);
 }
 
+/** Whether `node` lies inside `container`'s span. */
+function isWithin(node: Node, container: Node): boolean {
+	return (
+		node.getStart() >= container.getStart() &&
+		node.getEnd() <= container.getEnd()
+	);
+}
+
 /** `new X(…)`, or an identifier initialised from one in the same block. */
 function constructedClass(
 	expression: Node,
@@ -86,6 +94,15 @@ function constructedClass(
 			SyntaxKind.VariableDeclaration,
 		)) {
 			if (declaration.getName() !== name) {
+				continue;
+			}
+			// Only a declaration whose own block encloses the reference. A search
+			// over every descendant finds document order, not scope: a nested
+			// helper declaring `const result = new OtherPage()` above the factory's
+			// own `const result = new HomePage()` was matched first, and the
+			// fixture was silently mapped to a class the factory never returns.
+			const block = declaration.getFirstAncestorByKind(SyntaxKind.Block);
+			if (!block || !isWithin(expression, block)) {
 				continue;
 			}
 			const initializer = declaration.getInitializer();
