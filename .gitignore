@@ -10,4 +10,13 @@ tsconfig.tsbuildinfo
 
 # AI harness
 .claude
-.wolf
+.codex
+.cursor
+
+# OpenWolf: ship the framework (hook scripts + protocol doc), keep the learned
+# state local (memory/cerebrum/buglog/anatomy regenerate per checkout).
+.wolf/*
+!.wolf/OPENWOLF.md
+!.wolf/hooks/
+# ...but hook runtime state stays local (regenerated each session).
+.wolf/hooks/_session.json
