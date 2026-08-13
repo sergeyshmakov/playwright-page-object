@@ -259,6 +259,47 @@ function toToolError(thrown: unknown): ToolError {
 	return new ToolError("internal_error", message);
 }
 
+/** The SDK's own phrasing when a call fails its `inputSchema`. */
+const SDK_VALIDATION_PREFIX = "Input validation error:";
+
+/**
+ * Puts schema-validation failures in the same envelope as everything else.
+ *
+ * The SDK validates `inputSchema` before a handler is ever called, so
+ * {@link safeHandler} cannot see it, and what went out was a bare string:
+ * `isError: true` with no `code`, no `hint`, and none of the JSON shape every
+ * other failure has. A client parsing tool output had to handle two forms, and
+ * only ever found out which by parsing.
+ *
+ * Feature-detected on purpose. `createToolError` is the SDK's method, not ours;
+ * if an upgrade renames it this quietly leaves the old behaviour in place
+ * rather than throwing at construction. `envelopesValidationErrors` reports
+ * whether the hook took, and a test pins it so the upgrade that breaks it fails
+ * loudly instead of silently regressing the shape.
+ */
+export function envelopeValidationErrors(server: unknown): boolean {
+	const target = server as { createToolError?: (message: string) => unknown };
+	if (typeof target.createToolError !== "function") {
+		return false;
+	}
+	const original = target.createToolError.bind(target);
+	target.createToolError = (message: string) => {
+		if (!message.startsWith(SDK_VALIDATION_PREFIX)) {
+			return original(message);
+		}
+		return fail(
+			new ToolError(
+				"invalid_input",
+				message.slice(SDK_VALIDATION_PREFIX.length).trim(),
+				{
+					hint: "Check the argument against the tool's inputSchema in tools/list, then re-call.",
+				},
+			),
+		);
+	};
+	return true;
+}
+
 /**
  * Wraps a tool handler so any thrown value becomes an in-band tool error.
  * An unexpected ts-morph crash must never surface as a JSON-RPC transport

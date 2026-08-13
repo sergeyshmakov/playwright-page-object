@@ -92,7 +92,7 @@ describe("entry resolution over the transport", () => {
 					component: "Home",
 				});
 				expect(missing.isError).toBe(true);
-				expect(missing.envelope.error?.code).toBe("file_not_found");
+				expect(missing.envelope.error?.code).toBe("component_not_found");
 				expect(missing.envelope.error?.candidates).toEqual(["src/App.tsx"]);
 			},
 		);
@@ -127,7 +127,7 @@ describe("entry resolution over the transport", () => {
 					component: "GuestItemInf",
 				});
 				expect(typo.isError).toBe(true);
-				expect(typo.envelope.error?.code).toBe("file_not_found");
+				expect(typo.envelope.error?.code).toBe("component_not_found");
 				expect(typo.envelope.error?.suggestions).toContain("GuestItemInfo");
 
 				// The suggestion has to work.
@@ -170,7 +170,7 @@ describe("entry resolution over the transport", () => {
 					file: "src/ui/Panel.tsx",
 				});
 				expect(wrongName.isError).toBe(true);
-				expect(wrongName.envelope.error?.code).toBe("file_not_found");
+				expect(wrongName.envelope.error?.code).toBe("component_not_found");
 				expect(wrongName.envelope.error?.suggestions).toEqual([
 					"Panel",
 					"PanelHeader",
@@ -182,7 +182,7 @@ describe("entry resolution over the transport", () => {
 					component: "PanelHeader",
 					file: "src/legacy/Panel.tsx",
 				});
-				expect(wrongFile.envelope.error?.code).toBe("file_not_found");
+				expect(wrongFile.envelope.error?.code).toBe("component_not_found");
 				expect(wrongFile.envelope.error?.candidates).toEqual([
 					"src/ui/Panel.tsx",
 				]);
@@ -389,5 +389,69 @@ describe("entry resolution over the transport", () => {
 				(envelope.data as { uncoveredTestIds: unknown[] }).uncoveredTestIds,
 			).toHaveLength(2);
 		});
+	}, 30_000);
+
+	// A scoped request answered with the whole repository is not a success. The
+	// file resolves — it is a scanned .tsx — but it declares only a React *class*
+	// component, which the walk does not root at, and the engine's answer to that
+	// is a flat inventory of the entire scan. Through this tool that read as
+	// `ok: true` plus one `info` note: on a 4,924-file app, 186 KB of occurrences
+	// where one component's tree was asked for.
+	it("refuses a file that declares no component it can root at", async () => {
+		await withProject(
+			"ppo-entry-classonly-",
+			{
+				"src/ClassOnly.tsx": [
+					'import * as React from "react";',
+					"export default class ClassOnly extends React.Component {",
+					'\trender() { return <div data-testid="FromClass" />; }',
+					"}",
+					"",
+				].join("\n"),
+				"src/Alpha.tsx": [
+					"export function Alpha() {",
+					'\treturn <div data-testid="AlphaRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const scoped = await callTool(client, "get_testid_tree", {
+					file: "src/ClassOnly.tsx",
+				});
+				expect(scoped.isError).toBe(true);
+				expect(scoped.envelope.error?.code).toBe("incomplete_tree");
+				// Not the other file's ids, which is what the dump used to carry.
+				expect(JSON.stringify(scoped.envelope)).not.toContain("AlphaRoot");
+			},
+		);
+	}, 30_000);
+
+	// The SDK validates `inputSchema` before any handler runs, so this failure
+	// used to leave as a bare string: `isError: true` with no code and no hint,
+	// while every other failure leaves as `{ok:false,error:{…}}`. A client had to
+	// handle two shapes and could only tell them apart by parsing.
+	it("puts a schema-validation failure in the same envelope as everything else", async () => {
+		await withProject(
+			"ppo-entry-validation-",
+			{
+				"src/App.tsx": [
+					"export function App() {",
+					'\treturn <div data-testid="AppRoot" />;',
+					"}",
+					"",
+				].join("\n"),
+			},
+			async (client) => {
+				const tooDeep = await callTool(client, "get_testid_tree", {
+					depth: 12,
+				});
+				expect(tooDeep.isError).toBe(true);
+				expect(tooDeep.envelope.ok).toBe(false);
+				expect(tooDeep.envelope.error?.code).toBe("invalid_input");
+				expect(String(tooDeep.envelope.error?.message)).toContain("depth");
+				expect(String(tooDeep.envelope.error?.hint)).toContain("inputSchema");
+			},
+		);
 	}, 30_000);
 });

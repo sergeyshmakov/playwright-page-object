@@ -196,16 +196,26 @@ export function handleGetTestIdTree(
 	// The engine roots where it was told. The only way a named component still
 	// fails to come back is the engine refusing it outright, and its reason is
 	// more specific than anything this layer could re-derive.
-	if (requested && tree.fidelity === "flat") {
-		throw new ToolError(
-			"incomplete_tree",
-			tree.fidelityReason ??
-				`"${requested.name}" could not be rooted in "${requested.file}".`,
-			{
-				candidates: siblings.map((one) => one.name).sort(),
-				hint: `Pass testId to find where "${requested.name}" is rendered, or request one of the other components in that file.`,
-			},
-		);
+	//
+	// `file` alone counts as being told. `resolveEntryFile` has already proved
+	// the path names a scanned source, so reaching here means the file exists
+	// and declares nothing the walk recognises — a React *class* component, say.
+	// The engine's answer to that is a flat inventory of the entire scan, which
+	// through this tool reads as "your scope was ignored, here is the whole
+	// repository": `ok: true`, one `info` note, and on a large app 186 KB of
+	// occurrences where a component's tree was asked for. Refusing is the same
+	// rule `resolveEntryFile` applies one step earlier, at the step that can
+	// finally see what the file contains.
+	if ((requested || scope) && tree.fidelity === "flat") {
+		const named = requested
+			? `"${requested.name}" could not be rooted in "${requested.file}".`
+			: `"${scope?.file}" declares no component this walk can root at.`;
+		throw new ToolError("incomplete_tree", tree.fidelityReason ?? named, {
+			candidates: siblings.map((one) => one.name).sort(),
+			hint: requested
+				? `Pass testId to find where "${requested.name}" is rendered, or request one of the other components in that file.`
+				: "Only function components are walked; a class component is not one. Pass `testId` to find where a known id is rendered, or `component` to root at a function component elsewhere.",
+		});
 	}
 
 	const roots = tree.roots;

@@ -8,7 +8,11 @@ import {
 	HANDLE_LIFETIME_TEXT,
 } from "./handles";
 import type { McpServerOptions } from "./options";
-import { MAX_RESPONSE_BYTES, safeHandler } from "./respond";
+import {
+	envelopeValidationErrors,
+	MAX_RESPONSE_BYTES,
+	safeHandler,
+} from "./respond";
 import {
 	getPageObjectTreeInput,
 	getTestIdTreeInput,
@@ -132,6 +136,10 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		{ name: "playwright-page-object", version: readVersion() },
 		{ instructions: INSTRUCTIONS },
 	);
+	// Schema-validation failures are the SDK's, raised before any handler
+	// runs. Without this they leave as a bare string while every other
+	// failure leaves as `{ok:false,error:{…}}`.
+	envelopeValidationErrors(server);
 
 	// One store per server, so a handle cannot outlive the process that issued it
 	// or reach a workspace it was not built against.

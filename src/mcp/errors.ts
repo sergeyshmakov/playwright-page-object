@@ -5,6 +5,11 @@ export type ToolErrorCode =
 	| "ambiguous_component"
 	| "incomplete_tree"
 	| "file_not_found"
+	// A *component* the scan does not declare. Distinct from `file_not_found`,
+	// which these used to borrow: the message said "No component named X was
+	// found" under a code naming a file, so the two halves of one error
+	// disagreed about what was missing.
+	| "component_not_found"
 	| "parse_error"
 	// Recoverable by construction: the model re-calls the creation tool and
 	// gets a fresh handle. See `src/mcp/handles.ts`.

@@ -99,7 +99,7 @@ export function missingComponent(
 ): ToolError {
 	if (scopeFile && sameName.length > 0) {
 		return new ToolError(
-			"file_not_found",
+			"component_not_found",
 			`No component named "${wanted}" is declared in "${scopeFile}", but ${sameName.length} other file(s) declare it.`,
 			{
 				candidates: sameName.map((component) => component.file).sort(),
@@ -115,7 +115,7 @@ export function missingComponent(
 			MAX_ERROR_LIST,
 		);
 		return new ToolError(
-			"file_not_found",
+			"component_not_found",
 			`No component named "${wanted}" was found in the scanned sources.`,
 			{
 				suggestions,
@@ -135,7 +135,7 @@ export function missingComponent(
 		),
 	].sort();
 	return new ToolError(
-		"file_not_found",
+		"component_not_found",
 		inFile.length === 0
 			? `"${scopeFile}" declares no components.`
 			: `No component named "${wanted}" is declared in "${scopeFile}".`,
