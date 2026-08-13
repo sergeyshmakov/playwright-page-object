@@ -18,6 +18,15 @@
 			"recommended": true,
 			"complexity": {
 				"useArrowFunction": "off"
+			},
+			"style": {
+				"noExcessiveLinesPerFile": {
+					"level": "warn",
+					"options": {
+						"maxLines": 500,
+						"skipBlankLines": false
+					}
+				}
 			}
 		}
 	},
