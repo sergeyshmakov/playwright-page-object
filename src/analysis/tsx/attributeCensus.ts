@@ -88,6 +88,14 @@ const HYPHENATED_ATTRIBUTE = /\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+)\s*=/g;
  *
  * The needle is `attribute=`, not the bare name: a repository whose README or
  * a comment mentions `data-testid` must not be able to silence the check.
+ *
+ * It is matched as a whole attribute rather than as a substring, which a plain
+ * `includes()` got wrong in both directions. `qa-data-testid=` contains
+ * `data-testid=`, so a repository using a differently prefixed attribute
+ * reported evidence for one it never writes and the mismatch warning went
+ * unsaid; and JSX may put whitespace before the equals sign, so
+ * `<div data-testid = "Root" />` was `attribute-no-evidence` on a file that
+ * plainly has it.
  */
 export function censusFromText(
 	ws: WorkspaceFiles,
@@ -95,11 +103,12 @@ export function censusFromText(
 ): AttributeCensus {
 	return ws.memo(`attr-census::${attribute}`, [], () => {
 		const files = ws.jsxFiles();
-		const needle = `${attribute}=`;
+		const needle = attributeNeedle(attribute);
 
 		for (const sourceFile of files) {
 			const text = sourceFile.getFullText();
-			if (!text.includes(needle)) {
+			needle.lastIndex = 0;
+			if (!needle.test(text)) {
 				continue;
 			}
 			return {
@@ -138,12 +147,24 @@ export function censusFromText(
 	});
 }
 
-function countOccurrences(text: string, needle: string): number {
+/**
+ * `attribute=` as a whole JSX attribute.
+ *
+ * The left boundary is what keeps `qa-data-testid=` from answering for
+ * `data-testid=`; hyphens and colons are in it because both are ordinary
+ * characters inside an attribute name. `\s*` before the equals sign is legal
+ * JSX that the substring form could not see.
+ */
+function attributeNeedle(attribute: string): RegExp {
+	const escaped = attribute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(String.raw`(?<![\w$:-])${escaped}\s*=`, "g");
+}
+
+function countOccurrences(text: string, needle: RegExp): number {
+	needle.lastIndex = 0;
 	let count = 0;
-	let index = text.indexOf(needle);
-	while (index >= 0) {
+	while (needle.exec(text) !== null) {
 		count += 1;
-		index = text.indexOf(needle, index + needle.length);
 	}
 	return count;
 }

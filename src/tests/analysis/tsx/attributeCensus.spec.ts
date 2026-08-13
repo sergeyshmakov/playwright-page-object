@@ -65,6 +65,37 @@ describe("censusFromText", () => {
 		expect(censusFromText(ws, "data-testid").resolvedCount).toBe(0);
 	});
 
+	// `qa-data-testid=` contains `data-testid=`. As a substring scan this
+	// reported evidence for an attribute the repository never writes, and the
+	// mismatch warning that should have named `qa-data-testid` went unsaid.
+	it("does not count a longer attribute that ends with the name", () => {
+		const ws = makeWorkspace({
+			"src/App.tsx": [
+				"export const App = () => (",
+				'\t<div qa-data-testid="Root">',
+				'\t\t<b qa-data-testid="A" />',
+				"\t</div>",
+				");",
+			].join("\n"),
+		});
+		const census = censusFromText(ws, "data-testid");
+		expect(census.resolvedCount).toBe(0);
+		expect(census.candidates).toEqual([{ name: "qa-data-testid", count: 2 }]);
+		expect(attributeVerdict(census, "playwright-config")?.code).toBe(
+			"attribute-mismatch",
+		);
+	});
+
+	// Whitespace around the equals sign is legal JSX.
+	it("counts an attribute written with spaces around the equals sign", () => {
+		const ws = makeWorkspace({
+			"src/App.tsx": 'export const App = () => <div data-tid = "Root" />;',
+		});
+		const census = censusFromText(ws, "data-tid");
+		expect(census.resolvedCount).toBe(1);
+		expect(attributeVerdict(census, "playwright-config")).toBeNull();
+	});
+
 	it("ranks the alternatives it found, most frequent first", () => {
 		const ws = makeWorkspace({
 			"src/App.tsx": [
