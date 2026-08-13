@@ -1,0 +1,194 @@
+import type {
+	Diagnostic,
+	DiagnosticCode,
+	DiagnosticSeverity,
+} from "../analysis";
+
+/**
+ * Session-scoped warning de-duplication.
+ *
+ * The environment diagnostics are the same on every call of a session — they
+ * describe the repository and the server's own flags, not the question asked —
+ * and they are long, because each one has to be self-explanatory the first time
+ * it is read. Measured against a production repository they were **86% of a
+ * `list_page_objects` response and 75% of a `map_coverage` one**: 3,182 bytes,
+ * byte-identical, on every single call.
+ *
+ * So each distinct warning is sent in full once per session, and afterwards as
+ * its code alone. What is deliberately *not* deduplicated is `meta.hint`: the
+ * hint is the sentence that says what to do about the environment, it is
+ * rebuilt from the full warnings every time, and it ships in full on every
+ * response. A session that loses the earlier text still has the instruction.
+ *
+ * Repeats collapse by code rather than surviving one-per-entry, because the
+ * warnings that repeat most are per-site ones: twenty `dynamic-selector-arg`
+ * entries stripped of their `loc` and `message` are twenty identical objects
+ * saying nothing. `{code, severity, repeat: 20}` says the same thing once and
+ * is the honest shape of "you have already been told this".
+ */
+
+/** A warning the reader has already been given in full, this session. */
+export interface RepeatedWarnings {
+	code: DiagnosticCode;
+	severity: DiagnosticSeverity;
+	/** How many warnings of this code the response would have carried. */
+	repeat: number;
+}
+
+export type ShownWarning = Diagnostic | RepeatedWarnings;
+
+/**
+ * How many distinct warnings a session remembers having sent.
+ *
+ * A per-site diagnostic is distinct per site, so a session that walks a large
+ * repository can produce thousands. Eviction is FIFO and its only consequence
+ * is that a long-forgotten warning is sent in full again, which is the safe
+ * direction to fail in.
+ */
+export const MAX_REMEMBERED_WARNINGS = 512;
+
+/**
+ * Identity of a warning for "have I sent this already".
+ *
+ * Everything the reader would see, so a warning whose verdict changed - a
+ * different candidate attribute, a different count, a new line - counts as new
+ * and is sent in full. That is what makes an epoch bump visible without the
+ * ledger having to know epochs exist.
+ */
+function fingerprint(warning: Diagnostic): string {
+	return JSON.stringify([
+		warning.code,
+		warning.severity,
+		warning.message,
+		warning.loc ?? null,
+		warning.data ?? null,
+	]);
+}
+
+/** What a response should show, and how to record that it showed it. */
+export interface WarningPlan {
+	shown: ShownWarning[];
+	/**
+	 * Records the emission. Called by {@link ok} only when the response actually
+	 * ships: a payload refused for being too large delivered nothing, and must
+	 * not leave the session believing the reader has seen these warnings.
+	 */
+	delivered: () => void;
+}
+
+const NOOP = (): void => {};
+
+export class WarningLedger {
+	/** Insertion-ordered, so iteration order is the eviction order. */
+	private readonly sent = new Set<string>();
+
+	constructor(private readonly maxRemembered = MAX_REMEMBERED_WARNINGS) {}
+
+	plan(warnings: Diagnostic[] | undefined): WarningPlan {
+		if (!warnings || warnings.length === 0) {
+			return { shown: [], delivered: NOOP };
+		}
+
+		const prints = warnings.map(fingerprint);
+		const fresh: Diagnostic[] = [];
+		// Insertion-ordered, so repeats come back in first-appearance order.
+		const repeats = new Map<string, RepeatedWarnings>();
+
+		warnings.forEach((warning, index) => {
+			if (!this.sent.has(prints[index])) {
+				fresh.push(warning);
+				return;
+			}
+			const key = `${warning.code}\u0000${warning.severity}`;
+			const group = repeats.get(key);
+			if (group) {
+				group.repeat += 1;
+				return;
+			}
+			repeats.set(key, {
+				code: warning.code,
+				severity: warning.severity,
+				repeat: 1,
+			});
+		});
+
+		return {
+			// New warnings in their own order, then what is merely still true.
+			shown: [...fresh, ...repeats.values()],
+			delivered: () => {
+				for (const print of prints) {
+					this.sent.add(print);
+				}
+				this.evict();
+			},
+		};
+	}
+
+	/**
+	 * The same once-per-session rule, for a block of static reference text.
+	 *
+	 * `apiHints` is the runtime API of the base classes a tree uses. It is
+	 * invaluable the first time and identical every time after: measured at
+	 * 1,405 B against a 2,690 B response, 52% of it, re-sent on every call while
+	 * the warnings beside it deduplicated. Unlike a warning it has no severity
+	 * and no hint to fall back on, so a repeat keeps the *keys* — which name the
+	 * bases in play, the part that varies with the tree — and drops the prose.
+	 *
+	 * Keyed on the text, so a line that changes is sent again.
+	 */
+	planText<T extends Record<string, string>>(
+		scope: string,
+		block: T | undefined,
+	): { shown: T | Array<keyof T> | undefined; delivered: () => void } {
+		if (!block) {
+			return { shown: undefined, delivered: NOOP };
+		}
+		const prints = Object.entries(block).map(
+			([key, value]) => `${scope}\u0000${key}\u0000${value}`,
+		);
+		if (prints.every((print) => this.sent.has(print))) {
+			return { shown: Object.keys(block), delivered: NOOP };
+		}
+		return {
+			shown: block,
+			delivered: () => {
+				for (const print of prints) {
+					this.sent.add(print);
+				}
+				this.evict();
+			},
+		};
+	}
+
+	/** Test hook. */
+	get size(): number {
+		return this.sent.size;
+	}
+
+	private evict(): void {
+		while (this.sent.size > this.maxRemembered) {
+			const oldest = this.sent.values().next();
+			if (oldest.done) {
+				break;
+			}
+			this.sent.delete(oldest.value);
+		}
+	}
+}
+
+/**
+ * A plan whether or not the caller has a ledger.
+ *
+ * Handlers are called directly by tests and through the server by agents; only
+ * the server owns a session. Without one, every warning ships in full — the
+ * behaviour that existed before this file.
+ */
+export function planWarnings(
+	ledger: WarningLedger | undefined,
+	warnings: Diagnostic[] | undefined,
+): WarningPlan {
+	if (!ledger) {
+		return { shown: warnings ?? [], delivered: NOOP };
+	}
+	return ledger.plan(warnings);
+}

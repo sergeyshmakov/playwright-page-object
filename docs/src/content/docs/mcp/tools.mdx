@@ -1,0 +1,572 @@
+---
+title: MCP Tool Reference for Playwright Page Objects
+description: Choose and call the five Playwright page-object MCP tools, with parameters, response fields, examples, and error recovery.
+head:
+  - tag: title
+    content: Playwright Page Object MCP Tool Reference
+---
+
+The server exposes five read-only, idempotent tools. Start with `list_page_objects` and request only the tree you need. Both tree tools return `format: "outline"` by default, which is what a model should read; pass `format: "json"` when code has to parse the response.
+
+## Which MCP tool should I use?
+
+Each tool answers a different question. Calling the narrowest one keeps the response easier to read and reduces the amount of source context an agent needs.
+
+| Question | Tool |
+| --- | --- |
+| Which page objects already exist? | `list_page_objects` |
+| Which selectors and methods does one page object expose? | `get_page_object_tree` |
+| Which test IDs does static analysis find in a component tree? | `get_testid_tree` |
+| Which page-object selectors and test IDs agree or disagree? | `map_coverage` |
+| How do I read the rest of a long coverage list? | `query_coverage` |
+
+## How are tool responses structured?
+
+Every tool returns one text block holding compact JSON. Success:
+
+```json
+{ "ok": true, "data": "…", "meta": { "…": "…" } }
+```
+
+Failure, with the MCP `isError` flag set:
+
+```json
+{
+	"ok": false,
+	"error": {
+		"code": "class_not_found",
+		"message": "No page object named \"ChekoutPage\" was discovered among the 8 distinct page-object name(s) in the index.",
+		"suggestions": ["CheckoutPage"],
+		"hint": "Call list_page_objects to see every page object and its file."
+	}
+}
+```
+
+`candidates` and `suggestions` contain at most 10 entries. When more exist, `moreCandidates` or `moreSuggestions` reports how many were omitted. Meta keys whose value is `undefined`, `null`, `false`, or an empty array are removed before serialization, so an absent field usually means the server has nothing to report for it.
+
+Responses are capped at 200,000 UTF-8 **bytes**, the payload sent over stdio, so non-ASCII text can use more than one byte per character. MCP clients can impose lower limits. `get_page_object_tree`, `map_coverage`, and `query_coverage` advertise a raised per-tool ceiling that Claude Code honors. The coverage tools trim oversized pages, preserve `summary` and `scope`, and report cuts in `meta.truncatedBuckets`. The other tools return `too_large` with a recovery hint; see [Troubleshooting](/mcp/troubleshooting/#how-do-i-fix-a-too_large-response).
+
+### Repeated warnings
+
+Each distinct warning is sent in full once per session. After that the same warning comes back abbreviated:
+
+```json
+{ "code": "playwright-config-ambiguous", "severity": "warning", "repeat": 1 }
+```
+
+That means `repeat` warnings of this code are still in force and their text has not changed since it was sent in full. A warning with changed details, such as a different candidate attribute or moved line, counts as new and is sent in full again. An abbreviated entry therefore never hides a changed verdict.
+
+`meta.hint` is never abbreviated. It is rebuilt from the full warnings on every call, so the sentence naming the flag that fixes your environment ships whole every time. Act on the hint; treat a bare code as a reminder. In one internal-repository measurement, this cut the warning block of a repeat call by 87%; the saving depends on the warnings in your project.
+
+### Common meta fields
+
+| Field | Tools | Meaning |
+| --- | --- | --- |
+| `root` | `list_page_objects`, `get_page_object_tree` | Absolute path of the analyzed project root |
+| `attribute` | all | Test-ID attribute this call read the sources with |
+| `attributeSource` | all | `"param"`, `"playwright-config"`, or `"default"` |
+| `playwrightConfig` | all | Project-relative path of the config that was read; absent when none was found |
+| `scanned` | `list_page_objects`, `get_testid_tree` | Files parsed — **two different sets**: every source the project holds on `list_page_objects`, and JSX/TSX sources only on `get_testid_tree`. The second is legitimately the smaller number |
+| `warnings` | all | Diagnostics for this call. The **environment** ones come first, worst-invalidating first, and are capped at 8; each builder then appends its own, so the array can be longer than 8 and later entries are not ranked. Repeats within a session are abbreviated, as above |
+| `apiHints` | `get_page_object_tree` | The runtime API of the base classes this tree uses, so the call syntax arrives with the selector chain. Always an object of prose, or absent |
+| `apiHintsSent` | `get_page_object_tree` | On a repeat call: the base names whose prose was already sent in full this session, in place of `apiHints`. Two fields rather than one that changes type, so a consumer parsing the prose has a stable contract |
+| `idsNotPlaced` | `get_testid_tree` | On a holed tree: `{ids, total}` — test IDs the scan found **in files this tree walked** that did not end up in `roots`, `ids` capped at 12 with `total` carrying the real count. This is how you tell "not rendered" from "not reached" |
+| `suppressed` | `get_testid_tree` | The nodes were omitted and why. Either the attribute is wrong, or the walk was cut and reached no ID at all — in both cases the tree could not have answered. When it is set, `data` is the JSON object `{fidelity, roots: [], stats}` **even under `format: "outline"`**, because there is no tree to render |
+| `hint` | all | What to do next, in the tool's own argument names. An environment problem is prepended, because no advice about the next call matters while the analysis reads the wrong attribute |
+| `total`, `offset`, `nextOffset` | `list_page_objects` | Unpaged count, the offset in effect, and the offset for the next page |
+| `note` | `get_page_object_tree`, `get_testid_tree`, `map_coverage`, `query_coverage` | An absolute `file` was accepted and relativized; says how it was read. `query_coverage` echoes the one from the call that minted the handle |
+| `truncated` | `get_page_object_tree`, `get_testid_tree`, `map_coverage`, `query_coverage` | A budget or a `limit` cut the payload. Distinct from `truncatedBuckets`, which means the **size cap** cut a list below what `limit` had already selected |
+| `fidelity`, `fidelityReason` | `get_testid_tree` | Completeness of the node tree, and where the holes are |
+| `alsoIncluded` | `map_coverage`, `query_coverage` | Page objects analyzed alongside the one you named, because they share its file |
+| `ignored` | `map_coverage` | Arguments you passed that `buckets` overruled. Absent when you passed none — it never reports a default as overruled |
+| `shown` | `map_coverage`, `query_coverage` | Count of the entries actually returned, when `limit` or the size cap cut a list. A record keyed by bucket on `map_coverage`, a single number on `query_coverage` — the same split as `nextOffset` |
+| `bucket` | `query_coverage` | The bucket this page came from, echoed so a page is a complete instruction for the next one |
+| `coverageId` | `map_coverage`, `query_coverage` | Opaque handle to this exact report, spent by `query_coverage` |
+| `nextOffset` | `map_coverage`, `query_coverage` | Where the next page of a cut list starts. Its absence means the list is exhausted |
+| `truncatedBuckets` | `map_coverage`, `query_coverage` | Lists the size cap cut below what `limit` had already selected |
+| `assumeForwarded` | `map_coverage`, `query_coverage` | The server runs with `--assume-forwarded` |
+
+`attributeSource` is worth reading on every call. `"default"` means no config set `use.testIdAttribute` and Playwright's `data-testid` was assumed, which is correct for most repositories and wrong for the ones that migrated away from it.
+
+### Recoverable error codes
+
+| Code | Raised by | What to do |
+| --- | --- | --- |
+| `invalid_input` | `get_page_object_tree`; invalid `file` values in `get_testid_tree` and `map_coverage` | For `get_page_object_tree`, provide `class` or `file`. For all three, pass a project-relative path, or an absolute one inside the project root. An absolute path outside the root, and the root itself, are rejected here rather than reported as missing |
+| `class_not_found` | `get_page_object_tree`, `map_coverage` | Read `suggestions` (nearest names by edit distance), or call `list_page_objects` |
+| `ambiguous_class` | `get_page_object_tree`, `map_coverage` | Several classes share the name. Re-call with `file` set to one of the `candidates` — which are `path.ts#ClassName` keys from `get_page_object_tree` and bare file paths from `map_coverage`. Both are accepted as `file` |
+| `ambiguous_component` | `get_testid_tree` | Several files declare that component name, or `file` named only a trailing segment that fits more than one scanned file. `candidates` lists them; re-call with the full project-relative `file` |
+| `incomplete_tree` | `get_testid_tree` | The named component could not be rooted. `candidates` lists the other components in that file; or pass `testId` to look the ID up across the whole scan |
+| `file_not_found` | `get_page_object_tree`, `get_testid_tree`, `map_coverage` | The path or component name selects nothing. Use `suggestions` / `candidates`, or drop the argument to widen the search |
+| `expired_handle` | `query_coverage` | The `coverageId` is unknown, unused for 10 minutes, or was invalidated because an analyzed file changed. Re-call `map_coverage` with the arguments that produced it because the scope is not recoverable from the ID, then use the new `meta.coverageId` |
+| `too_large` | `list_page_objects`, `get_page_object_tree`, `get_testid_tree` | Apply the `hint`; it names the knobs that tool has. The coverage tools trim instead of raising this |
+| `max_files_exceeded` | all | Restart the server with a higher `--max-files`, or narrow the scan as described in [Configuration](/mcp/configuration/#how-do-i-control-the-scanned-files) |
+| `internal_error` | all | An unexpected failure, returned in-band rather than as a transport error. The message is the thrown error's; the server also logs it to stderr |
+
+---
+
+## `list_page_objects`
+
+`list_page_objects` returns each class that the scanner can identify through the library's decorators, base classes, or fixtures. Factory relationships help expand a discovered selector graph, but a class whose only evidence is a factory argument is omitted from this index. Call the tool before searching files or creating a page object that may already exist.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `filter` | string | optional | Case-insensitive substring, matched against class name **and** file path |
+| `limit` | integer 1 to 500 | `100` | |
+| `offset` | integer ≥ 0 | `0` | Applied after `filter`. Follow `meta.nextOffset` to page |
+
+### Response
+
+`data` is an array of entries with `name`, `file`, `kind`, optional `root` (compact selector), optional `fixtures` (binding names), `members`, `methods`, and the class JSDoc as `doc` (summarised, so a long comment is cut). `kind` is one of `rootPageObject`, `rootPlain`, `pageFallback`, `fragment`, `nestedPageObject`, `externalControl`, or `unknown` when the host could not be classified.
+
+Member details are deliberately absent. Use `get_page_object_tree` for those.
+
+`meta.total` always reports the unpaged count, so a complete list is distinguishable from a capped one without a second call.
+
+### Example
+
+Against the example app, with no arguments:
+
+```json
+{
+	"ok": true,
+	"data": [
+		{
+			"name": "CheckoutPage",
+			"file": "e2e/page-objects/CheckoutPage.ts",
+			"kind": "rootPageObject",
+			"root": { "kind": "testId", "testId": "CheckoutPage" },
+			"fixtures": ["checkoutPage"],
+			"members": 6,
+			"methods": 3
+		},
+		{
+			"name": "PromoSectionFragment",
+			"file": "e2e/page-objects/PromoSectionFragment.ts",
+			"kind": "fragment",
+			"members": 1,
+			"methods": 0,
+			"doc": "Fragment control: receives the section root from `@Selector(\"PromoSection\", …)`…"
+		}
+	],
+	"meta": {
+		"root": "/repo/example",
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts",
+		"scanned": 18,
+		"total": 6
+	}
+}
+```
+
+An empty page gets a `hint` that distinguishes the three reasons it can be empty: nothing was indexed at all, the `filter` matched none of what was indexed (with the closest names), or the `offset` is past the end.
+
+---
+
+## `get_page_object_tree`
+
+`get_page_object_tree` returns one class's selector tree up to the requested depth and node budget. It expands nested controls and lists available method signatures, including inherited methods from project-local base classes. Call it before editing a test or adding an accessor that may already exist.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `class` | string | optional | Class name. Provide `class`, `file`, or both |
+| `file` | string | optional | Path relative to the project root. An absolute path inside the root is accepted and relativized, and `meta.note` says so; one outside the root is rejected |
+| `depth` | integer 1 to 10 | `3` | Levels of nested control classes to expand |
+| `includeMethods` | boolean | `true` | |
+| `format` | `"json"` \| `"outline"` | `"outline"` | Outline is the default because it is 3.6× smaller on the same tree. Pass `"json"` when something parses fields |
+
+`file` alone resolves to the file's default-exported page object, else its first root one. When the file declares several and none is preferred, the call fails with `ambiguous_class` and `path.ts#ClassName` candidates.
+
+### Response
+
+With `format: "json"`, `data` is `{ root, defs, stats }`. `root` is a key into `defs`, and `defs` is a flat map of `path.ts#ClassName` to node. Shared controls appear once and are referenced by ID everywhere else, so a control used by ten members costs one definition.
+
+Each member carries `name`, `loc`, `visibility`, the full `selector` (decorator name, raw source text, and the parsed value), and a `result` describing what the accessor resolves to: `locator`, `pageObject`, `list` (with `itemClassName`), `control`, or `unknown` with the source text.
+
+Two things about addressing and locations are deliberate. `class` is matched exactly, unlike the case-insensitive substring used by `list_page_objects.filter`. A near miss returns `class_not_found` with the closest names in `suggestions`. A member's `loc` begins at its decorated declaration. A class node's `loc` begins at the class declaration, or at its class decorator when present.
+
+With `format: "outline"`, `data` is an indented string. It costs far fewer tokens and is not machine-parseable. `(see above)` marks a definition already printed, and `(not expanded: depth limit)` or `(not expanded: node budget)` marks one the walk did not reach.
+
+### How do I turn a tree into a test body?
+
+The tree is the call chain: members are plain properties, so `defs` nesting reads straight off as `checkoutPage.CartItems.first().RemoveButton`. What the tree cannot show is how each link is *called*, so `meta.apiHints` ships it alongside — one line per base class the tree actually uses:
+
+```json
+{
+	"meta": {
+		"apiHints": {
+			"members": "Every member listed here is a property: `po.CartItems`. A member whose result is `Locator` IS a Playwright Locator …",
+			"RootPageObject": "Built from the Playwright page: `const po = new CheckoutPage(page)` …",
+			"PageObject": "`.$` is the Playwright Locator … Awaitable waits: `.waitVisible() .waitHidden() .waitText(t)` …",
+			"ListPageObject": "One item: `.first() .second() .last() .at(i) .getItemByIndex(i)` … A narrowed list: `.filter(opts) .filterByText(t)` …"
+		}
+	}
+}
+```
+
+A member's `result` determines how to call it. A `locator` is a Playwright `Locator`, so Playwright calls go on it directly (`po.PromoCodeInput.fill("SAVE20")`). `pageObject` and `list` use the library API, including `.$`. For `control`, inspect its definition and extends chain: it has `.$` only when it extends `PageObject`. Do not infer a callable API for `unknown`; read the source text carried in the payload.
+
+The `methods` in each node are the ones that class declares, plus any on a project-local base. Library helpers are not repeated on every class — `inheritedApi` names the base that supplies them and `apiHints` gives their syntax. The block is present in both formats, since `outline` needs it no less.
+
+### Example
+
+`{"class": "CartItemControl"}`, abbreviated:
+
+```json
+{
+	"ok": true,
+	"data": {
+		"root": "e2e/page-objects/CartItemControl.ts#CartItemControl",
+		"defs": {
+			"e2e/page-objects/CartItemControl.ts#CartItemControl": {
+				"className": "CartItemControl",
+				"hostKind": "nestedPageObject",
+				"scope": "parent-locator",
+				"extendsChain": ["PageObject"],
+				"members": [
+					{
+						"name": "RemoveButton",
+						"selector": {
+							"kind": "role",
+							"decorator": "SelectorByRole",
+							"raw": "@SelectorByRole(\"button\", { name: \"Remove\" })",
+							"dynamic": false,
+							"role": "button",
+							"options": { "name": "Remove" }
+						},
+						"result": {
+							"kind": "pageObject",
+							"ref": "e2e/page-objects/controls/ButtonControl.ts#ButtonControl",
+							"className": "ButtonControl"
+						}
+					}
+				],
+				"methods": [
+					{ "name": "expectVisible", "signature": "expectVisible()", "isAsync": true }
+				],
+				"expanded": true
+			},
+			"e2e/page-objects/controls/ButtonControl.ts#ButtonControl": { "…": "…" }
+		},
+		"stats": { "defs": 2, "members": 1, "methods": 1, "dynamic": 0, "parseMs": 1 }
+	},
+	"meta": {
+		"root": "/repo/example",
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts"
+	}
+}
+```
+
+---
+
+## `get_testid_tree`
+
+`get_testid_tree` shows the test IDs that static analysis finds in your component source, in nesting order when the component walk is complete enough to place them. Call it before writing a selector, when a locator matches nothing, or when choosing between `@Selector` and `@ListSelector` for a repeated row.
+
+The tool has two modes. A tree call uses `file`, `component`, `depth`, `followComponents`, and `format`. A lookup call with `testId` searches the scan-wide flat inventory and returns JSON occurrences. `component`, `depth`, `followComponents`, and `format` do not narrow a lookup. If you also pass `file`, it must name a scanned JSX or TSX file, but the lookup remains scan-wide.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `file` | string | optional | Component file to root a tree at. The full project-relative path always wins; a bare file name is accepted only when exactly one scanned file ends with it. An unscanned path fails with `file_not_found` and suggestions; the project root itself, or an absolute path outside it, fails with `invalid_input` |
+| `component` | string | optional | Component name. The tree is rooted at that component's own declaration, so it answers even when nothing in the scan renders it. Combine with `file` when two files declare the same name |
+| `testId` | string | optional | Look up where a known ID is declared across the flat inventory instead of walking a tree |
+| `depth` | integer 1 to 10 | `4` | |
+| `followComponents` | boolean | `true` | Inline the subtrees of child components imported from other files |
+| `attribute` | string | optional | Per-call override of the resolved test-ID attribute |
+| `format` | `"json"` \| `"outline"` | `"outline"` | Outline is the default because it is 4.6× smaller on the same tree. Pass `"json"` when something parses fields. Tree mode only — lookup mode always returns JSON occurrences |
+
+With neither `file` nor `component`, the walk starts from the auto-detected app entry.
+
+### Fidelity
+
+`meta.fidelity` describes the completeness of the **node tree**, not of individual IDs:
+
+Here, "rendered" means the scanner traced a test ID to a host JSX element. The tool does not observe a browser or guarantee that a conditional element appears in a particular run.
+
+| Value | Meaning |
+| --- | --- |
+| `"full"` | The structural walk reached every node under the selected root in the scanned source. It can still contain unresolved value holes such as spread props |
+| `"partial"` | At least one subtree is missing or its placement is unproven. `roots` is real but has holes, and `meta.fidelityReason` counts them |
+| `"flat"` | No entry component could be rooted. `roots` is empty and only `inventory` is meaningful |
+
+For the full decision procedure across every response shape, see [when "not found" is proof](/mcp/workflows/#when-can-i-treat-not-found-as-proof).
+
+A traversal gap is a successful response, not an error: the tool returns the part of the tree it could build and describes the hole. Read `meta.fidelity`, `meta.truncated`, node-level `unresolved` flags, and environment warnings before drawing a conclusion from absence. Even a full, untruncated structural walk cannot reveal a value hidden in spread props or source outside the scan. A `component` that cannot be rooted at all returns `incomplete_tree`.
+
+The flat inventory is independent of the component walk in all three states. A `testId` lookup is authoritative for explicit static or pattern declarations found in the scanned JSX/TSX. An empty lookup does not rule out unresolved spread props, the wrong attribute, unsupported file types, or sources outside the scan.
+
+Two things the walk resolves are easy to miss. A same-file function returning JSX, such as `{getCheckinIcon()}`, is inlined at its call site, so the IDs inside it appear in the tree at their real lines. The walk does **not** bind the call's arguments: a helper's parameters shadow the caller's values, so an ID built from one resolves to unknown rather than to a guess. A component rendered through a call the walk cannot inline is marked `local-render-function` with the call in `raw`, so a hole is always named rather than silently dropped.
+
+### Node flags
+
+| Flag | Meaning |
+| --- | --- |
+| `testIdAlternatives` | The attribute is a static choice, such as `data-testid={big ? "Main" : "Alt"}`, and exactly one of them renders. `testId` carries the first branch and this carries the rest, so a selector for either is real |
+| `conditional` | Rendered inside a conditional |
+| `repeated` | Rendered inside a `.map(...)` callback |
+| `placement: {"kind":"slot"}` | Passed to the parent component as children. Where, or whether, the parent renders it is not proven |
+| `placement: {"kind":"prop"}` | Passed as the value of another prop. Same caveat |
+| `expandedAt` | This component's subtree was already expanded at an earlier render site; read it there. Only set when the two sites render identical subtrees |
+| `viaDefault` | The id came from the component's own fallback, because the call site provably passed nothing |
+| `testIdAbsent` | The element writes the attribute, but at this site the value provably resolves to nothing. Do not write a selector for it |
+| `unresolved` | A hole. `reason` is one of `external-module`, `identifier-unresolved`, `namespaced-component`, `not-a-function-component`, `recursive`, `not-followed`, `depth-limit-reached`, `node-budget-reached`, `local-render-function`, `imported-render-function`, `unresolved-jsx`, `opaque-expression`, `spread-props`. `raw` carries the source expression where there is one to name |
+
+In the outline format the same flags appear in parentheses, and `-` stands for a node with no test ID.
+
+The outline also summarizes where repeating itself would cost more than it says. Four rules, none of which can drop an ID or a hole:
+
+| You see | It means |
+| --- | --- |
+| `:106` with no path | The file is the nearest one named above it. Paths are printed only where they change; in one internal page measurement, paths accounted for 40% of the outline |
+| `(contents as at src/Modal.tsx:10)` | This node's children are the ones already printed at that location. The call site and its own ID are still shown |
+| `... 12 boundaries not expanded (external module: Modal, Button, +3 more)` | Twelve sibling holes with the same reason, as one line. `meta.fidelityReason` still counts them exactly |
+| A provider or layout wrapper is missing | A node with no ID, no hole and no flags is spliced out and its children move up. Nesting in an outline means "renders inside", not "is a direct DOM child" |
+
+None of this applies to `format: "json"`, which stays complete: every node, every `loc`, every field. In one internal page-component measurement, the four rules together reduced the response from 74,763 to 43,388 bytes. Other component trees will differ.
+
+A `testId` lookup returns `{ occurrences }`, each with the source location, the enclosing component, and `reach`:
+
+| `reach` | Meaning |
+| --- | --- |
+| `"element"` | Written directly on a host element. It renders |
+| `"forwarded"` | Written as a prop and proven to land on a host element. It renders |
+| `"component-prop"` | Written on a component tag with nothing proving it goes further. It renders only if that component passes the prop down |
+
+When every occurrence is `component-prop`, the response says so in `meta.hint` rather than letting you read the hit as proof. Patterns that match every possible ID are excluded from a lookup and counted in the hint, because reporting them as hits would claim your ID is rendered at a line where the source writes `data-testid={anything}`.
+
+### Example
+
+`{"component": "CartItem"}` — outline is the default:
+
+```text
+CartItem_*  div  src/components/CartItem.tsx:10 (dynamic `CartItem_${item.id}`)
+  CartItemName  span  :11
+  CartItemPrice  span  :12
+  Remove  button  :13
+```
+
+The bare `:11` inherits the file named above it; see [what the outline summarizes](#node-flags).
+
+```json
+{
+	"meta": {
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts",
+		"fidelity": "full",
+		"scanned": 5
+	}
+}
+```
+
+The same call with `followComponents: false` from the app entry shows the other side:
+
+```json
+{
+	"meta": {
+		"fidelity": "partial",
+		"fidelityReason": "2 of 2 nodes were left unexpanded (not-followed ×2); ids inside them are missing from roots but present in inventory.",
+		"hint": "Re-call with followComponents: true to see inside them. An id missing from an incomplete tree may still be rendered; pass testId to look one up across the whole scan."
+	}
+}
+```
+
+---
+
+## `map_coverage`
+
+`map_coverage` cross-references page-object selectors with test IDs found in UI source. Call it after refactoring a component, after renaming test IDs, before adding accessors, or when a test times out on a locator.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `class` | string | optional | Narrow the page-object side to the file declaring this class |
+| `file` | string | optional | Limit the page-object side to one file, spelled as `list_page_objects` reports it. A leading `./` and Windows separators are accepted |
+| `attribute` | string | optional | Per-call override of the test-ID attribute |
+| `includeUnused` | boolean | `true`, or `false` when `class`/`file` is set | Include `uncoveredTestIds`. Ignored when `buckets` is given |
+| `includeRawLocators` | boolean | `false` | Also scan for direct `getByTestId` / `getItemByTestId` / `filterByItemTestId` / `filterByHasTestId` calls |
+| `buckets` | array | optional | Return only these lists. `[]` returns `summary` and `scope` alone. Wins over `includeUnused`, which is then echoed in `meta.ignored` |
+| `limit` | integer 1 to 200 | `50` | Per bucket. A coverage entry averages ~800 bytes, so even 200 is a large response; the ceiling exists so the schema cannot advertise a page nobody should ask for |
+| `offset` | integer ≥ 0 | `0` | Applied to every returned bucket. To page one list, prefer `query_coverage` |
+
+Start with `buckets: []`. It returns totals and scope without any bucket lists: 1.4 KB instead of 15 KB on this repository's example app, and 5 KB instead of 146 KB in one 4,924-file internal-repository measurement. Read the shape first, then request one bucket. In the same internal measurement, six buckets at `limit: 200` produced 527 KB before the server cap was applied. Your repository and client limits will differ.
+
+Omit `class` and `file` to scan the whole project. Scoping happens by path, so `class` also pulls in page objects sharing that file, and `meta.alsoIncluded` names them. A `file` that declares no page object fails with `file_not_found` rather than returning a report in which everything looks uncovered.
+
+### Buckets
+
+`summary` and `scope` always ship, whatever `buckets` asks for.
+
+| Bucket | Contents |
+| --- | --- |
+| `matched` | Selector/ID pairs with a `confidence` of `exact`, `pattern`, `regex`, `probe`, or `prefix`; see below, because `confidence` is not certainty |
+| `uncoveredTestIds` | Host-element test IDs that no page-object test-ID selector covers, each with a ready-to-paste decorator `suggestion` |
+| `deadSelectors` | Page-object test-ID selectors with no match among visible host-element IDs, with `nearestTestIds` suggestions |
+| `nonTestIdSelectors` | Role, text, label, placeholder, alt and title selectors. Reported for awareness and never counted as dead |
+| `unknownSelectors` | Selectors that could be neither matched nor called dead, with the evidence that was found |
+| `unknownTestIds` | Test-ID occurrences the scanner cannot place on a rendered host element: `dynamic-value`, `forwarding-unproven`, or `unanchored-pattern` |
+
+### `confidence` is how the string matched, not whether the selector works
+
+`confidence: "exact"` means the selector's test ID and a rendered test ID were **equal as strings**. It is not a claim that your selector resolves to that element. Coverage compares IDs across the whole application, because nothing statically ties a page object to a DOM subtree — so an `Info` selector matches every rendered `Info` anywhere in the app, and the entry names whichever one the scan proved renders.
+
+That matters when the same ID lives on both sides of the forwarding line. Two fields say so:
+
+| Field | Meaning |
+| --- | --- |
+| `unprovenOccurrences` | The same ID is also written this many times as a component prop that nothing proved reaches the DOM |
+| `unprovenAt` | The first of those sites, so you can go and look |
+
+In one anonymized internal example, `GuestsPageObject.GuestItems[item].Info` came back `confidence: "exact"` against `HistoryEventItem.tsx:48`, an unrelated component. The `<WithIcon data-tid="Info">` the page object targeted was a prop that never reached the DOM, so the selector was broken despite the clean-looking match. The match itself was not wrong; it was incomplete evidence. The entry now carries `unprovenOccurrences: 1` and points at `GuestItemInfo.tsx:94`.
+
+`summary.coverage` is `coveredUiTestIds / matchableUiTestIds`, or **`null`** when nothing was matchable. It is never `1` for a scan that found nothing, which is the failure mode that used to make a misconfigured server look healthy. `scope` reports what the two sides were drawn from, including component tags coming from modules outside the scanned sources.
+
+The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by default. Scoping narrows the selectors, but that list still contains every uncovered ID in the application, including IDs covered by page objects you did not name. In one internal measurement, the irrelevant list added 61,788 bytes. `summary.uncoveredTestIds` still counts it, and `includeUnused: true` or `buckets: ["uncoveredTestIds"]` still returns it.
+
+`coverage` is also `null` when you scope the call with `class` or `file`, with a `coverage-scope-narrowed` warning. Scoping narrows the selectors but not the rendered IDs they are compared against, and there is no honest way to narrow the second half: nothing statically ties a page object to a subset of the UI. The two counts still ship in `summary`, so you can read them; the ratio between them would answer a question nobody asked.
+
+### Example
+
+`{"buckets": ["uncoveredTestIds"]}` against the example app, abbreviated:
+
+```json
+{
+	"ok": true,
+	"data": {
+		"summary": {
+			"uiTestIds": 13,
+			"matchableUiTestIds": 13,
+			"coveredUiTestIds": 4,
+			"testIdSelectors": 14,
+			"rawSelectors": 0,
+			"matched": 14,
+			"deadSelectors": 0,
+			"nonTestIdSelectors": 5,
+			"unknownSelectors": 0,
+			"unknownTestIds": 0,
+			"uncoveredTestIds": 9,
+			"catchAllTestIds": 0,
+			"staticUiIdsCompared": 12,
+			"coverage": 0.3076923076923077
+		},
+		"scope": {
+			"uiFilesScanned": 5,
+			"pageObjectFilesScanned": 5,
+			"externalComponentModules": ["react"],
+			"externalComponentTags": 1
+		},
+		"uncoveredTestIds": [
+			{
+				"id": "ApplyPromoButton",
+				"patternSource": null,
+				"occurrences": [
+					{
+						"file": "src/components/CheckoutPage.tsx",
+						"loc": { "file": "src/components/CheckoutPage.tsx", "line": 28 },
+						"tag": "button",
+						"component": "CheckoutPage",
+						"reach": "element"
+					}
+				],
+				"suggestion": "@Selector(\"ApplyPromoButton\")"
+			},
+			{ "id": "CartItemName", "…": "…" }
+		]
+	},
+	"meta": {
+		"attribute": "data-testid",
+		"attributeSource": "default",
+		"playwrightConfig": "playwright.config.ts",
+		"ignored": ["includeUnused"],
+		"warnings": [
+			{
+				"code": "raw-locators-disabled",
+				"severity": "info",
+				"message": "Direct locator calls … were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them."
+			}
+		]
+	}
+}
+```
+
+`ApplyPromoButton` has no page-object test-ID selector because both page objects reach the button by role. It appears under `uncoveredTestIds`, but it is not unused. This distinction helps an agent reuse the existing role selector instead of adding another locator.
+
+---
+
+## `query_coverage`
+
+`query_coverage` pages one bucket of a report `map_coverage` has already built, addressed by the opaque `meta.coverageId` that call returned. Use it to walk a long list to its end without restating the original scope, which the handle carries.
+
+### Parameters
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `coverageId` | string | required | `meta.coverageId` from a previous `map_coverage` call |
+| `bucket` | one of the six bucket names | required | One list at a time is what makes `offset` mean one thing |
+| `offset` | integer ≥ 0 | `0` | Pass `meta.nextOffset` from the previous page |
+| `limit` | integer 1 to 200 | `50` | |
+
+### Reading a large report
+
+```text
+map_coverage   {"buckets": []}
+→ meta.coverageId = "cov_9f3c…", summary.deadSelectors = 137
+
+query_coverage {"coverageId": "cov_9f3c…", "bucket": "deadSelectors"}
+→ 50 entries, meta.nextOffset = 50
+
+query_coverage {"coverageId": "cov_9f3c…", "bucket": "deadSelectors", "offset": 50}
+→ 50 entries, meta.nextOffset = 100
+```
+
+Copy `meta.nextOffset` into the next call's `offset` and stop when that key stops coming back. Every page carries `summary`, so a capped page always reports the bucket's real size. `scope` ships on the first page only: the handle pins one snapshot, so it is identical on every later page and `map_coverage` already gave it to you.
+
+### Why the handle, when `map_coverage` can page too?
+
+`map_coverage` with `{"buckets": ["deadSelectors"], "offset": 50}` returns the same entries just as cheaply — the report is memoized. What it cannot do is notice that you are paging. If a file changes between page one and page two, it silently re-derives the report and the list renumbers underneath your offsets: entries are skipped and duplicated, and nothing in the response says so.
+
+A handle turns that into a reported failure. The ID is bound to the exact report it was minted from, and the same edit invalidates it:
+
+- It stays valid for **10 minutes after its last use**, for that server process only. Paging keeps it alive, so a long walk cannot time out half way through it.
+- It is invalidated as soon as any analyzed file changes on disk.
+- Spending an invalid one fails with `expired_handle`. Re-call `map_coverage` with the arguments that produced it because the scope is not recoverable from the ID, then use the new `meta.coverageId`.
+- At most 8 handles live at once; older ones are evicted.
+
+Changed and deleted loaded files are detected on the next call, and new files are usually discovered immediately when a known scan directory changes. The one-second rescan interval covers the remaining nested-directory case. Refusing an invalidated handle avoids returning entries whose source lines may have moved.
+
+---
+
+## Should I request `json` or `outline`?
+
+`get_page_object_tree` and `get_testid_tree` accept both.
+
+| | `json` | `outline` |
+| --- | --- | --- |
+| Shape | Structured objects, stable field names | Indented plain text |
+| Tokens | Usually higher on deep trees | 3–5× lower; measured at 4.6× on one production component tree |
+| Machine-parseable | Yes | No |
+| Carries locations | Yes, `loc` with line and column | Yes, `file:line` — the path only where it changes |
+| Carries every node | Yes | No: identical repeated subtrees, runs of sibling holes and flagless wrappers are summarised |
+| Carries every field | Yes | No: visibility, JSDoc and column numbers are dropped |
+
+Use `outline` when an agent only has to read the shape, which is most of the time, and `json` when something downstream has to parse it. A `too_large` error on a JSON call is usually solved by switching format before touching `depth`.
+
+What `outline` never summarizes away is a test ID or a hole. Every ID the analysis found, and every place it could not see past, has its own line in both formats; summarization only removes a repeat or a node that carried neither.
+
+`meta` is identical in both formats, so switching to `outline` costs you no warning, hint, or `apiHints`.
+
+## Related guides
+
+- [Workflows](/mcp/workflows/) for the recommended call order and proof checks.
+- [Troubleshooting](/mcp/troubleshooting/) for errors, warnings, and incomplete results.
+- [Configuration](/mcp/configuration/) for project scope, discovery, and server flags.

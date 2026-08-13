@@ -7,20 +7,62 @@
 	"main": "./dist/index.js",
 	"module": "./dist/index.mjs",
 	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.mts",
+				"default": "./dist/index.mjs"
+			},
+			"require": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			}
+		},
+		"./mcp": {
+			"import": {
+				"types": "./dist/mcp.d.mts",
+				"default": "./dist/mcp.mjs"
+			},
+			"require": {
+				"types": "./dist/mcp.d.ts",
+				"default": "./dist/mcp.js"
+			}
+		},
+		"./package.json": "./package.json"
+	},
+	"typesVersions": {
+		"*": {
+			"mcp": [
+				"./dist/mcp.d.ts"
+			]
+		}
+	},
+	"bin": {
+		"playwright-page-object": "./dist/cli.js"
+	},
 	"files": [
 		"dist"
 	],
 	"scripts": {
-		"build": "tsup src/index.ts --format cjs,esm --dts --clean",
-		"dev": "npm run build -- --watch",
-		"lint": "biome check src",
-		"lint:fix": "biome check --write src",
+		"prebuild": "node ./run/clean-dist.mjs",
+		"build": "tsup",
+		"dev": "tsup --watch",
+		"lint": "biome check src tsup.config.ts",
+		"lint:fix": "biome check --write src tsup.config.ts",
+		"lint:pkg": "publint --strict && attw --pack .",
 		"pack:example": "node ./run/pack-example-package.mjs",
 		"prepare": "husky",
-		"typecheck": "tsc --noEmit && cd example && tsc --noEmit",
+		"prepublishOnly": "node ./run/verify-dist.mjs",
+		"typecheck": "tsc --noEmit",
+		"typecheck:example": "cd example && tsc --noEmit",
+		"typecheck:all": "npm run typecheck && npm run typecheck:example",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"test:example": "npm run pack:example && cd example && npm install --force ../playwright-page-object.tgz && npx playwright install --with-deps chromium && npm run test:e2e"
+		"test:cli": "node ./run/smoke-cli.mjs",
+		"example:install": "cd example && npm install --force ../playwright-page-object.tgz",
+		"example:browsers": "cd example && npx playwright install --with-deps chromium",
+		"example:e2e": "cd example && npm run test:e2e",
+		"test:example": "npm run pack:example && npm run example:install && npm run test:cli && npm run example:browsers && npm run example:e2e"
 	},
 	"keywords": [
 		"playwright",
@@ -35,7 +77,10 @@
 		"e2e-testing",
 		"test-automation",
 		"testing",
-		"qa"
+		"qa",
+		"mcp",
+		"model-context-protocol",
+		"ai-agents"
 	],
 	"author": {
 		"name": "Sergei Shmakov",
@@ -78,17 +123,21 @@
 		]
 	},
 	"devDependencies": {
+		"@arethetypeswrong/cli": "^0.18.5",
 		"@babel/plugin-proposal-decorators": "^7.29.7",
 		"@biomejs/biome": "^2.4.15",
 		"@commitlint/cli": "^21.0.1",
 		"@commitlint/config-conventional": "^21.0.1",
+		"@modelcontextprotocol/client": "^2.0.0",
 		"@playwright/test": "^1.60.0",
 		"@rolldown/plugin-babel": "^0.2.3",
 		"@semantic-release/changelog": "^6.0.3",
 		"@semantic-release/git": "^10.0.1",
 		"@types/node": "^22.19.19",
+		"@types/picomatch": "^4.0.3",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.4.0",
+		"publint": "^0.3.23",
 		"semantic-release": "^25.0.3",
 		"tsup": "^8.5.1",
 		"typescript": "^5.9.3",
@@ -108,5 +157,13 @@
 	},
 	"volta": {
 		"node": "24.14.0"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/server": "^2.0.0",
+		"commander": "^14.0.3",
+		"picomatch": "^4.0.5",
+		"resolve.exports": "^2.0.3",
+		"ts-morph": "^28.0.0",
+		"zod": "^4.2.0"
 	}
 }

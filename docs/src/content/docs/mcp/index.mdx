@@ -1,0 +1,68 @@
+---
+title: Playwright Page Object MCP Server
+description: Give AI coding agents a read-only map of your Playwright page objects and test IDs with local static analysis over MCP.
+---
+
+The `playwright-page-object` MCP server gives AI coding agents a searchable map of your page-object API and the test IDs declared in your JSX or TSX source. It exposes five read-only tools over the [Model Context Protocol](https://modelcontextprotocol.io/).
+
+```bash
+npx playwright-page-object mcp
+```
+
+The server parses source files with [ts-morph](https://ts-morph.com/). It does not start a browser, execute project code, or send network requests. Your MCP client still controls where tool results are processed.
+
+## Why use an MCP server for Playwright page objects?
+
+An AI agent cannot see a page-object chain or a component's test IDs until it opens the right files. The MCP server turns those details into focused queries, so the agent can inspect an existing page object before creating one and verify a test ID before writing a selector.
+
+Page-object graphs are the first blind spot. A chain like `checkoutPage.CartItems.first().RemoveButton` spans three classes in three files. Without the server, the agent has to find and read every class to learn that the chain exists.
+
+Test IDs are the second. If the agent has not opened the component that declares `data-testid="Remove"`, it may write a plausible value such as `getByTestId("remove-btn")`. The test compiles but times out when it runs.
+
+The server reads both sides from the AST. When static analysis cannot prove a value or component boundary, the response marks it as dynamic, unproven, or unresolved and includes the source text.
+
+## Which page-object MCP tools are available?
+
+Use the page-object tools to find an existing API, the test-ID tree before writing a selector, and the coverage map when the two sides disagree. Each tool answers one question and returns compact JSON or an outline designed for an agent's context window.
+
+| Tool | Call it when | Returns |
+| --- | --- | --- |
+| `list_page_objects` | You need to know what page objects exist, instead of globbing | Every indexed class with its file, host kind, root selector, fixture bindings, member and method counts |
+| `get_page_object_tree` | Before writing or editing a test that touches a page object | One class's selector tree up to the requested depth and budget, with members, resolved types, nested controls, and methods |
+| `get_testid_tree` | Before writing a test-ID selector | Test IDs found in the resolved component tree, with dynamic, conditional, and repeated flags |
+| `map_coverage` | After renaming test IDs, or when a locator times out | Matches between page-object test-ID selectors and UI source, plus uncovered IDs and unmatched selectors |
+| `query_coverage` | To read the rest of a long coverage list | One bucket of a report `map_coverage` already built, paged through an opaque handle |
+
+For most test-writing tasks, call `list_page_objects`, inspect the relevant class with `get_page_object_tree`, and check selectors with `get_testid_tree`. Use `map_coverage` after a test-ID rename or when a locator no longer matches, and `query_coverage` when one of its lists is longer than a single response.
+
+The selector tree also carries the runtime API of the base classes it uses, in `meta.apiHints`, so an agent gets the call syntax with the chain and does not have to read the package sources to write the test body.
+
+## How is this different from Playwright MCP?
+
+Microsoft's [Playwright MCP](https://playwright.dev/mcp/introduction) uses accessibility snapshots to interact with a live browser. This server does not launch a browser. It analyzes page-object classes and JSX or TSX source so an agent can find existing APIs and test IDs before it writes or edits a test.
+
+You can use both servers in the same workflow: source analysis for test authoring, then browser automation for live interaction and verification.
+
+## What can the static analysis prove?
+
+The server reports only what it can support from source code. `fidelity: "full"` proves that the structural walk reached every node under the selected root. It does not resolve test-ID values hidden in spread props, and it cannot see sources outside the scan. A partial tree has additional structural gaps, so the response explains where the walk stopped.
+
+- It never executes your Playwright config. A computed `use.testIdAttribute` resolves to unknown plus a diagnostic, not to whatever the analyzing process has in its environment.
+- It never reports "not rendered" from an incomplete walk. A tree with holes is labeled `fidelity: "partial"` and says where the holes are.
+- By default, it never counts a test ID written on a component tag as rendered unless forwarding to a host element was proven. See [prop forwarding](/mcp/configuration/#when-should-i-assume-prop-forwarding) for the explicit assumption mode.
+- It never reports role, text or label selectors as dead. They cannot be checked against markup statically, so they get their own bucket.
+
+## Read next
+
+- Start with the [Quick Start](/mcp/quick-start/) to install the package and register the server.
+- Read [How to Use the Server](/mcp/workflows/) for the task recipes: writing a test, fixing a dead locator, renaming test IDs, and when absence is proof.
+- Use the [tool reference](/mcp/tools/) for parameters, response fields, examples, and error codes.
+- Open [Configuration](/mcp/configuration/) when automatic discovery selects the wrong scope or config.
+- Follow [Troubleshooting](/mcp/troubleshooting/) when a call is empty, incomplete, or too large.
+
+## See also
+
+- [Agent Skills](/ai-tooling/agent-skills/) teaches an agent the decorator semantics; the MCP server supplies the project-specific facts.
+- [Why AI Agents Guess Playwright Selectors, and How MCP Helps](/blog/playwright-page-object-mcp-server/) explains the design problem behind these tools.
+- [Context7](/ai-tooling/context7/)
+- [Cubic Wiki](/ai-tooling/cubic-wiki/)

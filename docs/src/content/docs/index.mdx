@@ -10,6 +10,10 @@ hero:
       link: /getting-started/quick-start/
       icon: right-arrow
       variant: primary
+    - text: MCP Server
+      link: /mcp/
+      icon: puzzle
+      variant: secondary
     - text: View on GitHub
       link: https://github.com/sergeyshmakov/playwright-page-object
       icon: external
@@ -34,6 +38,24 @@ await page.getByTestId("CheckoutPage").getByRole("button", { name: "Apply" }).cl
 // After — typed, composable, reusable
 await checkoutPage.applyPromoCode("SAVE20");
 ```
+
+## MCP server for AI coding agents
+
+The package includes a local, read-only MCP server that lets AI coding agents inspect your existing page objects and JSX or TSX test IDs before editing tests. Agents can follow typed locator chains, reuse selectors already in the repository, and check selector coverage without launching a browser or executing application code.
+
+<CardGrid>
+  <Card title="Reuse existing test APIs" icon="puzzle">
+    Discover page-object classes and follow their typed locator chains instead of searching files or guessing method names.
+  </Card>
+  <Card title="Find real test IDs" icon="search">
+    Read statically declared test IDs from JSX and TSX source before writing a Playwright selector.
+  </Card>
+  <Card title="Audit selector coverage" icon="approve-check-circle">
+    Compare page-object selectors with UI source to find uncovered IDs, dead selectors, and uncertain matches.
+  </Card>
+</CardGrid>
+
+**[Explore the MCP server docs →](/mcp/)** · [Connect Claude Code, Cursor, VS Code, or Codex CLI →](/mcp/quick-start/)
 
 ## What it is
 

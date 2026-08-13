@@ -10,7 +10,7 @@ jobs:
     permissions:
       contents: write
       issues: write
-      pull-requests: write 
+      pull-requests: write
       id-token: write
     steps:
       - uses: actions/checkout@v7
@@ -20,22 +20,34 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 'lts/*'
-          
+
       - name: Install dependencies
         run: npm ci
-        
+
       - name: Check Formatting & Linting
         run: npm run lint
 
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build
         run: npm run build
-        
+
+      - name: Verify Package
+        run: npm run lint:pkg
+
       - name: Run Tests
         run: npm run test
 
       - name: Test Example
         run: npm run test:example
-        
+
+      - name: Typecheck Example
+        run: npm run typecheck:example
+
+      - name: Smoke Test CLI
+        run: npm run test:cli
+
       - name: Semantic Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

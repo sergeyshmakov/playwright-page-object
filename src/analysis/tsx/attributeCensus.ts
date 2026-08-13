@@ -1,0 +1,289 @@
+import { type SourceFile, SyntaxKind } from "ts-morph";
+import { warn } from "../diagnostics";
+import type { Diagnostic, TestIdAttributeSource } from "../types";
+import type { WorkspaceFiles } from "../workspaceFiles";
+
+/**
+ * Evidence that the resolved test-id attribute is the one the sources actually
+ * use.
+ *
+ * Every tool in this engine reads test ids by attribute *name*. Resolve that
+ * name wrongly — an undiscovered Playwright config, a `--attribute` typo, a
+ * repository that migrated from `data-testid` to `data-tid` — and nothing
+ * fails: the scan simply finds no attributes, the tree comes back empty, every
+ * page-object selector looks dead and coverage reports `1` because zero of zero
+ * ids are covered. Confidently wrong output with no warning is the worst answer
+ * a static analyser can give, so the answer is checked against the source text
+ * before it ships.
+ */
+export interface AttributeCensus {
+	/** The attribute the analysis used. */
+	attribute: string;
+	/** JSX/TSX files in scope. Zero means the scope, not the attribute, is wrong. */
+	files: number;
+	/** Occurrences of `<attribute>=` found. Zero is the alarming case. */
+	resolvedCount: number;
+	/** Hyphenated attribute names present instead, most frequent first (max 5). */
+	candidates: Array<{ name: string; count: number }>;
+	evidence: "ast" | "text";
+	/** `true` when counting stopped early because the attribute was clearly present. */
+	sampled?: true;
+	/**
+	 * `true` when the name tally hit {@link MAX_TRACKED_NAMES} and stopped
+	 * admitting new ones.
+	 *
+	 * Distinct from {@link sampled}, which is set on the opposite outcome - the
+	 * attribute was found, so counting stopped early. This one says the search
+	 * for an *alternative* was incomplete, which is the case where a caller is
+	 * about to be told no alternative stood out.
+	 */
+	namesCapped?: true;
+}
+
+/**
+ * Distinct attribute names tracked before the tally stops growing.
+ *
+ * A memory bound on a loop that terminates by itself, so its only effect is to
+ * decide which names are countable - and at 64 that was reachable before the
+ * scan ever met the real attribute. Inline SVG alone brings `stroke-width`,
+ * `stroke-linecap`, `clip-rule`, `stop-color`, `text-anchor`,
+ * `dominant-baseline` and a dozen more, and `ws.jsxFiles()` order then decides
+ * which 64 win.
+ *
+ * That matters more here than anywhere else in the engine: this census is what
+ * turns "no test ids found" into "you are reading the wrong attribute, and the
+ * sources use `qa-id` 4,000 times". Losing the real name to a cap turns the one
+ * diagnostic written against confidently-wrong output into
+ * `attribute-no-evidence`.
+ */
+const MAX_TRACKED_NAMES = 4096;
+const MAX_REPORTED_CANDIDATES = 5;
+/**
+ * One occurrence of a hyphenated attribute is as likely to be `aria`-adjacent
+ * markup, a stray `data-icon`, or a string in a comment as it is to be the
+ * repository's real test-id convention. Naming it would send a caller off to
+ * restart the server with an attribute that matches one element.
+ */
+const MIN_CANDIDATE_COUNT = 2;
+
+/**
+ * Counts the resolved attribute in the scanned JSX sources, and — only when it
+ * is nowhere to be found — what the sources use instead.
+ *
+ * Phase one is a substring scan that stops at the first file containing the
+ * attribute, so the healthy path costs one `includes()` per file up to the
+ * first hit and nothing more. Phase two only ever runs on a repository where
+ * the attribute is genuinely absent, which is precisely when spending a regex
+ * sweep to produce an actionable message is worth it.
+ *
+ * The needle is `attribute=`, not the bare name: a repository whose README or
+ * a comment mentions `data-testid` must not be able to silence the check.
+ *
+ * It is matched as a whole attribute rather than as a substring, which a plain
+ * `includes()` got wrong in both directions. `qa-data-testid=` contains
+ * `data-testid=`, so a repository using a differently prefixed attribute
+ * reported evidence for one it never writes and the mismatch warning went
+ * unsaid; and JSX may put whitespace before the equals sign, so
+ * `<div data-testid = "Root" />` was `attribute-no-evidence` on a file that
+ * plainly has it.
+ */
+export function censusFromText(
+	ws: WorkspaceFiles,
+	attribute: string,
+): AttributeCensus {
+	return ws.memo(`attr-census::${attribute}`, [], () => {
+		const files = ws.jsxFiles();
+		const needle = attributeNeedle(attribute);
+
+		for (const sourceFile of files) {
+			// The text scan is a filter, not the verdict: a file the needle cannot
+			// find cannot contain the attribute, so most of the repository is
+			// dismissed for the price of one regex. What it cannot do is tell a
+			// rendered attribute from the same characters inside a CSS selector
+			// (`[data-testid="x"]`), a comment, or any other string — and treating
+			// those as evidence suppresses the mismatch warning, which is the one
+			// thing this census exists to raise. Then every tree and every coverage
+			// number is computed with an attribute the sources never render.
+			needle.lastIndex = 0;
+			if (!needle.test(sourceFile.getFullText())) {
+				continue;
+			}
+			const rendered = countJsxAttribute(sourceFile, attribute);
+			if (rendered === 0) {
+				continue;
+			}
+			return {
+				attribute,
+				files: files.length,
+				resolvedCount: rendered,
+				candidates: [],
+				evidence: "text",
+				sampled: true,
+			};
+		}
+
+		const tally = new Map<string, number>();
+		let capped = false;
+		for (const sourceFile of files) {
+			capped = tallyAttributeNames(sourceFile, attribute, tally) || capped;
+		}
+		const candidates = [...tally.entries()]
+			.filter(([name]) => name !== attribute)
+			.sort(
+				(left, right) => right[1] - left[1] || (left[0] < right[0] ? -1 : 1),
+			)
+			.slice(0, MAX_REPORTED_CANDIDATES)
+			.map(([name, count]) => ({ name, count }));
+
+		return {
+			attribute,
+			files: files.length,
+			resolvedCount: 0,
+			candidates,
+			evidence: "text",
+			...(capped ? { namesCapped: true as const } : {}),
+		};
+	});
+}
+
+/**
+ * `attribute=` as a whole JSX attribute.
+ *
+ * The left boundary is what keeps `qa-data-testid=` from answering for
+ * `data-testid=`; hyphens and colons are in it because both are ordinary
+ * characters inside an attribute name. `\s*` before the equals sign is legal
+ * JSX that the substring form could not see.
+ */
+function attributeNeedle(attribute: string): RegExp {
+	const escaped = attribute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(String.raw`(?<![\w$:-])${escaped}\s*=`, "g");
+}
+
+/**
+ * How many JSX attributes in this file are actually named `attribute`.
+ *
+ * The AST, because only it knows the difference between an attribute and the
+ * same characters in a comment or a string. The file is already parsed - these
+ * are the workspace's own `SourceFile`s - so this walks a tree rather than
+ * re-reading anything, and it only runs on files the cheap scan already
+ * shortlisted.
+ */
+function countJsxAttribute(sourceFile: SourceFile, attribute: string): number {
+	let count = 0;
+	for (const node of sourceFile.getDescendantsOfKind(SyntaxKind.JsxAttribute)) {
+		if (node.getNameNode().getText() === attribute) {
+			count += 1;
+		}
+	}
+	return count;
+}
+
+/**
+ * Tallies hyphenated attribute names into `into`, from the AST for the same
+ * reason phase one uses it: a name harvested out of a CSS selector is a
+ * candidate the repository does not write, and this list is what the mismatch
+ * warning names as the attribute to switch to.
+ *
+ * Returns whether the cap turned any away.
+ */
+function tallyAttributeNames(
+	sourceFile: SourceFile,
+	attribute: string,
+	into: Map<string, number>,
+): boolean {
+	let capped = false;
+	for (const node of sourceFile.getDescendantsOfKind(SyntaxKind.JsxAttribute)) {
+		const name = node.getNameNode().getText();
+		if (!name.includes("-")) {
+			continue;
+		}
+		// `aria-*` is an accessibility contract, never a test hook: offering
+		// `aria-label` as the repository's test-id attribute would be noise.
+		const skip = name !== attribute && name.startsWith("aria-");
+		if (!skip) {
+			if (into.has(name) || into.size < MAX_TRACKED_NAMES) {
+				into.set(name, (into.get(name) ?? 0) + 1);
+			} else {
+				capped = true;
+			}
+		}
+	}
+	return capped;
+}
+
+/**
+ * Turns the census into the one diagnostic worth shipping, or `null` when the
+ * environment checks out.
+ *
+ * Messages name no CLI flag: this is the engine, and the same census backs a
+ * future `doctor` command and any programmatic consumer. The MCP layer turns a
+ * verdict into flag-shaped advice; see `environmentHint` in `src/mcp/tools.ts`.
+ */
+export function attributeVerdict(
+	census: AttributeCensus,
+	attributeSource: TestIdAttributeSource,
+): Diagnostic | null {
+	if (census.files === 0) {
+		return warn(
+			"scope-empty",
+			"No JSX/TSX files are in the analysed scope, so no rendered test id can be found and every page-object selector will look unmatched.",
+			undefined,
+			{ kind: "jsx", attribute: census.attribute },
+		);
+	}
+	if (census.resolvedCount > 0) {
+		return null;
+	}
+
+	const origin = describeSource(attributeSource);
+	const [candidate, runnerUp] = census.candidates;
+
+	if (candidate && candidate.count >= MIN_CANDIDATE_COUNT) {
+		const alternative = runnerUp
+			? ` (next most common: "${runnerUp.name}", ${runnerUp.count})`
+			: "";
+		return warn(
+			"attribute-mismatch",
+			`No element in the ${census.files} scanned JSX/TSX file(s) uses the "${census.attribute}" attribute (${origin}), but "${candidate.name}" appears ${candidate.count} time(s)${alternative}. Every test id in this result was read with an attribute the sources do not use.`,
+			undefined,
+			{
+				attribute: census.attribute,
+				attributeSource,
+				files: census.files,
+				candidate: candidate.name,
+				candidateCount: candidate.count,
+				runnerUp: runnerUp?.name,
+				runnerUpCount: runnerUp?.count,
+			},
+		);
+	}
+
+	// `namesCapped` turns this from a finding into a shrug, and saying so is the
+	// difference between "the sources use no such convention" and "we stopped
+	// looking". The second is not a conclusion a caller should act on.
+	const incomplete = census.namesCapped
+		? ` The search for an alternative was incomplete: more distinct attribute names were present than the tally admits, so a name they do use may not have been counted.`
+		: "";
+	return warn(
+		"attribute-no-evidence",
+		`No element in the ${census.files} scanned JSX/TSX file(s) uses the "${census.attribute}" attribute (${origin}), and no other attribute name stood out as the one they use instead. Either the analysed scope is not where the UI lives, or the attribute name is wrong.${incomplete}`,
+		undefined,
+		{
+			attribute: census.attribute,
+			attributeSource,
+			files: census.files,
+			namesCapped: census.namesCapped,
+		},
+	);
+}
+
+function describeSource(attributeSource: TestIdAttributeSource): string {
+	switch (attributeSource) {
+		case "playwright-config":
+			return "read from the Playwright config";
+		case "param":
+			return "supplied by the caller";
+		default:
+			return "Playwright's built-in default";
+	}
+}

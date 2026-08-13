@@ -11,6 +11,14 @@ Typed, decorator-driven Page Object Model for Playwright. Reusable, lazy locator
 
 ---
 
+## MCP server for AI coding agents
+
+The package includes a local, read-only MCP server that lets AI coding agents inspect your existing page objects and JSX or TSX test IDs before editing tests. Agents can follow typed locator chains, reuse selectors already in the repository, and check selector coverage without launching a browser or executing application code.
+
+It works with local stdio MCP clients including Claude Code, Cursor, VS Code, and Codex CLI. The server exposes five tools for discovering page objects, reading selector trees, finding test IDs, and auditing coverage.
+
+**[Explore the MCP server docs →](https://pom.shmakov.tools/mcp/)** · [Connect your MCP client →](https://pom.shmakov.tools/mcp/quick-start/)
+
 ## Before / after
 
 ```ts
@@ -140,9 +148,9 @@ The full documentation site covers every guide, the API reference, and the v1 �
 - [Reference](https://pom.shmakov.tools/reference/context-resolution/) — context resolution, migration v1 → v2, troubleshooting
 - [API](https://pom.shmakov.tools/api/decorators/) — decorators, `PageObject`, `RootPageObject`, `ListPageObject`, `createFixtures`
 
-## AI tooling
+## More AI tooling
 
-This package ships an [Agent Skills](https://agentskills.io/)-compatible skill so AI assistants load library-specific guidance on demand:
+This package also ships an [Agent Skills](https://agentskills.io/)-compatible skill so AI assistants load library-specific guidance on demand:
 
 ```bash
 npx ctx7 skills install /sergeyshmakov/playwright-page-object playwright-page-object

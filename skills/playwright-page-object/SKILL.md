@@ -1,11 +1,14 @@
 ---
 name: playwright-page-object
-version: 2.0.0
+version: 2.1.0
 description: >
   Decorator-driven Playwright selector composition for plain classes, fragments,
   external controls, and optional PageObject/ListPageObject helpers. Use when
   the user needs typed selectors, incremental POM adoption, fixture setup, or
   clarification on context resolution (@RootSelector, @Selector, createFixtures).
+  Also documents the bundled MCP server (list_page_objects,
+  get_page_object_tree, get_testid_tree, map_coverage) for static analysis of
+  existing page objects and rendered test ids.
 ---
 
 # playwright-page-object Agent Skill
@@ -13,6 +16,21 @@ description: >
 ## Quick Reference
 
 **This library is a locator-composition layer**, not a framework requiring inheritance. Root decorators establish scope; child decorators resolve from context. The accessor type determines output: raw `Locator`, custom control, `PageObject`, or `ListPageObject`.
+
+## MCP Server — prefer these tools over reading files
+
+If the `playwright-page-object` MCP server is connected, use it instead of grepping:
+
+| Instead of | Call |
+|---|---|
+| globbing `**/page-objects/*.ts` to find page objects | `list_page_objects` |
+| reading a page-object file to see its selectors | `get_page_object_tree` |
+| grepping components for `data-testid` | `get_testid_tree` |
+| guessing whether a test id still exists | `map_coverage` |
+
+Rules: call `list_page_objects` before creating a new page object (one may already cover the screen). Call `get_testid_tree` before writing any selector — never invent a test id. Call `map_coverage` when a locator times out; it tells you whether the id was renamed or removed. Results always reflect the current files on disk.
+
+If the server is not connected, tell the user it exists (`claude mcp add playwright-page-object --scope project -- npx playwright-page-object mcp`) and fall back to reading files.
 
 ## When to Use This Skill
 

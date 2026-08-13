@@ -59,6 +59,17 @@ export default defineConfig({
 					],
 				},
 				{
+					label: "MCP Server",
+					items: [
+						"mcp",
+						"mcp/quick-start",
+						"mcp/workflows",
+						"mcp/tools",
+						"mcp/configuration",
+						"mcp/troubleshooting",
+					],
+				},
+				{
 					label: "Reference",
 					items: [
 						"reference/context-resolution",

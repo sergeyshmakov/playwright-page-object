@@ -1,0 +1,210 @@
+import * as z from "zod";
+
+/**
+ * Tool input schemas (zod v4). No `.refine()` anywhere — refinements are not
+ * representable in the JSON Schema sent to clients; cross-field rules are
+ * validated in handlers where they can produce actionable hints instead.
+ */
+
+export const listPageObjectsInput = z.object({
+	filter: z
+		.string()
+		.optional()
+		.describe(
+			'Case-insensitive substring matched against class name and file path, e.g. "checkout".',
+		),
+	limit: z.number().int().min(1).max(500).default(100),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.default(0)
+		.describe(
+			"Index of the first entry to return, applied after filter. meta.total always reports the full count and meta.nextOffset the value to pass for the next page.",
+		),
+});
+
+export const getPageObjectTreeInput = z.object({
+	class: z
+		.string()
+		.optional()
+		.describe('Class name, e.g. "CheckoutPage". Provide class, file, or both.'),
+	file: z
+		.string()
+		.optional()
+		.describe(
+			"Path to the file, relative to the project root. An absolute path inside the project root is accepted and relativized (meta.note says so); one outside it is rejected. Use with class when a name is ambiguous; alone it resolves to the file's default-exported (else first root) page object, and errors with candidates when neither applies.",
+		),
+	depth: z
+		.number()
+		.int()
+		.min(1)
+		.max(10)
+		.default(3)
+		.describe("How many levels of nested control classes to expand."),
+	includeMethods: z.boolean().default(true),
+	// Outline by default because the descriptions tell every caller to prefer it
+	// and it measured 3.6x smaller on the same query - a default that contradicts
+	// its own advice just taxes whoever skims. Pass "json" for the complete,
+	// machine-parseable form.
+	format: z
+		.enum(["json", "outline"])
+		.default("outline")
+		.describe(
+			'"outline" (the default) is an indented text tree: far fewer tokens, summarises repeats and holes, not machine-parseable. Pass "json" when something has to parse fields.',
+		),
+});
+
+export const getTestIdTreeInput = z.object({
+	file: z
+		.string()
+		.optional()
+		.describe(
+			"Component file to use as the tree root, path relative to the project root (a leading ./ and Windows separators are accepted; an absolute path inside the root is relativized and meta.note says so). Combine with component to pick one of several files declaring that name. A path matching no scanned .tsx/.jsx source fails with file_not_found and suggestions rather than silently walking the whole app.",
+		),
+	component: z
+		.string()
+		.optional()
+		.describe('Component name, e.g. "CheckoutPage".'),
+	testId: z
+		.string()
+		.optional()
+		.describe(
+			"Look up where this test id is rendered instead of walking a component tree.",
+		),
+	depth: z.number().int().min(1).max(10).default(4),
+	followComponents: z
+		.boolean()
+		.default(true)
+		.describe(
+			"Inline the subtrees of child components imported from other files.",
+		),
+	attribute: z
+		.string()
+		.optional()
+		.describe(
+			'Test-id attribute name, e.g. "data-tid". Defaults to the server-resolved attribute.',
+		),
+	// Outline by default: measured 4.6x smaller than json on the same component
+	// tree, and it is what this tool's description tells you to read with.
+	format: z
+		.enum(["json", "outline"])
+		.default("outline")
+		.describe(
+			'"outline" (the default) is an indented text tree: far fewer tokens, summarises repeats and holes, not machine-parseable. Pass "json" when something has to parse fields. Tree mode only - a testId lookup always returns JSON occurrences.',
+		),
+});
+
+/**
+ * Most entries either coverage tool will put in one page.
+ *
+ * A coverage entry averages ~800 bytes, so the old ceiling of 1000 let a
+ * schema-legal call land at 199,475 bytes - roughly 50k tokens in a single tool
+ * result, enough to swamp most agents' context, with nothing warning them
+ * first. The response cap and the trimming still exist behind this; the point
+ * of the lower ceiling is that the schema should not advertise a page size no
+ * caller should reach.
+ */
+export const MAX_BUCKET_LIMIT = 200;
+
+/** The six lists `map_coverage` can return, as a `buckets` enum. */
+export const COVERAGE_BUCKETS = [
+	"matched",
+	"uncoveredTestIds",
+	"deadSelectors",
+	"nonTestIdSelectors",
+	"unknownSelectors",
+	"unknownTestIds",
+] as const;
+
+export const mapCoverageInput = z.object({
+	class: z
+		.string()
+		.optional()
+		.describe(
+			"Narrow the page-object side to the file that declares this class. Page objects sharing that file are included too; meta.alsoIncluded names them.",
+		),
+	file: z
+		.string()
+		.optional()
+		.describe(
+			"Limit the page-object side to one file, path relative to the project root exactly as list_page_objects reports it (a leading ./ and Windows separators are accepted). A path that declares no page object fails with file_not_found rather than reporting everything as uncovered.",
+		),
+	attribute: z.string().optional(),
+	// Optional rather than `.default(true)`, because the useful default depends
+	// on the call: scoping with class/file narrows the selectors and cannot
+	// narrow the rendered ids they are compared against, so uncoveredTestIds
+	// stays project-wide and is mostly ids other page objects cover - 61,788
+	// bytes of them on a real app, to answer a question about one class.
+	includeUnused: z
+		.boolean()
+		.optional()
+		.describe(
+			"Include uncoveredTestIds (rendered ids no page object uses). Defaults to true for a whole-project scan and to false when class or file is set, because that list stays project-wide however the page-object side is scoped; pass true to override, or ask for the bucket by name. Ignored when buckets is given.",
+		),
+	includeRawLocators: z
+		.boolean()
+		.default(false)
+		.describe(
+			"Also scan the sources for direct getByTestId / getItemByTestId / filterByItemTestId / filterByHasTestId calls. Off by default, so an id under uncoveredTestIds means no page object selects it - not that it is untested. Turn on before concluding a test id is unused.",
+		),
+	buckets: z
+		.array(z.enum(COVERAGE_BUCKETS))
+		.optional()
+		.describe(
+			"Return only these lists. summary and scope always ship, so [] returns just those two. Wins over includeUnused, which is then echoed in meta.ignored.",
+		),
+	// 50, not 200: six buckets at 200 is half a megabyte on a large repository,
+	// and the default call is the one an agent makes before it knows the shape
+	// of the answer. At 50 a whole-project report fits, and `offset` pages the
+	// bucket that turns out to matter. Measured on a 4,924-file app: 527 KB
+	// rejected at 200, 145 KB returned at 50.
+	limit: z
+		.number()
+		.int()
+		.min(1)
+		.max(MAX_BUCKET_LIMIT)
+		.default(50)
+		.describe(
+			`Entries per returned bucket, at most ${MAX_BUCKET_LIMIT}. A coverage entry averages around 800 bytes, so even the maximum is a large response; the ceiling exists so the schema cannot advertise a page nobody should ask for. Bucket totals always ship in summary, so a capped list still tells you how much it is hiding; page the rest with offset.`,
+		),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.default(0)
+		.describe(
+			'Index of the first entry to return, applied to every returned bucket. Because it applies to all of them at once, meta.nextOffset comes back as an object keyed by bucket rather than a single number - read the bucket you care about. To page a long list, prefer query_coverage with meta.coverageId, whose nextOffset is one number; buckets:["unknownTestIds"] + offset works too but is not checked against the snapshot the first page came from. Bucket totals are always in summary, whatever this call returns.',
+		),
+});
+
+export const queryCoverageInput = z.object({
+	coverageId: z
+		.string()
+		.min(1)
+		.describe(
+			"Opaque handle from a previous map_coverage call (meta.coverageId). Carries that call's class / file / attribute / includeRawLocators scope, so none of them is restated here.",
+		),
+	bucket: z
+		.enum(COVERAGE_BUCKETS)
+		.describe(
+			"The single list to page. One bucket at a time is what pages cleanly: offset then means one thing.",
+		),
+	offset: z
+		.number()
+		.int()
+		.min(0)
+		.default(0)
+		.describe(
+			"Index of the first entry to return. Pass meta.nextOffset from the previous page; when that key is absent the list is exhausted.",
+		),
+	limit: z
+		.number()
+		.int()
+		.min(1)
+		.max(MAX_BUCKET_LIMIT)
+		.default(50)
+		.describe(
+			`Entries to return, at most ${MAX_BUCKET_LIMIT}. A page that would still exceed the response cap is cut further and meta.truncatedBuckets says so.`,
+		),
+});

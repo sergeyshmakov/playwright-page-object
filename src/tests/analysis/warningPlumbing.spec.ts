@@ -1,0 +1,145 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildCoverageReport } from "../../analysis/coverage/mapCoverage";
+import { discoverPageObjects } from "../../analysis/page-objects/discover";
+import { buildPageObjectTree } from "../../analysis/page-objects/tree";
+import { buildTestIdTree } from "../../analysis/tsx/tree";
+import type { Diagnostic } from "../../analysis/types";
+import { type Workspace, WorkspacePool } from "../../analysis/workspace";
+import { cleanupScratchRoots, scratchRepo, writeIn } from "./helpers/onDisk";
+
+/**
+ * The regression this whole cluster exists for.
+ *
+ * A repository whose Playwright config sits somewhere the old fixed-basename
+ * probe never looked, and whose components use `data-tid`. Before the fix every
+ * one of the four payloads came back structurally valid and completely wrong:
+ * an empty test-id tree, page-object selectors matching nothing, and a coverage
+ * report reading `1` because zero of zero ids were covered — with `warnings`
+ * empty in three of the four, because only `discoverPageObjects` ever seeded
+ * itself from the workspace.
+ *
+ * So the assertion is not "the engine handles this shape". It is: whichever of
+ * the four entry points a caller reaches for, the payload says the environment
+ * is wrong.
+ */
+
+/** One per spec file, so nothing leaks between them. */
+const pool = new WorkspacePool();
+
+let root: string;
+
+beforeAll(() => {
+	root = scratchRepo({}, { prefix: "ppo-plumbing-" });
+	const write = (relative: string, body: string) =>
+		writeIn(root, relative, body);
+
+	// Nested, non-canonical basename, and the attribute is computed — so it is
+	// found, read, and still yields nothing usable. The analysis falls back to
+	// `data-testid`; the sources say otherwise.
+	write(
+		"tooling/playwright/playwright.base.config.ts",
+		[
+			'import { defineConfig } from "@playwright/test";',
+			"export default defineConfig({ use: { testIdAttribute: process.env.ATTR } });",
+		].join("\n"),
+	);
+	write(
+		"src/App.tsx",
+		[
+			"export function App() {",
+			"\treturn (",
+			'\t\t<div data-tid="AppRoot">',
+			'\t\t\t<input data-tid="EmailInput" />',
+			'\t\t\t<button data-tid="SubmitButton">Go</button>',
+			"\t\t</div>",
+			"\t);",
+			"}",
+			"",
+		].join("\n"),
+	);
+	write(
+		"e2e/LoginPage.ts",
+		[
+			'import type { Locator } from "@playwright/test";',
+			'import { RootPageObject, RootSelector, Selector } from "playwright-page-object";',
+			"",
+			'@RootSelector("AppRoot")',
+			"export class LoginPage extends RootPageObject {",
+			'\t@Selector("EmailInput")',
+			"\taccessor Email!: Locator;",
+			"}",
+			"",
+		].join("\n"),
+	);
+	pool.clear();
+});
+
+afterAll(() => {
+	pool.clear();
+	cleanupScratchRoots();
+});
+
+function workspace(): Workspace {
+	return pool.acquire({ projectRoot: root });
+}
+
+const builders: Array<[string, () => Diagnostic[]]> = [
+	["discoverPageObjects", () => discoverPageObjects(workspace()).warnings],
+	[
+		"buildPageObjectTree",
+		() => buildPageObjectTree(workspace(), "LoginPage").warnings,
+	],
+	["buildTestIdTree", () => buildTestIdTree(workspace()).warnings],
+	["buildCoverageReport", () => buildCoverageReport(workspace()).warnings],
+];
+
+describe("every payload carries the environment verdict", () => {
+	it.each(builders)("%s reports the attribute mismatch", (_name, run) => {
+		const codes = run().map((warning) => warning.code);
+		expect(codes).toContain("attribute-mismatch");
+	});
+
+	it.each(builders)("%s reports the unreadable config", (_name, run) => {
+		const codes = run().map((warning) => warning.code);
+		expect(codes).toContain("testid-attribute-unresolved");
+	});
+
+	it("names the attribute the sources actually use", () => {
+		const mismatch = buildTestIdTree(workspace()).warnings.find(
+			(warning) => warning.code === "attribute-mismatch",
+		);
+		expect(mismatch?.data?.attribute).toBe("data-testid");
+		expect(mismatch?.data?.candidate).toBe("data-tid");
+		expect(mismatch?.data?.candidateCount).toBe(3);
+	});
+
+	// The number that made the failure invisible in the field: nothing matched,
+	// nothing was matchable, so the ratio came out perfect. It is `null` now —
+	// there is no denominator — and the report says so in its own warning as
+	// well as in the environment one.
+	it("refuses to score a comparison it could not make", () => {
+		const report = buildCoverageReport(workspace());
+		expect(report.summary.matchableUiTestIds).toBe(0);
+		expect(report.summary.coverage).toBeNull();
+		const codes = report.warnings.map((warning) => warning.code);
+		expect(codes).toContain("attribute-mismatch");
+		expect(codes).toContain("no-matchable-testids");
+		const blocked = report.warnings.find(
+			(warning) => warning.code === "no-matchable-testids",
+		);
+		expect(blocked?.message).toContain("data-testid");
+		expect(blocked?.data?.attributeSource).toBeDefined();
+	});
+
+	// A caller passing the right attribute has fixed the problem for that call;
+	// the census has to be run against the name that was actually used.
+	it("goes quiet once the correct attribute is supplied", () => {
+		const codes = buildTestIdTree(workspace(), {
+			attribute: "data-tid",
+		}).warnings.map((warning) => warning.code);
+		expect(codes).not.toContain("attribute-mismatch");
+		expect(
+			buildTestIdTree(workspace(), { attribute: "data-tid" }).inventory,
+		).toHaveLength(3);
+	});
+});

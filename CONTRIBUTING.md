@@ -19,10 +19,21 @@ This prevents the painful case of a large PR being rejected because of a directi
 
 ```bash
 npm ci
-npm run dev      # tsup watch mode
-npm test         # vitest
-npm run lint     # biome check
+npm run dev       # tsup watch mode
+npm test          # vitest
+npm run lint      # biome check
+npm run lint:pkg  # publint + arethetypeswrong against the built dist
+npm run test:cli  # packs the tarball and smoke-tests the CLI + exports map
 ```
+
+`npm run test:cli` installs the packed tarball into a temp directory and
+asserts the `playwright-page-object` bin, the `require`/`import` resolution,
+cross-copy identity, and the MCP stdio handshake — run it after touching
+`package.json` exports, the CLI, the MCP server, or the build config.
+
+Note: the `example/` app doubles as the integration fixture for the MCP
+analysis tests (`src/tests/analysis/**`). If you rename components, test ids,
+or page objects there, expect to update those tests too.
 
 ## Code style
 
