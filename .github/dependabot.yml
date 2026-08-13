@@ -1,5 +1,8 @@
 version: 2
 
+# Every ecosystem is capped at one open PR. Grouping already collapses a whole
+# ecosystem's bumps into a single PR, so a limit of 1 means at most one review
+# at a time and no fan-out of stale branches racing each other onto main.
 updates:
   - package-ecosystem: "npm"
     directory: "/"
@@ -9,7 +12,7 @@ updates:
       timezone: "UTC"
     allow:
       - dependency-type: "direct"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
     # Production-dep bumps must publish (semantic-release ignores `chore:`), so
@@ -51,10 +54,15 @@ updates:
       timezone: "UTC"
     allow:
       - dependency-type: "direct"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
       - "docs"
+    # The docs site ships in no release. Pin the prefix so a production-type dep
+    # here can never inherit the release-triggering `fix(deps)` default.
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
     groups:
       docs-deps:
         patterns:
@@ -73,10 +81,17 @@ updates:
       timezone: "UTC"
     allow:
       - dependency-type: "direct"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
       - "example"
+    # react/react-dom are production deps of the example app, so Dependabot's
+    # default picks `fix(deps)` and semantic-release cuts a patch release for a
+    # change that ships in nothing -- the package publishes `files: ["dist"]`.
+    # PR #55 had to be re-subjected by hand; pin the prefix instead.
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
     groups:
       example-deps:
         patterns:
@@ -92,7 +107,7 @@ updates:
       interval: "monthly"
       time: "06:00"
       timezone: "UTC"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
       - "github-actions"
