@@ -4,7 +4,7 @@ import {
 	VariableDeclarationKind,
 } from "ts-morph";
 import type { TestIdValue, UiNode } from "../types";
-import { unwrapTransparent } from "../util/ast";
+import { bindsName, unwrapTransparent } from "../util/ast";
 import type { ComponentDefinition } from "./componentGraph";
 
 /**
@@ -275,35 +275,6 @@ export function shadowsWholeBody(
 			? fn.getBody()
 			: undefined;
 	return body !== undefined && statement.getParent() === body;
-}
-
-/**
- * Whether a declaration's name node binds `name`, destructuring included.
- *
- * `const { render } = props` and `const [render] = pair` bind `render` every
- * bit as much as `const render` does. Testing only for an identifier meant a
- * destructured binding was invisible to the shadowing walk, so the call fell
- * through to a module helper of the same name — the mis-attribution this whole
- * lookup exists to prevent, reachable through a spelling instead.
- */
-function bindsName(nameNode: Node, name: string): boolean {
-	if (Node.isIdentifier(nameNode)) {
-		return nameNode.getText() === name;
-	}
-	if (
-		Node.isObjectBindingPattern(nameNode) ||
-		Node.isArrayBindingPattern(nameNode)
-	) {
-		for (const element of nameNode.getElements()) {
-			if (
-				Node.isBindingElement(element) &&
-				bindsName(element.getNameNode(), name)
-			) {
-				return true;
-			}
-		}
-	}
-	return false;
 }
 
 /**

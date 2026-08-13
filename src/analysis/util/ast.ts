@@ -63,6 +63,53 @@ export function unwrapTransparentParent(node: Node): Node | undefined {
 }
 
 /**
+ * Whether a declaration's name node binds `name`, destructuring included.
+ *
+ * `const { render } = props` and `const [render] = pair` bind `render` every
+ * bit as much as `const render` does. Testing only for an identifier meant a
+ * destructured binding was invisible to the shadowing walk, so the call fell
+ * through to a module helper of the same name — the mis-attribution this whole
+ * lookup exists to prevent, reachable through a spelling instead.
+ */
+export function bindsName(nameNode: Node, name: string): boolean {
+	if (Node.isIdentifier(nameNode)) {
+		return nameNode.getText() === name;
+	}
+	if (
+		Node.isObjectBindingPattern(nameNode) ||
+		Node.isArrayBindingPattern(nameNode)
+	) {
+		for (const element of nameNode.getElements()) {
+			if (
+				Node.isBindingElement(element) &&
+				bindsName(element.getNameNode(), name)
+			) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/** The parameter of `scope` that binds `name`, destructuring included. */
+function parameterBinding(scope: Node, name: string): Node | null {
+	if (
+		!Node.isArrowFunction(scope) &&
+		!Node.isFunctionExpression(scope) &&
+		!Node.isFunctionDeclaration(scope) &&
+		!Node.isMethodDeclaration(scope)
+	) {
+		return null;
+	}
+	for (const parameter of scope.getParameters()) {
+		if (bindsName(parameter.getNameNode(), name)) {
+			return parameter;
+		}
+	}
+	return null;
+}
+
+/**
  * The declaration of `name` nearest to `from`, anywhere below module scope.
  *
  * For a component declared inside another component:
@@ -89,6 +136,17 @@ export function lexicalDeclaration(from: Node, name: string): Node | null {
 		scope && !Node.isSourceFile(scope);
 		scope = scope.getParent()
 	) {
+		// A parameter binds the name across the whole function body and shadows
+		// anything the module imports or declares. It is returned rather than
+		// skipped precisely because it is not a declaration a caller can expand:
+		// falling through to a module-level namesake made `function Page({ Card })`
+		// report the *imported* `Card`'s subtree, and the ids of a component the
+		// call site may never pass. Unresolved is the honest answer, and returning
+		// the parameter is what produces it.
+		const parameter = parameterBinding(scope, name);
+		if (parameter) {
+			return parameter;
+		}
 		if (!Node.isBlock(scope) && !Node.isCaseClause(scope)) {
 			continue;
 		}
