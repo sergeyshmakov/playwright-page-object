@@ -9,7 +9,7 @@
 		},
 		"playwright-page-object": {
 			"command": "node",
-			"args": ["dist/cli.js", "mcp", "--project-root", "example"]
+			"args": ["run/mcp-server.mjs", "mcp", "--project-root", "example"]
 		}
 	}
 }
