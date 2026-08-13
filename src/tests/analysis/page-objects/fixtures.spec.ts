@@ -156,6 +156,35 @@ describe("readFixtureMaps", () => {
 		expect(map.byClass.has(keyFold("src/other.ts#OtherPage"))).toBe(false);
 	});
 
+	it("follows an entry that names a factory declared beside it", () => {
+		const map = readFixtures({
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				"const makeHome = (page) => new HomePage(page);",
+				"export const fixtures = createFixtures({ home: makeHome });",
+			].join("\n"),
+		});
+		expect(map.byName.get("home")).toBe(keyFold("src/HomePage.ts#HomePage"));
+		expect(
+			map.byClass.get(keyFold("src/HomePage.ts#HomePage"))?.[0],
+		).toMatchObject({ name: "home", form: "factory" });
+	});
+
+	it("follows the shorthand form of a named factory", () => {
+		const map = readFixtures({
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				"function makeHome(page) { return new HomePage(page); }",
+				"export const fixtures = createFixtures({ makeHome });",
+			].join("\n"),
+		});
+		expect(map.byName.get("makeHome")).toBe(
+			keyFold("src/HomePage.ts#HomePage"),
+		);
+	});
+
 	it("resolves a constructor reached through a namespace import", () => {
 		const map = readFixtures({
 			"src/pages.ts": 'export { HomePage } from "./HomePage";',

@@ -37,10 +37,18 @@ export interface FixtureMap {
  * initializer; anything else is reported as dynamic.
  */
 function factoryClass(fn: Node): NameRef | null {
-	if (!Node.isArrowFunction(fn) && !Node.isFunctionExpression(fn)) {
+	if (
+		!Node.isArrowFunction(fn) &&
+		!Node.isFunctionExpression(fn) &&
+		!Node.isFunctionDeclaration(fn)
+	) {
 		return null;
 	}
-	let body: Node = fn.getBody();
+	const declared = fn.getBody();
+	if (!declared) {
+		return null;
+	}
+	let body: Node = declared;
 	if (Node.isParenthesizedExpression(body)) {
 		body = body.getExpression();
 	}
@@ -64,6 +72,28 @@ function isFunctionLike(node: Node): boolean {
 		Node.isFunctionDeclaration(node) ||
 		Node.isMethodDeclaration(node)
 	);
+}
+
+/**
+ * A factory the fixture entry *names* instead of spelling out:
+ * `const makeHome = (page) => new HomePage(page)` bound as `{ home: makeHome }`
+ * or as the shorthand `{ makeHome }`.
+ *
+ * Only a function initializer, and deliberately so. `const Alias = HomePage` is
+ * an alias to a class, not a factory; following it would key a page object
+ * under a name no declaration backs, which is what `fixture-entry-dynamic`
+ * exists to refuse.
+ */
+function localFactory(sourceFile: SourceFile, name: string): Node | null {
+	const initializer = sourceFile.getVariableDeclaration(name)?.getInitializer();
+	if (
+		initializer &&
+		(Node.isArrowFunction(initializer) ||
+			Node.isFunctionExpression(initializer))
+	) {
+		return initializer;
+	}
+	return sourceFile.getFunction(name) ?? null;
 }
 
 /** Whether `node` lies inside `container`'s span. */
@@ -196,7 +226,17 @@ export function readFixtureMaps(
 				};
 
 				let className: NameRef | null = null;
-				if (
+				const named = Node.isIdentifier(value)
+					? localFactory(sourceFile, value.getText())
+					: null;
+				if (named) {
+					// An entry that names a factory declared beside it. Read as a
+					// constructor, `resolveClassRef` resolved the *variable* and the
+					// binding was thrown away as dynamic, taking the fixture metadata
+					// with it - and any class discoverable only through it.
+					className = factoryClass(named);
+					binding.form = "factory";
+				} else if (
 					Node.isIdentifier(value) ||
 					Node.isPropertyAccessExpression(value)
 				) {
