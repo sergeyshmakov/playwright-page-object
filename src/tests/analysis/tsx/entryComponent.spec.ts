@@ -132,3 +132,30 @@ describe("entry file matching", () => {
 		expect(tree.warnings.map((diag) => diag.code)).toContain("entry-not-found");
 	});
 });
+
+describe("the bootstrap file's root element", () => {
+	it("takes the outer wrapper, not a self-closing child of it", () => {
+		// The two JSX kinds were scanned one list after the other, so every
+		// self-closing element was considered before any opening one. In
+		// `<Shell><App /></Shell>` that picked `App`: the tree came back rooted at
+		// the child, with everything `Shell` renders around it missing — the
+		// nesting reported wrong rather than incomplete.
+		const tree = treeFor(
+			{
+				"src/Shell.tsx":
+					'export function Shell({ children }) { return <div data-testid="ShellRoot">{children}</div>; }',
+				"src/App.tsx":
+					'export function App() { return <main data-testid="AppRoot" />; }',
+				"src/main.tsx": [
+					'import { App } from "./App";',
+					'import { Shell } from "./Shell";',
+					"export function boot() { return <Shell><App /></Shell>; }",
+				].join("\n"),
+			},
+			{},
+		);
+		expect(tree.roots.map((root) => staticId(root.testId))).toContain(
+			"ShellRoot",
+		);
+	});
+});

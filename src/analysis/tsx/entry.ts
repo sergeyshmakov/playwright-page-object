@@ -233,10 +233,16 @@ export function findEntryComponent(
 		.filter((file) => ENTRY_BASENAMES.includes(file.getBaseName()))
 		.sort((a, b) => a.getFilePath().length - b.getFilePath().length);
 	for (const bootstrap of bootstraps) {
-		for (const element of [
+		// Source order, not one kind then the other. `<Shell><App /></Shell>` has
+		// `App` as a self-closing element and `Shell` as an opening one, so
+		// concatenating the two lists picked the *child* as the root: the tree
+		// came back rooted at `App` and everything `Shell` renders around it was
+		// missing, with the nesting reported wrong rather than incomplete.
+		const elements = [
 			...bootstrap.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement),
 			...bootstrap.getDescendantsOfKind(SyntaxKind.JsxOpeningElement),
-		]) {
+		].sort((left, right) => left.getStart() - right.getStart());
+		for (const element of elements) {
 			const tag = element.getTagNameNode().getText();
 			if (!/^[A-Z]/.test(tag)) {
 				continue;
