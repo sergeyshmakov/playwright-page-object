@@ -104,7 +104,13 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 		// `src/{components,../..}/**` splits into `{components,..` and `..}`, and
 		// neither is equal to `..` — so the whole guard was one brace away from
 		// being decorative. `{`, `,` and `}` count as boundaries alongside `/`.
-		if (/(^|[/{,])\.\.($|[/},])/.test(toPosix(dir))) {
+		//
+		// Extglob alternatives are the same boundary wearing different characters.
+		// `src/@(components|../..)/**/*.tsx` has a static base of `src`, so the
+		// containment check above passes, and every `..` in it sits against `(`,
+		// `|` or `)` — none of which were boundaries, so the guard read straight
+		// past a pattern that expands to `src/../..`.
+		if (/(^|[/{,(|])\.\.($|[/},)|])/.test(toPosix(dir))) {
 			problems.push(
 				`--src-dir must not contain a ".." segment: ${dir} (write the directory you mean, relative to --project-root)`,
 			);

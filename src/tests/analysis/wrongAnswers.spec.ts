@@ -145,6 +145,19 @@ describe("scope validated wrongly", () => {
 		expect(problems.join("\n")).toContain("..");
 	});
 
+	it("refuses a `..` hidden inside an extglob alternative", () => {
+		// The same boundary as the brace case, wearing different characters: in
+		// `src/@(components|../..)` the first `..` sits against `|` and the second
+		// against `)`, so a guard that knew only `/`, `{`, `,` and `}` read
+		// straight past a pattern that expands to `src/../..`.
+		const root = scratch({ "src/.keep": "" });
+		const problems = validateServerOptions({
+			projectRoot: root,
+			srcDirs: ["src/@(components|../..)/**/*.tsx"],
+		});
+		expect(problems.join("\n")).toContain("..");
+	});
+
 	it("still accepts a glob inside the root", () => {
 		const root = scratch({ "src/.keep": "" });
 		expect(
