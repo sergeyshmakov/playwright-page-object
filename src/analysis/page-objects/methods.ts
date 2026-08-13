@@ -59,6 +59,17 @@ function functionInitializerOf(
 	return null;
 }
 
+/** Whether a member sits on the constructor rather than on the prototype. */
+function isStaticMember(member: Node): boolean {
+	return (
+		(Node.isMethodDeclaration(member) ||
+			Node.isPropertyDeclaration(member) ||
+			Node.isGetAccessorDeclaration(member) ||
+			Node.isSetAccessorDeclaration(member)) &&
+		member.isStatic()
+	);
+}
+
 /**
  * Enumerates the surface a test author can call on a page object.
  *
@@ -78,6 +89,12 @@ function functionInitializerOf(
  * recorded **before** the visibility filter, so `private reset()` on a subclass
  * hides — rather than exposes — a public `reset()` on the base. Reporting the
  * base's would be worse than reporting neither: the call does not compile.
+ *
+ * Staticness is part of that key, because it is part of which chain the member
+ * is on. A subclass `static open()` lives on the constructor and the base's
+ * `open()` lives on the prototype, so instances still inherit the base method;
+ * keying on the name alone let the static hide it and dropped callable instance
+ * API out of the tree.
  */
 export function readMethods(
 	classDeclaration: ClassDeclaration,
@@ -100,11 +117,14 @@ export function readMethods(
 				continue;
 			}
 			const name = Node.hasName(member) ? String(member.getName()) : "";
-			if (name === "" || seen.has(name)) {
+			// Statics and instance members are different namespaces, so they
+			// shadow separately. See the header.
+			const key = `${isStaticMember(member) ? "static " : ""}${name}`;
+			if (name === "" || seen.has(key)) {
 				continue;
 			}
 			// Before every filter below: an unreported member still shadows.
-			seen.add(name);
+			seen.add(key);
 
 			if (name.startsWith("#") || visibilityOf(member) === "private") {
 				continue;
@@ -169,13 +189,7 @@ function describe(
 	};
 
 	const finish = (info: MethodInfo): MethodInfo => {
-		if (
-			(Node.isMethodDeclaration(member) ||
-				Node.isPropertyDeclaration(member) ||
-				Node.isGetAccessorDeclaration(member) ||
-				Node.isSetAccessorDeclaration(member)) &&
-			member.isStatic()
-		) {
+		if (isStaticMember(member)) {
 			info.isStatic = true;
 		}
 		const doc = docSummary(member);

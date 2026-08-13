@@ -227,6 +227,20 @@ describe("readMethods", () => {
 		expect(methods[0].signature).toBe("fromBase(): void");
 	});
 
+	it("does not let a subclass static shadow an inherited instance method", () => {
+		// `static fromBase()` is on the constructor; the base's `fromBase()` is on
+		// the prototype. Instances still inherit the base method, so keying the
+		// shadow set on the name alone dropped callable instance API from the tree.
+		const fixture = inheritanceFixture("  static fromBase() {}");
+		const methods = readMethods(fixture.cls, fixture.imports, fixture.ctx);
+		expect(
+			methods.map(
+				(method) => `${method.isStatic ? "static " : ""}${method.name}`,
+			),
+		).toEqual(["static fromBase", "fromBase"]);
+		expect(methods[1].inherited).toBe(true);
+	});
+
 	it("renders optional and rest parameters", () => {
 		const methods = methodsOf(
 			"  go(first: string, second?: number, ...rest: string[]) { void first; void second; void rest; }",
