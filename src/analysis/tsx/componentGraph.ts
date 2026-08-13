@@ -18,25 +18,14 @@ import { hasDefaultKeyword, isDefaultExported } from "../util/exports";
 import { defKey } from "../util/paths";
 import { lineAndColumnAt } from "../util/position";
 import {
-	isRelativeSpecifier,
 	type RefResolution,
 	type ResolveOptions,
 	resolveIdentifier,
-	resolveModuleSpecifier,
 } from "../util/resolve";
-import {
-	commonAncestorDirectory,
-	isWorkspaceLocal,
-	linkedOutsideRoot,
-	packageSourceOutsideRoot,
-} from "../util/workspaceRoot";
+import { isWorkspaceLocal } from "../util/workspaceRoot";
 import type { Workspace } from "../workspace";
 import { forwardsSpread, readProps } from "./componentProps";
-import {
-	fallbackComponentName,
-	readExpressionValue,
-	type ScannedElement,
-} from "./scanTestIds";
+import { fallbackComponentName } from "./scanTestIds";
 
 export type ComponentFunction =
 	| FunctionDeclaration

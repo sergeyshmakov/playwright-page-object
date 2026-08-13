@@ -1,6 +1,4 @@
-import * as path from "node:path";
-import type { Node, Project, SourceFile } from "ts-morph";
-import type { Diagnostic } from "../types";
+import type { SourceFile } from "ts-morph";
 import { isRelativeSpecifier, resolveModuleSpecifier } from "../util/resolve";
 import {
 	commonAncestorDirectory,

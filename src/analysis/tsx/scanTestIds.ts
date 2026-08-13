@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import {
-	type JsxAttribute,
 	type JsxOpeningElement,
 	type JsxSelfClosingElement,
 	Node,
@@ -8,14 +7,8 @@ import {
 	SyntaxKind,
 	ts,
 } from "ts-morph";
-import type {
-	DynamicReason,
-	SourceLoc,
-	TestIdOccurrence,
-	TestIdValue,
-} from "../types";
+import type { SourceLoc, TestIdOccurrence, TestIdValue } from "../types";
 import { hasDefaultKeyword } from "../util/exports";
-import { escapeRegExp } from "../util/paths";
 import { lineAndColumnAt } from "../util/position";
 
 export type JsxOpeningLike = JsxOpeningElement | JsxSelfClosingElement;
