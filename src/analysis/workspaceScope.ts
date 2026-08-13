@@ -9,7 +9,7 @@ import {
 	matchesAnyGlob,
 	toPosix,
 } from "./util/paths";
-import type { WorkspaceOptions } from "./workspace";
+import type { WorkspaceOptions } from "./workspaceCore";
 
 /**
  * Turning what a caller *said* to analyse into what the scanner can match.

@@ -13,7 +13,7 @@ import {
 import { AnalysisLimitError, info } from "./diagnostics";
 import type { Diagnostic } from "./types";
 import { toPosix, toPosixRelative } from "./util/paths";
-import type { Workspace, WorkspaceOptions } from "./workspace";
+import type { Workspace, WorkspaceOptions } from "./workspaceCore";
 import {
 	absoluteGlob,
 	countsAgainstCap,
