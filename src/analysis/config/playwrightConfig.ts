@@ -9,7 +9,7 @@ import type {
 } from "../types";
 import { admitAddedFile } from "../util/fileBudget";
 import { toPosix } from "../util/paths";
-import type { Workspace } from "../workspace";
+import type { WorkspaceFiles } from "../workspaceFiles";
 import {
 	type ConfigDiscovery,
 	discoverPlaywrightConfigs,
@@ -40,7 +40,7 @@ import {
 const MAX_CONFIG_PROBES = 3;
 
 function addConfigFile(
-	workspace: Workspace,
+	workspace: WorkspaceFiles,
 	absolute: string,
 ): SourceFile | undefined {
 	const posix = toPosix(absolute);
@@ -76,7 +76,7 @@ function addConfigFile(
  * reader run its own search, which is what direct callers and unit tests want.
  */
 export function readPlaywrightConfig(
-	workspace: Workspace,
+	workspace: WorkspaceFiles,
 	explicitPath?: string,
 	discovery?: ConfigDiscovery,
 ): PlaywrightConfigInfo {
@@ -163,7 +163,7 @@ function emptyInfo(
 }
 
 function readChosenConfig(
-	workspace: Workspace,
+	workspace: WorkspaceFiles,
 	sourceFile: SourceFile,
 	candidates: string[],
 	configSource: "discovered" | "explicit",
@@ -379,7 +379,7 @@ function readChosenConfig(
  * case where the assumed attribute appears nowhere in the sources.
  */
 function probeSiblings(
-	workspace: Workspace,
+	workspace: WorkspaceFiles,
 	chosen: SourceFile,
 	candidates: string[],
 	notes: Diagnostic[],

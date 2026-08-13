@@ -1,6 +1,6 @@
 import { warn } from "../diagnostics";
 import type { Diagnostic, TestIdAttributeSource } from "../types";
-import type { Workspace } from "../workspace";
+import type { WorkspaceFiles } from "../workspaceFiles";
 
 /**
  * Evidence that the resolved test-id attribute is the one the sources actually
@@ -90,7 +90,7 @@ const HYPHENATED_ATTRIBUTE = /\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+)\s*=/g;
  * a comment mentions `data-testid` must not be able to silence the check.
  */
 export function censusFromText(
-	ws: Workspace,
+	ws: WorkspaceFiles,
 	attribute: string,
 ): AttributeCensus {
 	return ws.memo(`attr-census::${attribute}`, [], () => {

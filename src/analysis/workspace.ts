@@ -8,16 +8,18 @@
  * `mcp/tools.ts`.
  *
  * - `./workspaceCore` - the `Workspace` class itself.
+ * - `./workspaceFiles` - its base: the `Project` and everything read off it.
+ * - `./workspaceOptions` - what a caller asks for, and what a sweep reports.
  * - `./workspacePool` - which workspaces are kept, and for how long.
  * - `./workspaceScope` - what a caller asked to analyse, as globs.
  * - `./workspaceBuild` - what a new workspace's `Project` will hold.
  */
 
-export {
-	DEFAULT_TEST_ID_ATTRIBUTE,
-	type RevalidateResult,
-	Workspace,
-	type WorkspaceOptions,
-} from "./workspaceCore";
+export { Workspace } from "./workspaceCore";
+export { DEFAULT_TEST_ID_ATTRIBUTE } from "./workspaceFiles";
+export type {
+	RevalidateResult,
+	WorkspaceOptions,
+} from "./workspaceOptions";
 export { WorkspacePool } from "./workspacePool";
 export { isJsxFile } from "./workspaceScope";

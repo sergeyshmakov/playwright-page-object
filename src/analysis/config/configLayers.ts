@@ -11,7 +11,7 @@ import type { Diagnostic } from "../types";
 import { unwrapTransparent } from "../util/ast";
 import { toPosix } from "../util/paths";
 import { findImportBinding, resolveModuleSpecifier } from "../util/resolve";
-import type { Workspace } from "../workspace";
+import type { WorkspaceFiles } from "../workspaceFiles";
 
 /**
  * A Playwright config file flattened into an ordered layer stack.
@@ -91,7 +91,7 @@ export interface ConfigLayer {
 }
 
 export interface LayerContext {
-	workspace: Workspace;
+	workspace: WorkspaceFiles;
 	notes: Diagnostic[];
 	/**
 	 * `(module, export)` keys on the *active* path, so an import cycle

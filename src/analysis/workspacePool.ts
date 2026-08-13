@@ -1,5 +1,6 @@
 import { foldPath } from "./util/paths";
-import { Workspace, type WorkspaceOptions } from "./workspaceCore";
+import { Workspace } from "./workspaceCore";
+import type { WorkspaceOptions } from "./workspaceOptions";
 import { normalizeRoot, withNormalizedScope } from "./workspaceScope";
 
 /**
