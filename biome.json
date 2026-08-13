@@ -21,7 +21,7 @@
 			},
 			"style": {
 				"noExcessiveLinesPerFile": {
-					"level": "warn",
+					"level": "error",
 					"options": {
 						"maxLines": 500,
 						"skipBlankLines": false
