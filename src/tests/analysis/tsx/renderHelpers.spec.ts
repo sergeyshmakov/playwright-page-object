@@ -429,3 +429,38 @@ describe("bindings the shadowing walk used to spell past", () => {
 		expect(ids(tree)).toContain("Badge");
 	});
 });
+
+describe("a JSX local is bound where it is referenced", () => {
+	// The body-level index holds one declaration per name for the whole
+	// component, so two blocks legally shadowing the same local both expanded
+	// from whichever was written first: the tree placed `A` in the branch that
+	// renders `B` and recommended a test id that never appears there.
+	it("expands each block's own binding, not the first one in the file", () => {
+		const tree = treeOf({
+			"src/Page.tsx": [
+				'const A = () => <div data-testid="FromA" />;',
+				'const B = () => <div data-testid="FromB" />;',
+				"export function Page({ flag }) {",
+				"  if (flag) { const content = <A />; return content; }",
+				"  { const content = <B />; return content; }",
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toEqual(["FromA", "FromB"]);
+	});
+
+	// The body level still belongs to the index: a declaration there shadows
+	// every reference in the component, wherever it is written.
+	it("still resolves a body-level local from inside a block", () => {
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"export function Page({ flag }) {",
+				'  const content = <div data-testid="Body" />;',
+				"  if (flag) { return content; }",
+				"  return content;",
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toContain("Body");
+	});
+});

@@ -972,14 +972,7 @@ class TreeBuilder {
 			return recur(body);
 		}
 		if (Node.isIdentifier(node)) {
-			return this.walkLocalVariable(
-				node.getText(),
-				owner,
-				depth,
-				path,
-				state,
-				scope,
-			);
+			return this.walkLocalVariable(node, owner, depth, path, state, scope);
 		}
 		return [];
 	}
@@ -993,9 +986,18 @@ class TreeBuilder {
 	 * deliberately out of reach: it is outside the component body the caller
 	 * owns, and every one of those lands as an `opaque-expression` marker, which
 	 * is the point.
+	 *
+	 * Resolved from the *reference*, not from the name. A block between the
+	 * reference and the component body binds the name for that reference alone,
+	 * and the body-level index cannot represent that: it holds one declaration
+	 * per name for the whole component, so two blocks legally shadowing the same
+	 * local — an outer `const content = <A/>` and an inner block's
+	 * `const content = <B/>` — both expanded from whichever was written first.
+	 * The tree then showed `A` where the component renders `B`, which is a wrong
+	 * test id offered with no sign that anything was guessed.
 	 */
 	private walkLocalVariable(
-		name: string,
+		reference: Node,
 		owner: ComponentDefinition,
 		depth: number,
 		path: Set<string>,
@@ -1005,24 +1007,27 @@ class TreeBuilder {
 		if (scope.varHops <= 0) {
 			return [];
 		}
-		const declaration = this.localVariablesOf(owner).get(name);
-		if (!declaration) {
+		const name = reference.getText();
+		// `blockScopedBinding` stops at the body and hands back the initializer,
+		// so the two lookups meet exactly: it owns the levels below the body, the
+		// index owns the body level.
+		const initializer =
+			blockScopedBinding(reference, name, owner.fn) ??
+			this.localVariablesOf(owner).get(name)?.getInitializer();
+		if (!initializer) {
 			return [];
 		}
-		const start = declaration.getStart();
+		const start = initializer.getStart();
 		const visited = scope.visitedVars ?? new Set<number>();
 		if (visited.has(start)) {
 			return [];
 		}
 		visited.add(start);
-		const initializer = declaration.getInitializer();
-		return initializer
-			? this.walk(initializer, owner, depth, path, state, {
-					varHops: scope.varHops - 1,
-					visitedVars: visited,
-					position: scope.position,
-				})
-			: [];
+		return this.walk(initializer, owner, depth, path, state, {
+			varHops: scope.varHops - 1,
+			visitedVars: visited,
+			position: scope.position,
+		});
 	}
 
 	/**
