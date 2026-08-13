@@ -4,7 +4,7 @@ import {
 	VariableDeclarationKind,
 } from "ts-morph";
 import type { TestIdValue, UiNode } from "../types";
-import { bindsName, unwrapTransparent } from "../util/ast";
+import { bindsName, headerDeclaration, unwrapTransparent } from "../util/ast";
 import type { ComponentDefinition } from "./componentGraph";
 
 /**
@@ -278,54 +278,24 @@ export function shadowsWholeBody(
 }
 
 /**
- * A binding `scope` introduces on its own header rather than inside its block.
+ * A binding `scope` introduces on its own header, as a *value*.
  *
- * `for (const render of rows)` and `catch (render)` both scope a name to the
- * statement, and neither is a `Block`, so a walk that only inspects blocks
- * looks straight past them.
- *
- * Returns the initializer where there is one and the declaration otherwise —
- * the same rule {@link blockScopedBinding} uses, and for the same reason. A
- * `for (let render = () => <b/>; …)` really does declare a helper, while a
- * `for…of` variable has no initializer and stays opaque, which is the right
- * answer: the call is shadowed by a value the walk cannot follow, and unknown
- * beats attributing a module helper's subtree to it.
+ * The traversal lives in {@link headerDeclaration}; this adds the two rules
+ * that are this walk's own. `var` is function-scoped, so
+ * {@link shadowsWholeBody} owns it at the body level. And the initializer is
+ * returned where there is one - `for (let render = () => <b/>; ...)` really
+ * does declare a helper, while a `for...of` variable has none and stays
+ * opaque, which is the right answer: the call is shadowed by a value the walk
+ * cannot follow, and unknown beats attributing a module helper's subtree to it.
  */
 function headerBinding(scope: Node, name: string): Node | null {
-	if (Node.isCatchClause(scope)) {
-		const declaration = scope.getVariableDeclaration();
-		if (declaration && bindsName(declaration.getNameNode(), name)) {
-			return declaration;
-		}
+	const declaration = headerDeclaration(scope, name, false);
+	if (declaration === null) {
 		return null;
 	}
-	if (
-		!Node.isForStatement(scope) &&
-		!Node.isForOfStatement(scope) &&
-		!Node.isForInStatement(scope)
-	) {
-		return null;
-	}
-	const initializer = scope.getInitializer();
-	if (
-		initializer === undefined ||
-		!Node.isVariableDeclarationList(initializer)
-	) {
-		return null;
-	}
-	// `var` is function-scoped; `shadowsWholeBody` owns it at the body level.
-	if (initializer.getDeclarationKind() === VariableDeclarationKind.Var) {
-		return null;
-	}
-	for (const declaration of initializer.getDeclarations()) {
-		if (bindsName(declaration.getNameNode(), name)) {
-			// A destructured binding lands here too, and its initializer is the
-			// object being destructured — not a function, so opaque, which is what
-			// following one element of a pattern would have to guess at anyway.
-			return declaration.getInitializer() ?? declaration;
-		}
-	}
-	return null;
+	return Node.isVariableDeclaration(declaration)
+		? (declaration.getInitializer() ?? declaration)
+		: declaration;
 }
 
 /**

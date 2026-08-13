@@ -91,6 +91,58 @@ export function bindsName(nameNode: Node, name: string): boolean {
 	return false;
 }
 
+/**
+ * A binding `scope` introduces on its own header rather than inside its block.
+ *
+ * `for (const Card of cards)` and `catch (Card)` both scope a name to the
+ * statement, and neither is a `Block`, so a walk that only inspects blocks
+ * looks straight past them — and then resolves the name against whatever the
+ * module imports under it.
+ *
+ * Returns the declaration. Callers that want the value decide what to do with
+ * it: a `for…of` variable has no initializer and stays opaque, which is the
+ * right answer, because unknown beats attributing some other component's
+ * subtree to it.
+ *
+ * `includeVar` is false for callers that handle function-scoped `var` at the
+ * body level instead — see {@link blockScopedBinding}'s use of it.
+ */
+export function headerDeclaration(
+	scope: Node,
+	name: string,
+	includeVar = true,
+): Node | null {
+	if (Node.isCatchClause(scope)) {
+		const declaration = scope.getVariableDeclaration();
+		return declaration && bindsName(declaration.getNameNode(), name)
+			? declaration
+			: null;
+	}
+	if (
+		!Node.isForStatement(scope) &&
+		!Node.isForOfStatement(scope) &&
+		!Node.isForInStatement(scope)
+	) {
+		return null;
+	}
+	const initializer = scope.getInitializer();
+	if (
+		initializer === undefined ||
+		!Node.isVariableDeclarationList(initializer)
+	) {
+		return null;
+	}
+	if (!includeVar && initializer.getDeclarationKind() === "var") {
+		return null;
+	}
+	for (const declaration of initializer.getDeclarations()) {
+		if (bindsName(declaration.getNameNode(), name)) {
+			return declaration;
+		}
+	}
+	return null;
+}
+
 /** The parameter of `scope` that binds `name`, destructuring included. */
 function parameterBinding(scope: Node, name: string): Node | null {
 	if (
@@ -147,11 +199,22 @@ export function lexicalDeclaration(from: Node, name: string): Node | null {
 		if (parameter) {
 			return parameter;
 		}
+		// `for (const Card of cards)` and `catch (Card)` scope a name to a
+		// statement that is not a block.
+		const header = headerDeclaration(scope, name);
+		if (header) {
+			return header;
+		}
 		if (!Node.isBlock(scope) && !Node.isCaseClause(scope)) {
 			continue;
 		}
 		for (const statement of scope.getStatements()) {
-			if (Node.isFunctionDeclaration(statement)) {
+			// A class is a declaration like any other. Missing it sent `<Card />`
+			// past a `class Card` in the body to a module-level import of the name.
+			if (
+				Node.isFunctionDeclaration(statement) ||
+				Node.isClassDeclaration(statement)
+			) {
 				if (statement.getName() === name) {
 					return statement;
 				}

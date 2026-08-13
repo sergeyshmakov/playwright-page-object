@@ -146,6 +146,60 @@ describe("a component declared inside another component", () => {
 		expect(JSON.stringify(tree.roots)).not.toContain("ImportedCard");
 	});
 
+	// Found by sweeping the binding forms rather than waiting for each to be
+	// reported: a class, a `for` header and a `catch` header all bind a name,
+	// and none of them is a variable statement in a block.
+	it("does not expand an import a local class shadows", () => {
+		const tree = treeOf({
+			"src/Card.tsx":
+				'export default () => <div data-testid="ImportedCard" />;',
+			"src/Page.tsx": [
+				'import Card from "./Card";',
+				"export function Page() {",
+				"  class Card { render() { return null; } }",
+				"  void Card;",
+				'  return <div data-testid="Root"><Card /></div>;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toEqual(["Root"]);
+	});
+
+	it("does not expand an import a for-of header shadows", () => {
+		const tree = treeOf({
+			"src/Card.tsx":
+				'export default () => <div data-testid="ImportedCard" />;',
+			"src/Page.tsx": [
+				'import Card from "./Card";',
+				"export function Page({ cards }) {",
+				"  for (const Card of cards) {",
+				'    return <div data-testid="Root"><Card /></div>;',
+				"  }",
+				"  return null;",
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toEqual(["Root"]);
+	});
+
+	it("does not expand an import a catch binding shadows", () => {
+		const tree = treeOf({
+			"src/Card.tsx":
+				'export default () => <div data-testid="ImportedCard" />;',
+			"src/Page.tsx": [
+				'import Card from "./Card";',
+				"export function Page() {",
+				"  try {",
+				"    throw new Error('x');",
+				"  } catch (Card) {",
+				'    return <div data-testid="Root"><Card /></div>;',
+				"  }",
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toEqual(["Root"]);
+	});
+
 	// The nearer declaration wins, which is what the language does.
 	it("prefers the nested declaration over a module-level one", () => {
 		const tree = treeOf({
