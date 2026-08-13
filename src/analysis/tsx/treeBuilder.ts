@@ -962,12 +962,21 @@ class TreeBuilder {
 		if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
 			const body = node.getBody();
 			if (Node.isBlock(body)) {
-				return body
-					.getDescendantsOfKind(SyntaxKind.ReturnStatement)
-					.flatMap((statement) => {
-						const expression = statement.getExpression();
-						return expression ? recur(expression) : [];
-					});
+				return (
+					body
+						.getDescendantsOfKind(SyntaxKind.ReturnStatement)
+						// Only this callback's own returns. A nested helper's return is
+						// not something the callback renders - a `function unused() {
+						// return <span data-testid="Ghost"/> }` beside the real return
+						// put `Ghost` in the tree, and an id that renders nowhere is a
+						// fabricated coverage match. `componentReturnExpressions` and
+						// `factoryClass` both already filter this way.
+						.filter((statement) => enclosingFunctionOf(statement) === node)
+						.flatMap((statement) => {
+							const expression = statement.getExpression();
+							return expression ? recur(expression) : [];
+						})
+				);
 			}
 			return recur(body);
 		}

@@ -228,4 +228,26 @@ describe("ids the walk must not invent", () => {
 		});
 		expect(claimedIds(nodes)).toContain("Legal");
 	});
+
+	it("does not render a nested helper's return from an inline callback", () => {
+		// `unused` is never called. A descendant scan over the callback body
+		// treated its return as the callback's own, so `Ghost` entered the tree as
+		// an ordinary observed id — and `mapCoverage` then counts it matchable.
+		// `componentReturnExpressions` and `factoryClass` both already filter
+		// returns to the function that owns them.
+		const { nodes } = treeFor({
+			"src/App.tsx": [
+				"export default function App() {",
+				"  const memo = useMemo(() => {",
+				'    function unused() { return <span data-testid="Ghost" />; }',
+				"    void unused;",
+				'    return <div data-testid="Real" />;',
+				"  }, []);",
+				'  return <section data-testid="Shell">{memo}</section>;',
+				"}",
+			].join("\n"),
+		});
+		expect(claimedIds(nodes)).toContain("Real");
+		expect(claimedIds(nodes)).not.toContain("Ghost");
+	});
 });
