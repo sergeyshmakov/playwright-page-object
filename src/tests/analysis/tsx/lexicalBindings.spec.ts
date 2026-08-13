@@ -224,6 +224,27 @@ describe("a component declared inside another component", () => {
 		expect(ids(tree)).toEqual(["Root"]);
 	});
 
+	// `var` is function-scoped, so a declaration nested in an `if` shadows the
+	// name for the whole body — including the `return` written outside that
+	// block. A walk that reads each enclosing statement list cannot see it.
+	// `const` in the same position correctly does not shadow, and the
+	// body-level `var` already worked; only the nested one fell through.
+	it("does not expand an import a nested `var` shadows", () => {
+		const tree = treeOf({
+			"src/Card.tsx":
+				'export default () => <div data-testid="ImportedCard" />;',
+			"src/Page.tsx": [
+				'import Card from "./Card";',
+				'const LocalCard = () => <div data-testid="LocalCard" />;',
+				"export function Page({ flag }) {",
+				"  if (flag) { var Card = LocalCard; }",
+				'  return <div data-testid="Root"><Card /></div>;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).not.toContain("ImportedCard");
+	});
+
 	// The nearer declaration wins, which is what the language does.
 	it("prefers the nested declaration over a module-level one", () => {
 		const tree = treeOf({

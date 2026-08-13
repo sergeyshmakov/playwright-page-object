@@ -1,5 +1,13 @@
-import type { Block, CaseClause, DefaultClause } from "ts-morph";
-import { Node } from "ts-morph";
+import type {
+	ArrowFunction,
+	Block,
+	CaseClause,
+	DefaultClause,
+	FunctionDeclaration,
+	FunctionExpression,
+	MethodDeclaration,
+} from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
 /**
  * A scope that holds statements directly, and so can declare a binding.
@@ -167,14 +175,62 @@ export function headerDeclaration(
 	return null;
 }
 
+type FunctionLike =
+	| ArrowFunction
+	| FunctionExpression
+	| FunctionDeclaration
+	| MethodDeclaration;
+
+function isFunctionLike(node: Node): node is FunctionLike {
+	return (
+		Node.isArrowFunction(node) ||
+		Node.isFunctionExpression(node) ||
+		Node.isFunctionDeclaration(node) ||
+		Node.isMethodDeclaration(node)
+	);
+}
+
+/**
+ * A `var` that binds `name` anywhere inside `scope`.
+ *
+ * `var` is function-scoped, so `if (flag) { var Card = LocalCard; }` shadows the
+ * name for the whole body — including the `return <Card/>` written outside that
+ * block. A walk that only reads each enclosing statement list cannot see it, and
+ * fell through to a module-level import of the name.
+ *
+ * `const` and `let` are deliberately not looked for here: they are block-scoped,
+ * and the statement-list walk is already the right answer for them.
+ */
+function functionScopedVar(scope: Node, name: string): Node | null {
+	if (!isFunctionLike(scope)) {
+		return null;
+	}
+	for (const declaration of scope.getDescendantsOfKind(
+		SyntaxKind.VariableDeclaration,
+	)) {
+		const list = declaration.getParent();
+		if (
+			!Node.isVariableDeclarationList(list) ||
+			list.getDeclarationKind() !== "var" ||
+			!bindsName(declaration.getNameNode(), name)
+		) {
+			continue;
+		}
+		// A `var` inside a *nested* function belongs to that function, not this one.
+		let owner: Node | undefined = declaration.getParent();
+		while (owner && !isFunctionLike(owner)) {
+			owner = owner.getParent();
+		}
+		if (owner === scope) {
+			return declaration;
+		}
+	}
+	return null;
+}
+
 /** The parameter of `scope` that binds `name`, destructuring included. */
 function parameterBinding(scope: Node, name: string): Node | null {
-	if (
-		!Node.isArrowFunction(scope) &&
-		!Node.isFunctionExpression(scope) &&
-		!Node.isFunctionDeclaration(scope) &&
-		!Node.isMethodDeclaration(scope)
-	) {
+	if (!isFunctionLike(scope)) {
 		return null;
 	}
 	for (const parameter of scope.getParameters()) {
@@ -222,6 +278,12 @@ export function lexicalDeclaration(from: Node, name: string): Node | null {
 		const parameter = parameterBinding(scope, name);
 		if (parameter) {
 			return parameter;
+		}
+		// Checked at the function boundary, after its blocks: an inner `const`
+		// shadows a `var` from the same body, which is what the walk order says.
+		const hoisted = functionScopedVar(scope, name);
+		if (hoisted) {
+			return hoisted;
 		}
 		// `for (const Card of cards)` and `catch (Card)` scope a name to a
 		// statement that is not a block.
