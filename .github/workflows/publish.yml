@@ -3,15 +3,30 @@ on:
   push:
     branches:
       - main
+  # Manual kick, and what the stale-checkout self-heal below re-fires.
+  workflow_dispatch:
+  # Backstop. Dependabot PRs are auto-merged with GITHUB_TOKEN, and GitHub does
+  # not start workflows from GITHUB_TOKEN-generated pushes, so those commits
+  # never reach the push trigger. This sweeps up anything they left unreleased.
+  schedule:
+    - cron: '0 6 * * *'
+
+# One release at a time; never cancel a run that may be mid-publish.
+concurrency:
+  group: publish-main
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Only this repo publishes; forks would just fail the cron on OIDC.
+    if: github.event_name != 'schedule' || github.repository == 'sergeyshmakov/playwright-page-object'
     permissions:
       contents: write
       issues: write
       pull-requests: write
       id-token: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -48,8 +63,34 @@ jobs:
       - name: Smoke Test CLI
         run: npm run test:cli
 
+      # The steps above take a couple of minutes, which is plenty of time for
+      # another commit to land on main. semantic-release refuses to publish
+      # from a checkout that is behind the remote -- and exits 0 while doing it,
+      # so the job stays green and the release is silently skipped.
+      - name: Check checkout is still main's head
+        id: freshness
+        run: |
+          local_sha="$(git rev-parse HEAD)"
+          remote_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          echo "local=$local_sha remote=$remote_sha"
+          if [ "$local_sha" = "$remote_sha" ]; then
+            echo 'stale=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'stale=true' >> "$GITHUB_OUTPUT"
+            echo "::warning::main moved to $remote_sha while this run tested $local_sha. Skipping release and re-running on the new head."
+          fi
+
       - name: Semantic Release
+        if: steps.freshness.outputs.stale == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
         run: npx semantic-release
+
+      # workflow_dispatch is one of the two events GitHub *does* start runs for
+      # when fired with GITHUB_TOKEN, so this self-heal needs no PAT.
+      - name: Re-run on the current head
+        if: steps.freshness.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish.yml --ref main
