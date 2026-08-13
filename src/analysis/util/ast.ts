@@ -163,8 +163,12 @@ export function lexicalDeclaration(from: Node, name: string): Node | null {
 			for (const declaration of statement
 				.getDeclarationList()
 				.getDeclarations()) {
-				const nameNode = declaration.getNameNode();
-				if (Node.isIdentifier(nameNode) && nameNode.getText() === name) {
+				// Destructuring included. `const { Card } = registry` binds `Card`
+				// exactly as `const Card = …` does, and an identifier-only test let
+				// the lookup fall through to a module-level `Card` and expand an
+				// unrelated component's subtree — the same blind spot
+				// `blockScopedBinding` names in its own comment.
+				if (bindsName(declaration.getNameNode(), name)) {
 					return declaration;
 				}
 			}

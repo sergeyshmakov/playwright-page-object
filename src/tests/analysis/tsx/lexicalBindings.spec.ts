@@ -125,6 +125,27 @@ describe("a component declared inside another component", () => {
 		expect(ids(tree)).toEqual(["Root"]);
 	});
 
+	// `const { Card } = registry` binds `Card` exactly as `const Card = …` does.
+	// An identifier-only test let the lookup fall through to the import and
+	// expand an unrelated component's subtree.
+	it("does not expand an import a destructured local shadows", () => {
+		const tree = treeOf({
+			"src/Card.tsx":
+				'export default () => <div data-testid="ImportedCard" />;',
+			"src/Page.tsx": [
+				'import Card from "./Card";',
+				'import { registry } from "./registry";',
+				"export function Page() {",
+				"  const { Card } = registry;",
+				'  return <div data-testid="Root"><Card /></div>;',
+				"}",
+			].join("\n"),
+			"src/registry.ts": "export const registry: Record<string, any> = {};",
+		});
+		expect(ids(tree)).toEqual(["Root"]);
+		expect(JSON.stringify(tree.roots)).not.toContain("ImportedCard");
+	});
+
 	// The nearer declaration wins, which is what the language does.
 	it("prefers the nested declaration over a module-level one", () => {
 		const tree = treeOf({
