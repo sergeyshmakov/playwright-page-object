@@ -134,11 +134,23 @@ export function matchSelectorToUi(
 }
 
 /**
- * Literal-prefix containment in either direction — the last resort.
+ * Literal-prefix compatibility — the last resort, once the probes have failed.
  *
  * Catches patterns whose holes the probes could not satisfy (digits-only, say).
  * The prefixes are stripped of their regex flags, so an `i` on either side has
  * to be re-applied here or `/cartitem_/i` misses `CartItem_1`.
+ *
+ * How the two prefixes are compared depends on whether both sides are anchored
+ * at the start, because that is what decides whether a string satisfying both
+ * can exist at all. Anchored, every matching string *begins* with the prefix,
+ * so one prefix has to begin with the other. Containment anywhere is the wrong
+ * test there: `/^Item_\d{4}$/` against a rendered `` `CartItem_${id}` `` passed
+ * on `"CartItem_".includes("Item_")` while no string satisfies both regexes,
+ * and the fabricated match then took a genuinely dead selector out of
+ * `deadSelectors` and a genuinely unrendered id out of `uncoveredTestIds`.
+ *
+ * An unanchored selector really can match in the middle of an id, so
+ * containment stays the right test for it.
  */
 export function prefixOverlap(pattern: PatternInfo, ui: UiTestId): boolean {
 	const insensitive =
@@ -147,12 +159,19 @@ export function prefixOverlap(pattern: PatternInfo, ui: UiTestId): boolean {
 	const fold = (value: string) => (insensitive ? value.toLowerCase() : value);
 	const selectorPrefix = pattern.literalPrefix;
 	const uiPrefix = ui.prefix ?? null;
-	return (
-		selectorPrefix !== null &&
-		selectorPrefix !== "" &&
-		uiPrefix !== null &&
-		uiPrefix !== "" &&
-		(fold(uiPrefix).includes(fold(selectorPrefix)) ||
-			fold(selectorPrefix).includes(fold(uiPrefix)))
-	);
+	if (
+		selectorPrefix === null ||
+		selectorPrefix === "" ||
+		uiPrefix === null ||
+		uiPrefix === ""
+	) {
+		return false;
+	}
+	const selector = fold(selectorPrefix);
+	const rendered = fold(uiPrefix);
+	const bothAnchored =
+		pattern.source.startsWith("^") && (ui.patternSource ?? "").startsWith("^");
+	return bothAnchored
+		? rendered.startsWith(selector) || selector.startsWith(rendered)
+		: rendered.includes(selector) || selector.includes(rendered);
 }

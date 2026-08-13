@@ -113,6 +113,47 @@ describe("matchSelectorToUi", () => {
 		expect(withPrefix).toEqual({ confidence: "prefix" });
 	});
 
+	// Anchored, every matching string *begins* with the prefix, so one prefix has
+	// to begin with the other. Containment anywhere fabricated a match between
+	// regexes no string can satisfy — and that took a genuinely dead selector out
+	// of `deadSelectors` and a genuinely unrendered id out of `uncoveredTestIds`.
+	it("does not overlap two anchored patterns that cannot share a string", () => {
+		const outcome = matchSelectorToUi(
+			{
+				pattern: { ...fromRegex("^Item_\\d{4}$"), literalPrefix: "Item_" },
+			},
+			patternUi("^CartItem_.+$", "CartItem_"),
+		);
+		expect(outcome).toBeNull();
+	});
+
+	it("still overlaps anchored patterns when one prefix extends the other", () => {
+		expect(
+			matchSelectorToUi(
+				{
+					pattern: {
+						...fromRegex("^CartItem_\\d{4}$"),
+						literalPrefix: "CartItem_",
+					},
+				},
+				patternUi("^CartItem_.+$", "CartItem_"),
+			),
+		).toEqual({ confidence: "prefix" });
+	});
+
+	// An unanchored selector really can match in the middle of an id, so the
+	// tightening must not reach it. It matches here on the stronger `probe` rule
+	// before the prefix fallback is even consulted — which is the point: nothing
+	// about this case got stricter.
+	it("keeps matching an unanchored selector against a later segment", () => {
+		expect(
+			matchSelectorToUi(
+				{ pattern: fromMask("Item_") },
+				patternUi("^CartItem_.+$", "CartItem_"),
+			),
+		).not.toBeNull();
+	});
+
 	it("honours the `i` flag in the literal-prefix fallback", () => {
 		const insensitive = matchSelectorToUi(
 			{
