@@ -6,6 +6,7 @@ import {
 } from "ts-morph";
 import { info } from "../diagnostics";
 import type { Diagnostic, FixtureBinding } from "../types";
+import { lexicalDeclaration } from "../util/ast";
 import { rawText } from "../util/literal";
 import { defKey, keyFold } from "../util/paths";
 import { type NameRef, readNameRef, resolveClassRef } from "../util/resolve";
@@ -84,24 +85,36 @@ function isFunctionLike(node: Node): boolean {
  * under a name no declaration backs, which is what `fixture-entry-dynamic`
  * exists to refuse.
  */
-function localFactory(sourceFile: SourceFile, name: string): Node | null {
-	const initializer = sourceFile.getVariableDeclaration(name)?.getInitializer();
-	if (
-		initializer &&
+function localFactory(
+	reference: Node,
+	sourceFile: SourceFile,
+	name: string,
+): Node | null {
+	// Lexically first, and a nearer binding is not overridden by the file-level
+	// one even when it turns out not to be a factory: `createFixtures` called
+	// inside a function whose own `makeHome` shadows a module-level `makeHome`
+	// must read the one the call actually names. A file-wide lookup read the
+	// outer factory - wrong class - or found nothing and discarded a perfectly
+	// static nested factory as dynamic.
+	const declaration =
+		lexicalDeclaration(reference, name) ??
+		sourceFile.getVariableDeclaration(name) ??
+		sourceFile.getFunction(name);
+	if (!declaration) {
+		return null;
+	}
+	if (Node.isFunctionDeclaration(declaration)) {
+		return declaration;
+	}
+	if (!Node.isVariableDeclaration(declaration)) {
+		return null;
+	}
+	const initializer = declaration.getInitializer();
+	return initializer &&
 		(Node.isArrowFunction(initializer) ||
 			Node.isFunctionExpression(initializer))
-	) {
-		return initializer;
-	}
-	return sourceFile.getFunction(name) ?? null;
-}
-
-/** Whether `node` lies inside `container`'s span. */
-function isWithin(node: Node, container: Node): boolean {
-	return (
-		node.getStart() >= container.getStart() &&
-		node.getEnd() <= container.getEnd()
-	);
+		? initializer
+		: null;
 }
 
 /** `new X(…)`, or an identifier initialised from one in the same block. */
@@ -119,22 +132,14 @@ function constructedClass(
 		return readNameRef(expression.getExpression());
 	}
 	if (scope && Node.isIdentifier(expression)) {
-		const name = expression.getText();
-		for (const declaration of scope.getDescendantsOfKind(
-			SyntaxKind.VariableDeclaration,
-		)) {
-			if (declaration.getName() !== name) {
-				continue;
-			}
-			// Only a declaration whose own block encloses the reference. A search
-			// over every descendant finds document order, not scope: a nested
-			// helper declaring `const result = new OtherPage()` above the factory's
-			// own `const result = new HomePage()` was matched first, and the
-			// fixture was silently mapped to a class the factory never returns.
-			const block = declaration.getFirstAncestorByKind(SyntaxKind.Block);
-			if (!block || !isWithin(expression, block)) {
-				continue;
-			}
+		// Outward from the reference, nearest binding wins. Scanning the factory
+		// for declarations of the name and keeping the ones whose block encloses
+		// the reference is not the same thing: an outer `const result` and an
+		// inner block's `const result` both enclose it, and document order then
+		// picked the outer one - mapping the fixture to a class the factory never
+		// returns, which is the very bug the enclosure test was meant to fix.
+		const declaration = lexicalDeclaration(expression, expression.getText());
+		if (declaration && Node.isVariableDeclaration(declaration)) {
 			const initializer = declaration.getInitializer();
 			return initializer ? constructedClass(initializer, null) : null;
 		}
@@ -227,7 +232,7 @@ export function readFixtureMaps(
 
 				let className: NameRef | null = null;
 				const named = Node.isIdentifier(value)
-					? localFactory(sourceFile, value.getText())
+					? localFactory(value, sourceFile, value.getText())
 					: null;
 				if (named) {
 					// An entry that names a factory declared beside it. Read as a

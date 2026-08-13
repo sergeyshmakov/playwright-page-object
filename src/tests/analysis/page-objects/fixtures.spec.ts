@@ -185,6 +185,62 @@ describe("readFixtureMaps", () => {
 		);
 	});
 
+	// An enclosure test is not lexical scope. An outer `const result` and an
+	// inner block's `const result` both enclose the return, so document order
+	// still picked the outer one — the same wrong class the enclosure test was
+	// added to prevent, one nesting level down. Nearest binding wins.
+	it("resolves a returned local to the nearest enclosing declaration", () => {
+		const map = readFixtures({
+			"src/other.ts": "export class OtherPage {}",
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				'import { OtherPage } from "./other";',
+				"export const fixtures = createFixtures({",
+				"  home: (page) => {",
+				"    const result = new OtherPage();",
+				"    void result;",
+				"    { const result = new HomePage(page); return result; }",
+				"  },",
+				"});",
+			].join("\n"),
+		});
+		expect(map.byName.get("home")).toBe(keyFold("src/HomePage.ts#HomePage"));
+		expect(map.byClass.has(keyFold("src/other.ts#OtherPage"))).toBe(false);
+	});
+
+	it("reads the factory the call site names, not a module-level namesake", () => {
+		const map = readFixtures({
+			"src/other.ts": "export class OtherPage {}",
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				'import { OtherPage } from "./other";',
+				"const makeHome = () => new OtherPage();",
+				"export function build() {",
+				"  const makeHome = (page) => new HomePage(page);",
+				"  return createFixtures({ home: makeHome });",
+				"}",
+				"void makeHome;",
+			].join("\n"),
+		});
+		expect(map.byName.get("home")).toBe(keyFold("src/HomePage.ts#HomePage"));
+	});
+
+	it("follows a named factory that exists only inside a function", () => {
+		const map = readFixtures({
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				"export function build() {",
+				"  const makeHome = (page) => new HomePage(page);",
+				"  return createFixtures({ home: makeHome });",
+				"}",
+			].join("\n"),
+		});
+		expect(map.byName.get("home")).toBe(keyFold("src/HomePage.ts#HomePage"));
+	});
+
 	it("resolves a constructor reached through a namespace import", () => {
 		const map = readFixtures({
 			"src/pages.ts": 'export { HomePage } from "./HomePage";',

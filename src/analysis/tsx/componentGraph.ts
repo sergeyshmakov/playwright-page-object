@@ -13,7 +13,11 @@ import type {
 	TestIdValue,
 	UiUnresolvedReason,
 } from "../types";
-import { unwrapTransparent, unwrapTransparentParent } from "../util/ast";
+import {
+	lexicalDeclaration,
+	unwrapTransparent,
+	unwrapTransparentParent,
+} from "../util/ast";
 import { hasDefaultKeyword, isDefaultExported } from "../util/exports";
 import { defKey } from "../util/paths";
 import { lineAndColumnAt } from "../util/position";
@@ -24,7 +28,6 @@ import {
 } from "../util/resolve";
 import { isWorkspaceLocal } from "../util/workspaceRoot";
 import type { Workspace } from "../workspace";
-import { lexicalDeclaration } from "./bindings";
 import { forwardsSpread, readProps } from "./componentProps";
 import { fallbackComponentName } from "./scanTestIds";
 

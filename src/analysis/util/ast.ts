@@ -61,3 +61,56 @@ export function unwrapTransparentParent(node: Node): Node | undefined {
 	}
 	return current;
 }
+
+/**
+ * The declaration of `name` nearest to `from`, anywhere below module scope.
+ *
+ * For a component declared inside another component:
+ *
+ * ```tsx
+ * function App() {
+ *   function Empty() { return <div data-testid="Empty" /> }
+ *   return <Empty />
+ * }
+ * ```
+ *
+ * `Empty` is a perfectly static binding, but it is not a declaration *of the
+ * source file*, so the resolver - which starts from the file - reported
+ * `identifier-unresolved` and the walk stopped at a boundary that is not one,
+ * dropping every test id the nested component renders.
+ *
+ * Stops before the `SourceFile`: module scope is where the ordinary resolver
+ * takes over, and it knows about exports, imports and re-export chains that
+ * this walk deliberately does not.
+ */
+export function lexicalDeclaration(from: Node, name: string): Node | null {
+	for (
+		let scope = from.getParent();
+		scope && !Node.isSourceFile(scope);
+		scope = scope.getParent()
+	) {
+		if (!Node.isBlock(scope) && !Node.isCaseClause(scope)) {
+			continue;
+		}
+		for (const statement of scope.getStatements()) {
+			if (Node.isFunctionDeclaration(statement)) {
+				if (statement.getName() === name) {
+					return statement;
+				}
+				continue;
+			}
+			if (!Node.isVariableStatement(statement)) {
+				continue;
+			}
+			for (const declaration of statement
+				.getDeclarationList()
+				.getDeclarations()) {
+				const nameNode = declaration.getNameNode();
+				if (Node.isIdentifier(nameNode) && nameNode.getText() === name) {
+					return declaration;
+				}
+			}
+		}
+	}
+	return null;
+}
