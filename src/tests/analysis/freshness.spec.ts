@@ -333,6 +333,32 @@ describe("what the freshness stamps have to reach", () => {
 		ws.revalidate();
 		expect(ws.currentEpoch).toBeGreaterThan(before);
 	});
+
+	it("reaches a lockfile more than sixteen levels above the root", () => {
+		// The hop bound was 16, on the reasoning that a lockfile or a `.git` sits
+		// "within a hop or two of any real package". Past that the walk stopped
+		// short of the lockfile governing the package and reported no change —
+		// indistinguishable from a repository that has no lockfile at all.
+		const deep = Array.from({ length: 20 }, (_, i) => `n${i}`).join("/");
+		const outer = scratch({
+			"package-lock.json": JSON.stringify({ lockfileVersion: 3 }),
+			[`${deep}/tsconfig.json`]: JSON.stringify({
+				compilerOptions: { target: "ES2022", noEmit: true },
+			}),
+			[`${deep}/src/a.ts`]: "export const a = 1;",
+		});
+		const root = path.join(outer, ...deep.split("/"));
+		pool.clear();
+		const ws = pool.acquire({ projectRoot: root });
+		const before = ws.currentEpoch;
+		write(
+			outer,
+			"package-lock.json",
+			JSON.stringify({ lockfileVersion: 3, updated: true }),
+		);
+		ws.revalidate();
+		expect(ws.currentEpoch).toBeGreaterThan(before);
+	});
 });
 
 describe("a lockfile that arrives after the server does", () => {

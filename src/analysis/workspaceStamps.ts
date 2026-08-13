@@ -44,12 +44,25 @@ import { WorkspaceFiles } from "./workspaceFiles";
 const MISSING_DIR = -1;
 
 /**
- * How far above the analysed root to look for the lockfile that governs it.
+ * How many ancestors the lockfile walk may stat before giving up.
  *
- * A backstop only - the walk normally stops at the first lockfile or at the
- * `.git` boundary, both of which are within a hop or two of any real package.
+ * A cost bound, not the termination argument. Three things already end the
+ * walk: the first lockfile found, the `.git` boundary, and the filesystem root
+ * — the last of which always fires, so the loop terminates with or without
+ * this.
+ *
+ * It was 16, on the reasoning that a lockfile or a `.git` is "within a hop or
+ * two of any real package". That is true of the repositories this was written
+ * against and false in general: a package more than sixteen levels below its
+ * monorepo root stopped short of the lockfile that governs it, so an install
+ * relinking a workspace package raised no change, every resolver cache from
+ * before it stayed, and first-party source kept being called an external
+ * dependency for the rest of the session. Silently — a truncated walk and a
+ * repository with no lockfile are the same answer here.
+ *
+ * 64 is past any real path depth, which is what a backstop should be.
  */
-const MAX_LOCKFILE_ANCESTORS = 16;
+const MAX_LOCKFILE_ANCESTORS = 64;
 
 /** Every lockfile the four package managers write, stat'ed as one signal. */
 const LOCKFILE_NAMES = [
@@ -330,14 +343,9 @@ export class WorkspaceStamps extends WorkspaceFiles {
 	 * Deliberately not cached, which the first version of this got wrong. A
 	 * negative result is not stable: a monorepo whose lockfile does not exist
 	 * when the server starts gets one on the next install, and a cache would
-	 * never look again. What is left is a handful of stats that stop at the first
-	 * hit, which is cheaper than being wrong for the rest of the session.
-	 *
-	 * Deliberately not cached. A negative result is not stable: a monorepo whose
-	 * lockfile does not exist when the server starts gets one on the next
-	 * install, and a cache would never look again. The walk is a handful of stats
-	 * that stops at the first lockfile or at the repository boundary, so paying
-	 * it per sweep is cheaper than being wrong for the rest of the session.
+	 * never look again. The walk is a handful of stats that stops at the first
+	 * lockfile or at the repository boundary, so paying it per sweep is cheaper
+	 * than being wrong for the rest of the session.
 	 */
 	private lockfileDirectories(): string[] {
 		const directories = [this.root];
