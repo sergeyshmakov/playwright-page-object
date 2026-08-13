@@ -24,6 +24,7 @@ import {
 } from "../util/resolve";
 import { isWorkspaceLocal } from "../util/workspaceRoot";
 import type { Workspace } from "../workspace";
+import { lexicalDeclaration } from "./bindings";
 import { forwardsSpread, readProps } from "./componentProps";
 import { fallbackComponentName } from "./scanTestIds";
 
@@ -329,8 +330,22 @@ export function resolveComponentRef(
 	sourceFile: SourceFile,
 	tagName: string,
 	options?: ResolveOptions,
+	from?: Node,
 ): ComponentResolution {
 	const head = tagName.split(".")[0];
+	// A component declared inside another component is a static binding the
+	// file-level resolver cannot see, because it is not a declaration of the
+	// file. Checked before it, so the nearer declaration wins, which is what
+	// the language does.
+	if (from && !tagName.includes(".")) {
+		const nested = lexicalDeclaration(from, head);
+		if (nested) {
+			const definition = buildDefinition(ws, nested, head);
+			return definition
+				? { kind: "local", definition }
+				: { kind: "unresolved", reason: "not-a-function-component" };
+		}
+	}
 	const resolution: RefResolution = resolveIdentifier(
 		project,
 		sourceFile,

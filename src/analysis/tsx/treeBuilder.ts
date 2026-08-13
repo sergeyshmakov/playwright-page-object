@@ -1551,12 +1551,15 @@ class TreeBuilder {
 		};
 
 		// Component: recurse into its definition with the call-site props.
+		// `opening` so a component declared inside another component resolves to
+		// the nested declaration rather than to nothing.
 		const resolution = resolveComponentRef(
 			this.ws,
 			this.ws.project,
 			owner.sourceFile,
 			tag,
 			{ preferSyntacticResolution: true },
+			opening,
 		);
 		if (resolution.kind === "external") {
 			return stop("external-module");

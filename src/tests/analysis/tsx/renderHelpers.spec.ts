@@ -464,3 +464,47 @@ describe("a JSX local is bound where it is referenced", () => {
 		expect(ids(tree)).toContain("Body");
 	});
 });
+
+describe("a component declared inside another component", () => {
+	// `Empty` is a fully static binding, but it is not a declaration *of the
+	// file*, so a resolver that starts from the file called it
+	// `identifier-unresolved` and the walk stopped at a boundary that is not
+	// one — dropping every id the nested component renders.
+	it("expands a nested function component", () => {
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"export function Page() {",
+				'  function Empty() { return <div data-testid="Empty" />; }',
+				'  return <div data-testid="Root"><Empty /></div>;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toEqual(["Empty", "Root"]);
+	});
+
+	it("expands a nested arrow component", () => {
+		const tree = treeOf({
+			"src/Page.tsx": [
+				"export function Page() {",
+				'  const Empty = () => <div data-testid="Empty" />;',
+				'  return <div data-testid="Root"><Empty /></div>;',
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toEqual(["Empty", "Root"]);
+	});
+
+	// The nearer declaration wins, which is what the language does.
+	it("prefers the nested declaration over a module-level one", () => {
+		const tree = treeOf({
+			"src/Page.tsx": [
+				'const Row = () => <div data-testid="ModuleRow" />;',
+				"export function Page() {",
+				'  const Row = () => <div data-testid="NestedRow" />;',
+				"  return <div><Row /></div>;",
+				"}",
+			].join("\n"),
+		});
+		expect(ids(tree)).toEqual(["NestedRow"]);
+	});
+});
