@@ -369,7 +369,26 @@ describe("resolveIdentifier", () => {
 			expect(result.reason).toBe("identifier-unresolved");
 		}
 	});
+
+	it("terminates on two modules forwarding their defaults to each other", () => {
+		// Neither hop is a re-export *declaration*, so the guard at the top of
+		// `resolveExportedName` is the only thing that can stop this - and it only
+		// works if the visited set survives the trip out through
+		// `resolveThroughImport` and back. It did not: every re-entry started a
+		// fresh set, nothing decremented the budget, and the lookup recursed until
+		// the stack ran out.
+		const result = resolveIn(
+			{
+				"src/a.ts": 'import B from "./b";\nexport default B;',
+				"src/b.ts": 'import A from "./a";\nexport default A;',
+			},
+			"src/a.ts",
+			"B",
+		);
+		expect(result.resolved).toBe(false);
+	});
 });
+
 describe("resolveClassRef", () => {
 	it("keeps a class expression assigned to a const", () => {
 		const ws = makeWorkspace({ "src/a.ts": "const Widget = class {};" });

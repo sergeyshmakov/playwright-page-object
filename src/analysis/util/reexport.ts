@@ -130,7 +130,8 @@ function resolveDefaultExport(
 				project,
 				sourceFile,
 				expression.getText(),
-				hops,
+				hops - 1,
+				visited,
 			);
 			if (viaImport?.resolved) {
 				return viaImport;
@@ -185,6 +186,7 @@ function resolveDefaultExport(
 					sourceFile,
 					specifier.getName(),
 					hops - 1,
+					visited,
 				);
 				if (viaImport?.resolved) {
 					return viaImport;
@@ -271,6 +273,7 @@ export function resolveExportedName(
 						sourceFile,
 						named.getName(),
 						hops - 1,
+						visited,
 					);
 					if (viaImport?.resolved) {
 						return viaImport;
@@ -321,11 +324,23 @@ export function resolveExportedName(
 	return anyLocal ? asResolved(anyLocal, sourceFile, exportName) : undefined;
 }
 
+/**
+ * Follows a local name to the module it was imported from.
+ *
+ * `visited` is the same set {@link resolveExportedName} carries, and it has to
+ * come through here too. Two modules can forward their defaults to each other -
+ * `a.ts` doing `import B from "./b"; export default B` against a `b.ts` that
+ * mirrors it - and that path leaves this function and re-enters
+ * `resolveExportedName` on the other file. Starting a fresh set there meant
+ * neither `(file, name)` pair was ever seen twice, so the cycle guard never
+ * fired and the lookup recursed until the stack ran out.
+ */
 export function resolveThroughImport(
 	project: Project,
 	sourceFile: SourceFile,
 	localName: string,
 	hops: number,
+	visited: Set<string> = new Set(),
 ): RefResolution | undefined {
 	const binding = findImportBinding(sourceFile, localName);
 	if (!binding) {
@@ -374,6 +389,7 @@ export function resolveThroughImport(
 		target,
 		binding.exportedName,
 		hops,
+		visited,
 	);
 	return (
 		resolved ?? {
