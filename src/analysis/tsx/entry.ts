@@ -1,4 +1,10 @@
-import { type SourceFile, SyntaxKind } from "ts-morph";
+import {
+	type JsxOpeningElement,
+	type JsxSelfClosingElement,
+	Node,
+	type SourceFile,
+	SyntaxKind,
+} from "ts-morph";
 import { keyFold, matchesAnyGlob, normalizeRelPath } from "../util/paths";
 import { resolveExportedName } from "../util/resolve";
 import { isWorkspaceLocal } from "../util/workspaceRoot";
@@ -233,15 +239,26 @@ export function findEntryComponent(
 		.filter((file) => ENTRY_BASENAMES.includes(file.getBaseName()))
 		.sort((a, b) => a.getFilePath().length - b.getFilePath().length);
 	for (const bootstrap of bootstraps) {
+		// What the file *renders*, when it says so. A bootstrap may hold JSX that
+		// is never mounted — `const fallback = <Preview />` above the render call —
+		// and a file-wide scan picked whichever came first, so the auto-detected
+		// tree described a component the app never shows and omitted the one it
+		// does. The render call names its own root; that is better evidence than
+		// position.
+		const rendered = renderedElements(bootstrap);
 		// Source order, not one kind then the other. `<Shell><App /></Shell>` has
 		// `App` as a self-closing element and `Shell` as an opening one, so
 		// concatenating the two lists picked the *child* as the root: the tree
 		// came back rooted at `App` and everything `Shell` renders around it was
 		// missing, with the nesting reported wrong rather than incomplete.
-		const elements = [
-			...bootstrap.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement),
-			...bootstrap.getDescendantsOfKind(SyntaxKind.JsxOpeningElement),
-		].sort((left, right) => left.getStart() - right.getStart());
+		const elements = (
+			rendered.length > 0
+				? rendered
+				: [
+						...bootstrap.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement),
+						...bootstrap.getDescendantsOfKind(SyntaxKind.JsxOpeningElement),
+					]
+		).sort((left, right) => left.getStart() - right.getStart());
 		for (const element of elements) {
 			const tag = element.getTagNameNode().getText();
 			if (!/^[A-Z]/.test(tag)) {
@@ -272,6 +289,53 @@ export function findEntryComponent(
 }
 
 /** Uppercase declarations a file offers, for a "did you mean" reason string. */
+/**
+ * JSX handed to a mount call in a bootstrap file.
+ *
+ * `createRoot(el).render(<App/>)`, `root.render(<App/>)`,
+ * `ReactDOM.render(<App/>, el)` and `hydrateRoot(el, <App/>)` all name the tree
+ * the application actually mounts. A file-wide JSX scan does not: a bootstrap
+ * may hold JSX that is never rendered, and the first one in the file then
+ * became the auto-detected root.
+ *
+ * Matched by callee name rather than by resolving it. The name *is* the
+ * convention — `render` and `hydrateRoot` are React's own — and resolving would
+ * turn every call in every bootstrap into a module lookup for a heuristic.
+ * Empty when the file names no such call, and the caller falls back to the scan.
+ */
+const MOUNT_CALLS = new Set(["render", "hydrateRoot"]);
+
+function renderedElements(
+	sourceFile: SourceFile,
+): Array<JsxSelfClosingElement | JsxOpeningElement> {
+	const out: Array<JsxSelfClosingElement | JsxOpeningElement> = [];
+	for (const call of sourceFile.getDescendantsOfKind(
+		SyntaxKind.CallExpression,
+	)) {
+		const callee = call.getExpression();
+		const name = Node.isPropertyAccessExpression(callee)
+			? callee.getName()
+			: Node.isIdentifier(callee)
+				? callee.getText()
+				: null;
+		if (name === null || !MOUNT_CALLS.has(name)) {
+			continue;
+		}
+		for (const argument of call.getArguments()) {
+			out.push(
+				...argument.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement),
+				...argument.getDescendantsOfKind(SyntaxKind.JsxOpeningElement),
+			);
+			if (Node.isJsxSelfClosingElement(argument)) {
+				out.push(argument);
+			} else if (Node.isJsxElement(argument)) {
+				out.push(argument.getOpeningElement());
+			}
+		}
+	}
+	return out;
+}
+
 function uppercaseDeclarationsIn(sourceFile: SourceFile): string[] {
 	const names = new Set<string>();
 	for (const declaration of sourceFile.getFunctions()) {

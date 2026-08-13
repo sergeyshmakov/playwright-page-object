@@ -60,7 +60,7 @@ function functionInitializerOf(
 }
 
 /** Whether a member sits on the constructor rather than on the prototype. */
-function isStaticMember(member: Node): boolean {
+export function isStaticMember(member: Node): boolean {
 	return (
 		(Node.isMethodDeclaration(member) ||
 			Node.isPropertyDeclaration(member) ||

@@ -30,7 +30,7 @@ import {
 	type LibraryImports,
 } from "./libraryImports";
 import { type MemberRead, readMember } from "./members";
-import { readMethods } from "./methods";
+import { isStaticMember, readMethods } from "./methods";
 import { readRootSelector } from "./selectors";
 
 export interface DiscoverOptions {
@@ -98,9 +98,17 @@ function collectMembers(
 		const declaredHere: string[] = [];
 		for (const member of declaration.getMembers()) {
 			const name = Node.hasName(member) ? String(member.getName()) : "";
+			/*
+			 * Staticness is part of the key, as it is for methods: a subclass
+			 * `static Save()` sits on the constructor while a base
+			 * `@Selector("save") accessor Save` sits on the prototype, so instances
+			 * still inherit the selector. Keyed on the name alone, the static hid
+			 * it and the member left the counts, the tree and coverage at once.
+			 */
+			const key = `${isStaticMember(member) ? "static " : ""}${name}`;
 			if (name !== "") {
-				declaredHere.push(name);
-				if (shadowed.has(name)) {
+				declaredHere.push(key);
+				if (shadowed.has(key)) {
 					continue;
 				}
 			}
@@ -109,8 +117,8 @@ function collectMembers(
 				out.push(inherited ? { ...read, inherited: true } : read);
 			}
 		}
-		for (const name of declaredHere) {
-			shadowed.add(name);
+		for (const key of declaredHere) {
+			shadowed.add(key);
 		}
 	};
 

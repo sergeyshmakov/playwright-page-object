@@ -6,7 +6,7 @@ import {
 } from "ts-morph";
 import { info } from "../diagnostics";
 import type { Diagnostic, FixtureBinding } from "../types";
-import { lexicalDeclaration } from "../util/ast";
+import { lexicalDeclaration, unwrapTransparent } from "../util/ast";
 import { rawText } from "../util/literal";
 import { defKey, keyFold } from "../util/paths";
 import { type NameRef, readNameRef, resolveClassRef } from "../util/resolve";
@@ -117,14 +117,20 @@ function localFactory(
 		: null;
 }
 
-/** `new X(…)`, or an identifier initialised from one in the same block. */
-function constructedClass(
-	expression: Node,
-	scope: Node | null,
-): NameRef | null {
-	if (Node.isParenthesizedExpression(expression)) {
-		return constructedClass(expression.getExpression(), scope);
-	}
+/**
+ * `new X(…)`, or an identifier initialised from one in the same block.
+ *
+ * The wrappers come off through {@link unwrapTransparent} rather than a local
+ * list of them. This had its own, which knew parentheses and nothing else, so
+ * `page => new HomePage(page) as HomePage` was reported
+ * `fixture-entry-dynamic` — the fixture metadata dropped, and with it any class
+ * whose only discovery evidence was that fixture.
+ *
+ * `await` is unwrapped separately and deliberately: it is a runtime operation,
+ * not a type-level wrapper, so it has no business in the shared helper.
+ */
+function constructedClass(written: Node, scope: Node | null): NameRef | null {
+	const expression = unwrapTransparent(written);
 	if (Node.isAwaitExpression(expression)) {
 		return constructedClass(expression.getExpression(), scope);
 	}

@@ -158,4 +158,50 @@ describe("the bootstrap file's root element", () => {
 			"ShellRoot",
 		);
 	});
+
+	// A bootstrap may hold JSX that is never mounted. A file-wide scan took
+	// whichever came first, so the auto-detected tree described a component the
+	// app never shows and omitted the one it does. The render call names its own
+	// root, and that is better evidence than position.
+	it("takes the render call's argument over earlier unmounted JSX", () => {
+		const tree = treeFor(
+			{
+				"src/Preview.tsx":
+					'export function Preview() { return <div data-testid="PreviewRoot" />; }',
+				"src/App.tsx":
+					'export function App() { return <main data-testid="AppRoot" />; }',
+				"src/main.tsx": [
+					'import { App } from "./App";',
+					'import { Preview } from "./Preview";',
+					"const fallback = <Preview />;",
+					"void fallback;",
+					"export function boot(root) {",
+					"  return createRoot(root).render(<App />);",
+					"}",
+				].join("\n"),
+			},
+			{},
+		);
+		const rendered = tree.roots.map((root) => staticId(root.testId));
+		expect(rendered).toContain("AppRoot");
+		expect(rendered).not.toContain("PreviewRoot");
+	});
+
+	// No render call means no better evidence, so the file-wide scan stands.
+	it("still falls back to the file scan when nothing is mounted", () => {
+		const tree = treeFor(
+			{
+				"src/App.tsx":
+					'export function App() { return <main data-testid="AppRoot" />; }',
+				"src/main.tsx": [
+					'import { App } from "./App";',
+					"export const element = <App />;",
+				].join("\n"),
+			},
+			{},
+		);
+		expect(tree.roots.map((root) => staticId(root.testId))).toContain(
+			"AppRoot",
+		);
+	});
 });

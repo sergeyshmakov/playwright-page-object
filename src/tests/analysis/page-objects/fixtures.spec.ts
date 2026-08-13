@@ -241,6 +241,24 @@ describe("readFixtureMaps", () => {
 		expect(map.byName.get("home")).toBe(keyFold("src/HomePage.ts#HomePage"));
 	});
 
+	// This had its own unwrapping, which knew parentheses and nothing else, so a
+	// perfectly static factory was reported `fixture-entry-dynamic` — dropping
+	// the metadata and any class whose only discovery evidence was that fixture.
+	it.each([
+		["an as-expression", "new HomePage(page) as HomePage"],
+		["a satisfies-expression", "new HomePage(page) satisfies HomePage"],
+		["a non-null assertion", "new HomePage(page)!"],
+	])("follows a factory returning %s", (_label, expression) => {
+		const map = readFixtures({
+			"src/fixtures.ts": [
+				libImport("createFixtures"),
+				'import { HomePage } from "./HomePage";',
+				`export const fixtures = createFixtures({ home: (page) => ${expression} });`,
+			].join("\n"),
+		});
+		expect(map.byName.get("home")).toBe(keyFold("src/HomePage.ts#HomePage"));
+	});
+
 	it("resolves a constructor reached through a namespace import", () => {
 		const map = readFixtures({
 			"src/pages.ts": 'export { HomePage } from "./HomePage";',

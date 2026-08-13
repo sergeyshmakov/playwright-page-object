@@ -270,6 +270,31 @@ describe("discoverPageObjects — inherited members", () => {
 		);
 		expect(home?.counts.members).toBe(3);
 	});
+
+	// A subclass `static Header()` sits on the constructor; the base's
+	// `@Selector("Header") accessor Header` sits on the prototype, so instances
+	// still inherit the selector. Keyed on the name alone the static hid it, and
+	// the member left the counts, the tree and coverage at once — the same fix
+	// the method collector already had.
+	it("does not let a subclass static shadow an inherited selector", () => {
+		const index = discoverPageObjects(
+			makeWorkspace({
+				...INHERITED,
+				"e2e/StaticPage.ts": [
+					libImport("Selector"),
+					'import { BasePage } from "./BasePage";',
+					"export class StaticPage extends BasePage {",
+					"  static Header() {}",
+					"}",
+				].join("\n"),
+			}),
+		);
+		const entry = index.pageObjects.find(
+			(candidate) => candidate.className === "StaticPage",
+		);
+		// Header + Shared + Flag, all inherited; the static hides none of them.
+		expect(entry?.counts.members).toBe(3);
+	});
 });
 
 describe("discoverPageObjects — tsconfig path aliases", () => {
