@@ -1,7 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SCAN_GLOB } from "./config/tsconfig";
-import { isGlobPattern, toPosix } from "./util/paths";
+import {
+	isDeclarationFile,
+	isGlobPattern,
+	isIgnoredPath,
+	isOutsideRoot,
+	matchesAnyGlob,
+	toPosix,
+} from "./util/paths";
 import type { WorkspaceOptions } from "./workspace";
 
 /**
@@ -20,6 +27,11 @@ import type { WorkspaceOptions } from "./workspace";
  * analysis then describes an empty project as though the repository were
  * empty; {@link withNormalizedScope} hands those names back so the caller can
  * say so out loud.
+ *
+ * The two predicates at the end answer the same question one file at a time:
+ * which files the analysed set contains, and which of them the `maxFiles` cap
+ * counts. They are defined in terms of each other and both sides of the
+ * workspace - the build and the live project - ask them.
  */
 
 /**
@@ -209,4 +221,53 @@ export function absoluteGlob(root: string, glob: string): string {
 
 export function isJsxFile(filePath: string): boolean {
 	return /\.[jt]sx$/.test(filePath);
+}
+
+/**
+ * Whether a file the project holds is one the `maxFiles` cap counts.
+ *
+ * Everything parsed and retained, less what costs nothing to keep: a
+ * declaration file carries no analysable code, and an ignored path
+ * (`node_modules`, build output) is never the repository's own source.
+ *
+ * What is deliberately *not* applied here is the include/exclude scope. The cap
+ * is documented as a cap on files parsed, and `--src-dir` says which files are
+ * analysed, not how many the project may hold. Counting only the narrowed scope
+ * meant a project sitting exactly on the cap could import unlimited siblings
+ * outside it — every one of them parsed, retained and paid for — without ever
+ * reaching `max_files_exceeded`. The analysed set ({@link isAnalysable}) is a
+ * subset of this one, so a repository within the cap stays within it.
+ */
+export function countsAgainstCap(absolute: string, relative: string): boolean {
+	return !isDeclarationFile(absolute) && !isIgnoredPath(relative);
+}
+
+/**
+ * Whether one file belongs to the analysed project.
+ *
+ * Shared by `sourceFiles()` and the pre-scan `maxFiles` check, so the pre-check
+ * never counts a file the loaded project would have dropped and rejects a
+ * repository that is actually within the cap. It is a strict subset of
+ * {@link countsAgainstCap}, which is what the cap itself counts: what may be
+ * *analysed* is narrower than what may be *parsed*.
+ */
+export function isAnalysable(
+	absolute: string,
+	relative: string,
+	include: string[],
+	exclude: string[],
+): boolean {
+	if (isDeclarationFile(absolute)) {
+		return false;
+	}
+	if (isOutsideRoot(relative) || isIgnoredPath(relative)) {
+		return false;
+	}
+	if (include.length > 0 && !matchesAnyGlob(relative, include)) {
+		return false;
+	}
+	if (exclude.length > 0 && matchesAnyGlob(relative, exclude)) {
+		return false;
+	}
+	return true;
 }
