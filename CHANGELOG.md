@@ -1,3 +1,15 @@
+# [2.1.0](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.0.3...v2.1.0) (2026-08-13)
+
+
+### Bug Fixes
+
+* **deps:** bump zod from 4.2.0 to 4.4.3 in the npm-production group ([#72](https://github.com/sergeyshmakov/playwright-page-object/issues/72)) ([a342f32](https://github.com/sergeyshmakov/playwright-page-object/commit/a342f327c9d31ca872afab9c622838d0de54f94c))
+
+
+### Features
+
+* add MCP server for page-object and component analysis ([#70](https://github.com/sergeyshmakov/playwright-page-object/issues/70)) ([14cfb5d](https://github.com/sergeyshmakov/playwright-page-object/commit/14cfb5db4f8fcb8954f06b574d2e406ffc5595b6))
+
 ## [2.0.3](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.0.2...v2.0.3) (2026-05-14)
 
 
