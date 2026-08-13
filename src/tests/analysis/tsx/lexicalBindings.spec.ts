@@ -200,6 +200,30 @@ describe("a component declared inside another component", () => {
 		expect(ids(tree)).toEqual(["Root"]);
 	});
 
+	// A `default:` clause carries statements without a block of its own, and
+	// `DefaultClause` is not `CaseClause`. Written `default: { … }` the same
+	// switch was fine, because the braces make a `Block` — so this failed on the
+	// brace-less spelling only.
+	it("does not expand an import a default-clause local shadows", () => {
+		const tree = treeOf({
+			"src/Card.tsx":
+				'export default () => <div data-testid="ImportedCard" />;',
+			"src/Page.tsx": [
+				'import Card from "./Card";',
+				'import { registry } from "./registry";',
+				"export function Page({ kind }) {",
+				"  switch (kind) {",
+				"    default:",
+				"      const Card = registry.Card;",
+				'      return <div data-testid="Root"><Card /></div>;',
+				"  }",
+				"}",
+			].join("\n"),
+			"src/registry.ts": "export const registry: Record<string, any> = {};",
+		});
+		expect(ids(tree)).toEqual(["Root"]);
+	});
+
 	// The nearer declaration wins, which is what the language does.
 	it("prefers the nested declaration over a module-level one", () => {
 		const tree = treeOf({

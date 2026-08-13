@@ -1,4 +1,28 @@
+import type { Block, CaseClause, DefaultClause } from "ts-morph";
 import { Node } from "ts-morph";
+
+/**
+ * A scope that holds statements directly, and so can declare a binding.
+ *
+ * `case` and `default` clauses carry statements without a block of their own:
+ * `default: const Card = registry.Card; return <Card/>` is a scope even though
+ * nothing is braced. `DefaultClause` was missing from this test, so that lookup
+ * walked past the local and resolved `Card` against a module-level import of
+ * the name — while the same switch written `default: { … }` was fine, because
+ * the braces make a `Block`.
+ *
+ * Shared by both scope walks. The two of them disagreeing about what counts as
+ * a scope is how the last several of these got in.
+ */
+export function carriesStatements(
+	scope: Node,
+): scope is Block | CaseClause | DefaultClause {
+	return (
+		Node.isBlock(scope) ||
+		Node.isCaseClause(scope) ||
+		Node.isDefaultClause(scope)
+	);
+}
 
 /**
  * Syntax that says nothing about what an expression *is*.
@@ -205,7 +229,7 @@ export function lexicalDeclaration(from: Node, name: string): Node | null {
 		if (header) {
 			return header;
 		}
-		if (!Node.isBlock(scope) && !Node.isCaseClause(scope)) {
+		if (!carriesStatements(scope)) {
 			continue;
 		}
 		for (const statement of scope.getStatements()) {

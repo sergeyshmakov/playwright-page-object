@@ -4,7 +4,12 @@ import {
 	VariableDeclarationKind,
 } from "ts-morph";
 import type { TestIdValue, UiNode } from "../types";
-import { bindsName, headerDeclaration, unwrapTransparent } from "../util/ast";
+import {
+	bindsName,
+	carriesStatements,
+	headerDeclaration,
+	unwrapTransparent,
+} from "../util/ast";
 import type { ComponentDefinition } from "./componentGraph";
 
 /**
@@ -330,7 +335,7 @@ export function blockScopedBinding(
 		if (header) {
 			return header;
 		}
-		if (!Node.isBlock(scope) && !Node.isCaseClause(scope)) {
+		if (!carriesStatements(scope)) {
 			continue;
 		}
 		for (const statement of scope.getStatements()) {
