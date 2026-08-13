@@ -1,16 +1,9 @@
 import type {
-	MaybeStatic,
-	MemberNode,
-	MethodInfo,
-	PageObjectNode,
-	PageObjectTree,
-	SelectorInfo,
 	TestIdTree,
 	TestIdValue,
 	UiNode,
 	UiUnresolvedReason,
 } from "../analysis";
-import { isDynamicMember } from "../analysis";
 
 /**
  * Token-lean plain-text renderers for the two tree shapes.
