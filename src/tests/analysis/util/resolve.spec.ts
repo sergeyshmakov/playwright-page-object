@@ -255,6 +255,34 @@ describe("resolveIdentifier", () => {
 		}
 	});
 
+	// Every classification of a default-export expression is a syntax test, so a
+	// transparent wrapper made all of them miss: the default import came back
+	// unresolved and the walk stopped at a boundary that is not one.
+	// `exportKindOf` already asks the upward half of this through
+	// `unwrapTransparentParent`.
+	it.each([
+		[
+			"parenthesised",
+			"function Card() { return null; }\nexport default (Card);",
+		],
+		[
+			"satisfies",
+			"function Card() { return null; }\nexport default Card satisfies () => null;",
+		],
+		[
+			"as-expression",
+			"function Card() { return null; }\nexport default Card as unknown;",
+		],
+		["parenthesised arrow", "export default (() => null);"],
+	])("resolves a default export wrapped by %s", (_label, source) => {
+		const result = resolveIn(
+			{ "src/a.ts": 'import Card from "./card";', "src/card.tsx": source },
+			"src/a.ts",
+			"Card",
+		);
+		expect(result.resolved).toBe(true);
+	});
+
 	it("resolves a member of a relative namespace import", () => {
 		const result = resolveIn(
 			{

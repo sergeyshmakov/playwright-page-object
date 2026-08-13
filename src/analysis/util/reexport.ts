@@ -4,6 +4,7 @@ import {
 	type Project,
 	type SourceFile,
 } from "ts-morph";
+import { unwrapTransparent } from "./ast";
 import { hasDefaultKeyword } from "./exports";
 import { isRelativeSpecifier } from "./moduleFile";
 import { probeWorkspacePackage, resolveModuleSpecifier } from "./packageFile";
@@ -120,7 +121,14 @@ function resolveDefaultExport(
 		if (assignment.isExportEquals()) {
 			continue;
 		}
-		const expression = assignment.getExpression();
+		// Unwrapped before it is classified. `export default (Card)` and
+		// `export default Card satisfies FC` name a component every bit as much
+		// as the bare form, but each classification below is a syntax test, so a
+		// wrapper made all of them miss: a default import of the module came back
+		// unresolved and the walk stopped at a boundary that is not one.
+		// `exportKindOf` already asks the upward half of this question through
+		// `unwrapTransparentParent`.
+		const expression = unwrapTransparent(assignment.getExpression());
 		if (Node.isIdentifier(expression)) {
 			const local = localDeclaration(sourceFile, expression.getText());
 			if (local) {
