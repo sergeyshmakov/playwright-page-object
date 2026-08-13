@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AnalysisTargetError } from "../../../analysis/diagnostics";
 import { buildPageObjectTree } from "../../../analysis/page-objects/tree";
-import {
-	libImport,
-	MEMORY_ROOT_POSIX,
-	makeWorkspace,
-} from "../helpers/inMemory";
+import { MEMORY_ROOT_POSIX, makeWorkspace } from "../helpers/inMemory";
 import { PRELUDE, SHARED } from "../helpers/pageObjectFixture";
 
 describe("buildPageObjectTree — structure", () => {

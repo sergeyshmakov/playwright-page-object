@@ -1,25 +1,15 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { Node } from "ts-morph";
-import { afterEach, describe, expect, it } from "vitest";
-import { toPosix } from "../../../analysis/util/paths";
+import { describe, expect, it } from "vitest";
 import {
-	isInNodeModules,
 	resolveClassRef,
 	resolveIdentifier,
-	resolveRelativeModule,
 	resolvesToCallable,
 } from "../../../analysis/util/resolve";
 import { WorkspacePool } from "../../../analysis/workspace";
-import {
-	MEMORY_ROOT_POSIX,
-	makeWorkspace,
-	memoryPath,
-} from "../helpers/inMemory";
-import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
+import { makeWorkspace, memoryPath } from "../helpers/inMemory";
 
 /** One per spec file, so nothing leaks between them. */
-const pool = new WorkspacePool();
+const _pool = new WorkspacePool();
 
 function resolveIn(
 	files: Record<string, string>,

@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { MAX_CONFIG_CANDIDATES } from "../../../analysis/config/configDiscovery";
 import { readPlaywrightConfig } from "../../../analysis/config/playwrightConfig";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import {

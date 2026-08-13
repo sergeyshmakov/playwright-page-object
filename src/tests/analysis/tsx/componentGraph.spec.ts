@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { staticId } from "../../../analysis";
 import {
 	collectComponents,
 	componentReturnExpressions,
 	resolveComponentRef,
 } from "../../../analysis/tsx/componentGraph";
-import { buildTestIdTree } from "../../../analysis/tsx/tree";
 import { makeWorkspace, memoryPath } from "../helpers/inMemory";
 
 function resolve(files: Record<string, string>, from: string, tag: string) {

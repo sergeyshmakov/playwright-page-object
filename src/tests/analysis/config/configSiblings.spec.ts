@@ -1,13 +1,11 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { MAX_CONFIG_CANDIDATES } from "../../../analysis/config/configDiscovery";
 import { readPlaywrightConfig } from "../../../analysis/config/playwrightConfig";
-import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import {
 	type Workspace,
 	type WorkspaceOptions,
 	WorkspacePool,
 } from "../../../analysis/workspace";
-import { exampleWorkspace } from "../helpers/example";
 import { cleanupScratchRoots, scratchRepo } from "../helpers/onDisk";
 
 /**

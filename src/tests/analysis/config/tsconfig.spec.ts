@@ -8,7 +8,6 @@ import {
 	SCAN_EXTENSIONS,
 	SCAN_GLOB,
 	synthesizedCompilerOptions,
-	tsConfigChain,
 	tsConfigFileNames,
 } from "../../../analysis/config/tsconfig";
 import { AnalysisLimitError } from "../../../analysis/diagnostics";
