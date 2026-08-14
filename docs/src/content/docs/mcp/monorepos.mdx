@@ -19,7 +19,7 @@ Get that wrong and the symptom is misleading rather than loud: selectors read as
 | One app, its own e2e specs | `--project-root <app>` - one server |
 | App plus a shared UI package | Root the server at the **common ancestor**, then narrow with `--src-dir` |
 | Several independent apps | One server per app, each with its own `--project-root` |
-| Apps with different test-ID attributes | One server per app, each with its own `--attribute` |
+| Apps with different test-ID attributes | One server per app with its own `--attribute` - or one server, overriding `attribute` per call |
 
 Every flag below defines the server's workspace, so **changing any of them needs a restart**. Editing page objects, components, or the Playwright config does not.
 
@@ -77,7 +77,9 @@ The fix is to re-root at the common ancestor and narrow from there:
 }
 ```
 
-`--src-dir` is repeatable and accepts globs, so `--src-dir "packages/*/src"` covers several packages at once. A `..` segment is refused wherever it appears, including after a glob, since its only effect in a scope pattern is to escape the root.
+`--src-dir` is repeatable and accepts globs, so `--src-dir "packages/*/src"` covers several packages at once. For a **positive** pattern a `..` segment is refused wherever it appears, including after a glob (the check runs against the pattern's static base), since its only effect there is to escape the root.
+
+An **exclusion** is exempt. A value starting with `!` is skipped before either check runs, on the grounds that excluding something outside the root is a harmless no-op. That also means a misspelled exclusion is accepted in silence - `--src-dir '!../other/**'` neither errors nor excludes anything - so do not read a clean startup as proof that a negated pattern matched what you meant.
 
 Pin `--playwright-config` when you re-root like this. At the monorepo root the server may find several configs and rank one it did not intend; naming the app's config removes the ambiguity, and the test-ID attribute follows from it.
 
@@ -136,7 +138,7 @@ Servers are fully independent: separate workspaces, separate caches, and separat
 Often, yes - it is the simplest setup and it works up to the file limit. The trade-offs:
 
 - **`--max-files` defaults to 8000.** Crossing it does not degrade quietly - the call is **refused** with `max_files_exceeded`, and every later call raises again until you raise `--max-files` or narrow the scan with `--src-dir`. There is no partial-but-usable scan to fall back on. The cap counts files *parsed*, which includes anything the resolver pulls in, not just the files you analyse.
-- **Everything shares one attribute.** If apps disagree on `data-testid` versus `data-tid`, one server cannot serve both correctly. Split them.
+- **One default attribute, not one attribute.** The server resolves a single default, but `get_testid_tree` and `map_coverage` each accept a per-call `attribute` that overrides it, and `query_coverage` inherits whatever `map_coverage` used through the handle. A root-scoped server can therefore serve apps that disagree on `data-testid` versus `data-tid` - the caller just has to pass the right one on every call, and a forgotten override silently reads the wrong attribute rather than failing. Per-app servers make the correct attribute the default, which is a reliability argument rather than a capability one.
 - **Config discovery has more candidates.** Pin `--playwright-config` if the ranked choice is not the one you want.
 - **`list_page_objects` returns every app's classes.** That is useful for cross-app work and noisy for single-app work; the `filter` argument is a plain substring of class name and file path.
 
