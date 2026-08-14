@@ -16,3 +16,20 @@
 	--sl-color-accent: #2563eb;
 	--sl-color-accent-high: #1e3a8a;
 }
+
+/*
+ * Keep a heading's anchor visible while it is confirming a copy.
+ *
+ * Starlight reveals the link on `:focus` or heading hover only, so the tick the
+ * copy script swaps in would vanish as soon as the pointer moved — and Safari
+ * does not focus a link on click, so focus alone cannot be relied on. The
+ * `:has()` specificity (0,4,0) clears Starlight's own `opacity: 0` rule.
+ */
+.sl-markdown-content
+	.sl-anchor-link:has(.sl-anchor-icon[data-copied="true"]) {
+	opacity: 1;
+}
+
+.sl-markdown-content .sl-anchor-icon[data-copied="true"] {
+	color: var(--sl-color-accent);
+}
