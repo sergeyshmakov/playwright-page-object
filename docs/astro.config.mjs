@@ -66,6 +66,8 @@ export default defineConfig({
 						"mcp/workflows",
 						"mcp/tools",
 						"mcp/configuration",
+						"mcp/limitations",
+						"mcp/monorepos",
 						"mcp/troubleshooting",
 					],
 				},

@@ -1,0 +1,140 @@
+---
+title: Limitations of the Playwright Page Object MCP Server
+description: What the Playwright Page Object MCP server cannot prove - which tools work without selector decorators, how dynamic test IDs are reported, and where static analysis stops.
+sidebar:
+  label: Limitations
+head:
+  - tag: title
+    content: Playwright Page Object MCP Limitations
+---
+
+Every tool in this server is static analysis. It parses source files and reports what it can support from the syntax it read. It never starts a browser, executes your application, or runs your Playwright config, so anything that only exists at runtime is reported as unproven rather than guessed.
+
+That design has a cost, and this page states it plainly. Read [Troubleshooting](/mcp/troubleshooting/) when you want to *fix* a bad result; read this page to know which results the server cannot produce at all.
+
+| Limitation | Affects |
+| --- | --- |
+| Page-object tools only see classes that use this library | [`list_page_objects`, `get_page_object_tree`](#can-i-use-the-server-without-selector-decorators) |
+| Test IDs built at runtime cannot be read | [`get_testid_tree`, `map_coverage`](#what-happens-to-a-test-id-built-from-a-variable) |
+| Component boundaries stop the walk | [`get_testid_tree`](#where-does-the-component-walk-stop) |
+| Coverage counts only what it can compare | [`map_coverage`](#why-can-a-coverage-number-mislead) |
+
+## Can I use the server without selector decorators?
+
+Yes. You can point the server at any Playwright repository and get real answers on the first call. Decorators are not the boundary the page-object tools draw - using the library at all is.
+
+| Tool | Without selector decorators |
+| --- | --- |
+| `get_testid_tree` | **Works fully.** It reads JSX and TSX and the resolved test-ID attribute - it never reads your page objects or specs *as tests*. It does scan any in-scope `.tsx` / `.jsx` file, including test-side ones; see below. |
+| `map_coverage` | **Works, with a flag.** Pass `includeRawLocators: true` so plain `getByTestId()` calls count as selectors. Without it the page-object side is empty and every rendered ID reads as uncovered. |
+| `query_coverage` | Works wherever `map_coverage` does - it pages a report that call already built. |
+| `list_page_objects` | **Still works if you use the library at all.** Decorators are only one of four ways a class is indexed - see below. It returns an empty array only when nothing in scope uses the library. |
+| `get_page_object_tree` | Works for any class `list_page_objects` indexed. |
+
+So the honest summary is: **anyone can start, and the test-ID half of the server is useful immediately.** The page-object half needs the library to be used somehow - not necessarily through decorators.
+
+The trap is `map_coverage` at its default of `includeRawLocators: false`. On a suite of plain `getByTestId()` calls that default reports `rawSelectors: 0` and files every rendered ID under `uncoveredTestIds`, which reads like "nothing is tested". The server says so itself rather than letting you believe it - every such response carries a `raw-locators-disabled` warning:
+
+> Direct locator calls (getByTestId, getItemByTestId, filterByItemTestId, filterByHasTestId) were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with `includeRawLocators: true` to include them.
+
+Measured on this repository's own example app, turning the flag on moved four selectors out of the blind spot and the coverage ratio from `0.31` to `0.38`.
+
+### Does the scan include test files?
+
+Yes, if they are JSX. The test-ID scan takes every in-scope `.tsx` / `.jsx` file by extension - it does not exclude `*.spec.tsx`, `*.test.tsx`, or anything under a test directory. A fixture component or an inline render helper written in a `.tsx` spec therefore contributes its test IDs to `get_testid_tree` and to the coverage denominator exactly as application markup would.
+
+That is usually harmless and occasionally wrong: a test ID that only ever exists inside a spec will show up as rendered. To exclude them, narrow the scan with a negated `--src-dir`, which prunes before parsing:
+
+```bash
+npx playwright-page-object mcp --src-dir src --src-dir '!**/*.spec.tsx'
+```
+
+A `.ts` spec is never scanned for test IDs - only JSX-bearing extensions are.
+
+## What makes a class visible to the page-object tools?
+
+Any **one** of four kinds of evidence.
+
+| Evidence | A class qualifies by |
+| --- | --- |
+| `decorator` | Carrying `@Selector`, `@ListSelector`, `@RootSelector`, `@ListRootSelector`, or a `@SelectorBy*` / `@RootSelectorBy*` variant |
+| `baseClass` | Extending `PageObject`, `ListPageObject`, or `RootPageObject` |
+| `fixture` | Being bound in a `createFixtures` map |
+| `factoryArg` | Being passed as a decorator's factory argument - see the caveat below |
+
+`factoryArg` is the one that does not behave uniformly: a control whose *only* evidence is being passed as a factory argument is excluded from `list_page_objects`, because it is a control rather than a page object. `get_page_object_tree` still expands it inline and the coverage tools still read it, so it is addressable - just not enumerable from the index.
+
+Neither decorators nor a base class is required on its own. The example app ships `PlainHostCheckoutPage`, a plain class whose only inherited member is `readonly page`, and it is indexed as host kind `pageFallback` with all six members - on decorator evidence alone. Equally, a class that only extends `PageObject` and declares nothing is indexed on `baseClass` evidence, with no decorators anywhere. See [Plain Classes](/guides/plain-classes/) and [Incremental Adoption](/guides/incremental-adoption/).
+
+What stays invisible is a page object in a suite that never uses this library - locators declared in a constructor or as ordinary properties, in a class that extends nothing of ours and appears in no fixture map. If `list_page_objects` comes back empty on a repository that clearly has page objects, that is the reason, and the response says so:
+
+> No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with `--src-dir <dir>`; also check that those files import from "playwright-page-object".
+
+An agent that sees an empty index should not conclude the repository has no page objects. It should conclude the repository has none *this server can read*.
+
+## What happens to a test ID built from a variable?
+
+This is the most common gap in practice, and the server distinguishes three cases rather than collapsing them. Each `testId` value carries a `kind`.
+
+| Kind | Source | Reported as |
+| --- | --- | --- |
+| `static` | `data-tid="Remove"` | The exact value |
+| `pattern` | `` data-tid={`CartItem_${item.id}`} `` | A family such as `CartItem_*`, with the regex and the source text |
+| `dynamic` | `data-tid={rowId}` | No value at all, plus a reason and the raw expression |
+
+A `pattern` is still usable. The template's literal parts survive, so a prefix selector matches the family:
+
+```text
+CartItem_*  div  src/components/CartItem.tsx:10 (dynamic `CartItem_${item.id}`, conditional, repeated)
+  CartItemName  span  :11 (conditional, repeated)
+  Remove        button  :13 (conditional, repeated)
+```
+
+That is real `get_testid_tree` output. `@ListSelector("CartItem_")` matches every row in that family, and `map_coverage` counts it matched - looking up the bare prefix `CartItem_` finds nothing, because nothing renders it, and the server explains that rather than calling the selector dead.
+
+A `dynamic` value is different: the ID exists in the DOM but its text cannot be known from source. The reason says why - `computed-expression`, `identifier-unresolved`, `spread`, `custom-selector`, `unsupported-syntax`, and others. These IDs land in the `unknownTestIds` bucket of a coverage report instead of `uncoveredTestIds`, so they never inflate a gap list with elements nobody could have written a static selector for.
+
+One pattern deserves its own warning. A template whose literal anchors all disappear - leaving something equivalent to `.*` - would match every ID and prove nothing about any of them. Those are flagged `unanchored-pattern` and excluded from matching, and a `testId` lookup reports how many were excluded.
+
+If your project writes a different attribute, pass `attribute: "data-tid"` on the call or start the server with `--attribute data-tid`. The default comes from `use.testIdAttribute` in your Playwright config, and a **computed** value there resolves to unknown plus a diagnostic - the server will not execute the config to find out. See [Configuration](/mcp/configuration/).
+
+## Where does the component walk stop?
+
+`get_testid_tree` inlines child components, but only where it can prove what it is entering. Every stop is marked in place with a reason instead of being silently dropped, and the response's `fidelity` field is `"partial"` whenever any node is missing.
+
+- **`external-module`** - the component ships from `node_modules` or any path outside the scan. No depth reaches inside it. The example app's tree reports one such tag, from `react`.
+- **`local-render-function`** and **`imported-render-function`** - a function returning JSX was called rather than a component being rendered. The call is in the node's `raw`; read that function directly.
+- **`identifier-unresolved`**, **`namespaced-component`**, **`not-a-function-component`** - the tag does not resolve to a function component the walk can enter.
+- **`recursive`** - the component renders itself and the walk cut the cycle.
+- **`depth-limit-reached`** and **`node-budget-reached`** - budgets, not boundaries. Re-call with a larger `depth` or a narrower root.
+- **`spread-props`** - `{...props}` may carry a test ID the walk cannot see. This one hides a *value*, not a subtree; the node's children are still present.
+
+Prop forwarding is resolved one hop. A test ID written as a prop on a component tag is **not** counted as rendered unless forwarding to a host element was proven, because a component is free to ignore a prop. [`assumeForwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding) turns that into an explicit assumption when you know your codebase forwards.
+
+Because of all this, **absence from a partial tree is never proof of absence**. The server refuses to imply otherwise: a holed tree says where the holes are, and if a walk reaches no test ID at all it omits the nodes entirely rather than shipping an ID-less shell that looks like a finding. To ask the complete question, pass `testId` to look one ID up across the whole scan.
+
+## Why can a coverage number mislead?
+
+`summary.coverage` is a ratio between two sets that static analysis can compare. Several real things sit outside it by design.
+
+- **Role, text, and label selectors are never counted dead.** `getByRole("button", { name: "Apply" })` cannot be checked against markup statically, so it gets its own `nonTestIdSelectors` bucket and is excluded from the ratio rather than reported as broken.
+- **Raw locator calls are off by default.** See the flag above.
+- **IDs behind an unscanned component are invisible.** They raise `ui-scope-incomplete`, and a selector for one of them can read as dead when it is fine.
+- **The ratio is `null`, not `1`, when nothing was matchable.** A run that resolved the wrong attribute finds zero usable denominators, and reporting perfect coverage there would be the worst possible answer.
+
+Read `scope` and `meta.warnings` before acting on the number. `scope` says what the two sides were drawn from; the warnings say what was excluded.
+
+## What else should I expect?
+
+- **Results are a snapshot of disk.** Edits are visible to the next call - no restart needed. Only the server's own flags, such as `--src-dir` or `--attribute`, need one.
+- **Coverage handles expire.** A `coverageId` lives 10 minutes past its last use, in that server process only, and is invalidated the moment an analysed file changes. Spending a stale one fails with `expired_handle` rather than paging into renumbered data.
+- **Large responses are capped.** The coverage tools trim and tell you what they cut through `meta.truncatedBuckets` and `meta.nextOffset`; the other three refuse with `too_large` and name the arguments that would narrow the call.
+- **It is read-only.** Nothing here writes to your repository.
+
+## See also
+
+- [Troubleshooting](/mcp/troubleshooting/) - fixing empty scans, wrong attributes, and partial trees
+- [Configuration](/mcp/configuration/) - scope, attribute, and prop-forwarding options
+- [Tool reference](/mcp/tools/) - parameters, response fields, and error codes
+- [How to Use the Server](/mcp/workflows/) - including when absence is proof
+- [Incremental Adoption](/guides/incremental-adoption/) - adding decorators to an existing suite
