@@ -1,6 +1,8 @@
 ---
 title: Configure the Playwright Page Object MCP Server
 description: Configure project scope, Playwright and TypeScript discovery, test-ID attributes, monorepos, file limits, and freshness.
+sidebar:
+  label: Configuration
 head:
   - tag: title
     content: Playwright Page Object MCP Configuration
@@ -200,6 +202,8 @@ Run one server per app when packages have different Playwright configs, test-ID 
 Add `--attribute` when apps use different test-ID attributes, and `--playwright-config` when an app's config is not the highest-ranked one under its root.
 
 A single server pointed at the monorepo root also works up to `--max-files`. In [`map_coverage`](/mcp/tools/#map_coverage), `ui-scope-incomplete` means at least one component tag resolves outside the scanned sources. A shared UI package can cause this warning. Test IDs declared inside that package are not visible to the scan, so read the named modules before treating an absent ID as dead.
+
+See [Monorepos](/mcp/monorepos/) for the full treatment: shared UI packages, why `--src-dir` cannot reach a sibling directory, running one server per app, and verifying the scope afterwards.
 
 ## When do results refresh?
 

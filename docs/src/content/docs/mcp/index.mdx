@@ -1,6 +1,8 @@
 ---
 title: Playwright Page Object MCP Server
 description: Give AI coding agents a read-only map of your Playwright page objects and test IDs with local static analysis over MCP.
+sidebar:
+  label: Overview
 ---
 
 The `playwright-page-object` MCP server gives AI coding agents a searchable map of your page-object API and the test IDs declared in your JSX or TSX source. It exposes five read-only tools over the [Model Context Protocol](https://modelcontextprotocol.io/).
@@ -58,6 +60,8 @@ The server reports only what it can support from source code. `fidelity: "full"`
 - Read [How to Use the Server](/mcp/workflows/) for the task recipes: writing a test, fixing a dead locator, renaming test IDs, and when absence is proof.
 - Use the [tool reference](/mcp/tools/) for parameters, response fields, examples, and error codes.
 - Open [Configuration](/mcp/configuration/) when automatic discovery selects the wrong scope or config.
+- Read [Limitations](/mcp/limitations/) for what the analysis cannot prove, and which tools work before you adopt decorators.
+- See [Monorepos](/mcp/monorepos/) when page objects and the components they select live in different packages.
 - Follow [Troubleshooting](/mcp/troubleshooting/) when a call is empty, incomplete, or too large.
 
 ## See also

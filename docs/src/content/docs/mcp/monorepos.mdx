@@ -1,0 +1,159 @@
+---
+title: Use the Playwright Page Object MCP Server in a Monorepo
+description: Scope the Playwright page-object MCP server across a monorepo - one server per app, shared UI packages, per-app test-ID attributes, config discovery, and file limits.
+sidebar:
+  label: Monorepos
+head:
+  - tag: title
+    content: Playwright Page Object MCP in Monorepos
+---
+
+A single-package repository needs no configuration: the server takes the working directory as its root and discovers everything else. A monorepo has to answer one question first - **which sources belong to this server** - because page objects and the components they select often live in different packages.
+
+Get that wrong and the symptom is misleading rather than loud: selectors read as dead because the components that render their test IDs were never scanned.
+
+## Which layout do I have?
+
+| Layout | Approach |
+| --- | --- |
+| One app, its own e2e specs | `--project-root <app>` - one server |
+| App plus a shared UI package | Root the server at the **common ancestor**, then narrow with `--src-dir` |
+| Several independent apps | One server per app, each with its own `--project-root` |
+| Apps with different test-ID attributes | One server per app, each with its own `--attribute` |
+
+Every flag below defines the server's workspace, so **changing any of them needs a restart**. Editing page objects, components, or the Playwright config does not.
+
+## How do I scope one app?
+
+Point `--project-root` at the package. Discovery then runs inside it: the Playwright config, the tsconfig, and the test-ID attribute all resolve as they would in a standalone repository.
+
+```json
+{
+  "mcpServers": {
+    "web-page-objects": {
+      "command": "npx",
+      "args": ["playwright-page-object", "mcp", "--project-root", "apps/web"]
+    }
+  }
+}
+```
+
+Name the server after the app rather than leaving it as `playwright-page-object`. In a multi-app setup the name is the only thing that tells an agent which one to call, and every tool description is otherwise identical.
+
+## What if my components live in a shared package?
+
+This is the case that needs care. Suppose page objects sit in `apps/web/e2e` and the components they select come from `packages/ui`:
+
+```
+repo/
+  apps/web/e2e/page-objects/   <- @Selector("SubmitButton")
+  packages/ui/src/             <- renders data-testid="SubmitButton"
+```
+
+Rooting at `apps/web` scans the page objects but not the components. `map_coverage` then reports the selector under `deadSelectors`, because nothing it can see renders that ID.
+
+**`--src-dir` cannot fix this.** It only ever narrows an existing root - a path resolving outside `--project-root` is refused at startup:
+
+```text
+--src-dir is outside --project-root: ../../packages/ui
+```
+
+The fix is to re-root at the common ancestor and narrow from there:
+
+```json
+{
+  "mcpServers": {
+    "web-page-objects": {
+      "command": "npx",
+      "args": [
+        "playwright-page-object", "mcp",
+        "--project-root", ".",
+        "--src-dir", "apps/web/e2e",
+        "--src-dir", "packages/ui/src",
+        "--playwright-config", "apps/web/playwright.config.ts"
+      ]
+    }
+  }
+}
+```
+
+`--src-dir` is repeatable and accepts globs, so `--src-dir "packages/*/src"` covers several packages at once. A `..` segment is refused wherever it appears, including after a glob, since its only effect in a scope pattern is to escape the root.
+
+Pin `--playwright-config` when you re-root like this. At the monorepo root the server may find several configs and rank one it did not intend; naming the app's config removes the ambiguity, and the test-ID attribute follows from it.
+
+### How do I know a package is missing?
+
+The server tells you. Any response whose walk hit a module outside the scan carries `ui-scope-incomplete`, and it names the modules:
+
+> N component tag(s) come from M module(s) outside the scanned sources (`@acme/ui`). Test ids rendered inside them are invisible here, so an id may exist without appearing in this report and a selector for one reads as dead.
+
+When those sources are resolvable inside the repository, the hint names the directory to pass to `--project-root`. A module that resolves into `node_modules` has no usable re-root target - its IDs can only be confirmed from the package itself.
+
+Read `scope` on any `map_coverage` response to confirm what was actually scanned:
+
+```json
+"scope": {
+  "uiFilesScanned": 5,
+  "pageObjectFilesScanned": 5,
+  "externalComponentModules": ["react"],
+  "externalComponentTags": 1
+}
+```
+
+`externalComponentModules` naming one of your own packages means the scope is still too narrow. `react` appearing there is expected and harmless.
+
+## How do I serve several apps at once?
+
+Register one server per app. Each gets its own root, and anything that differs per app - the attribute, the config - goes on that server:
+
+```json
+{
+  "mcpServers": {
+    "web-page-objects": {
+      "command": "npx",
+      "args": ["playwright-page-object", "mcp", "--project-root", "apps/web"]
+    },
+    "admin-page-objects": {
+      "command": "npx",
+      "args": [
+        "playwright-page-object", "mcp",
+        "--project-root", "apps/admin",
+        "--attribute", "data-tid"
+      ]
+    }
+  }
+}
+```
+
+Servers are fully independent: separate workspaces, separate caches, and separate coverage handles. A `coverageId` from one is not valid on another.
+
+## Can I just point one server at the monorepo root?
+
+Often, yes - it is the simplest setup and it works up to the file limit. The trade-offs:
+
+- **`--max-files` defaults to 8000.** A large monorepo can exceed it, at which point the scan is capped and results are drawn from an arbitrary subset. Raise it, or narrow with `--src-dir`.
+- **Everything shares one attribute.** If apps disagree on `data-testid` versus `data-tid`, one server cannot serve both correctly. Split them.
+- **Config discovery has more candidates.** Pin `--playwright-config` if the ranked choice is not the one you want.
+- **`list_page_objects` returns every app's classes.** That is useful for cross-app work and noisy for single-app work; the `filter` argument is a plain substring of class name and file path.
+
+A root-scoped server is a good default when packages share one attribute and one Playwright config. Split per app as soon as either diverges.
+
+## Which tsconfig does it use?
+
+Explicit `--tsconfig` wins. Otherwise the server takes the nearest `tsconfig.json` walking up from the Playwright `testDir` toward the project root, which in a monorepo is usually the e2e tsconfig next to the specs rather than the root one. See [Configuration](/mcp/configuration/#how-does-the-server-choose-a-tsconfig) for the full order.
+
+## How do I verify the scope is right?
+
+After a config change, one call answers it:
+
+1. `list_page_objects` - the classes you expect appear, and their paths are the ones you intended.
+2. `map_coverage` with `buckets: []` - read `scope` and `meta.warnings`. No `ui-scope-incomplete` naming your own packages means both sides are in scope.
+
+If `list_page_objects` is empty, the page objects are outside the scan or the files do not import from `playwright-page-object`. See [Troubleshooting](/mcp/troubleshooting/#why-did-list_page_objects-return-no-page-objects) and [Limitations](/mcp/limitations/) for what the tools can see at all.
+
+## See also
+
+- [Configuration](/mcp/configuration/) - every CLI option, discovery order, and refresh behaviour
+- [Limitations](/mcp/limitations/) - what static analysis cannot prove, including cross-package boundaries
+- [Troubleshooting](/mcp/troubleshooting/) - empty scans, wrong attributes, and partial trees
+- [Quick Start](/mcp/quick-start/) - registering the server with your MCP client
