@@ -1,3 +1,10 @@
+## [2.1.1](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.1.0...v2.1.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **mcp:** describe what the page-object tools can actually see ([#74](https://github.com/sergeyshmakov/playwright-page-object/issues/74)) ([2ebb94f](https://github.com/sergeyshmakov/playwright-page-object/commit/2ebb94f919ad4ce23af7b9e413ec10560d5d96d4))
+
 # [2.1.0](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.0.3...v2.1.0) (2026-08-13)
 
 
