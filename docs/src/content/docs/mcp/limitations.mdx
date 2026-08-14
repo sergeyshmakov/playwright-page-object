@@ -18,6 +18,7 @@ That design has a cost, and this page states it plainly. Read [Troubleshooting](
 | Test IDs built at runtime cannot be read | [`get_testid_tree`, `map_coverage`](#what-happens-to-a-test-id-built-from-a-variable) |
 | Component boundaries stop the walk | [`get_testid_tree`](#where-does-the-component-walk-stop) |
 | Coverage counts only what it can compare | [`map_coverage`](#why-can-a-coverage-number-mislead) |
+| v1 suites read partially, and API hints are v2-only | [all five](#does-this-work-with-a-v1-test-suite) |
 
 ## Can I use the server without selector decorators?
 
@@ -123,6 +124,20 @@ Because of all this, **absence from a partial tree is never proof of absence**. 
 - **The ratio is `null`, not `1`, when nothing was matchable.** A run that resolved the wrong attribute finds zero usable denominators, and reporting perfect coverage there would be the worst possible answer.
 
 Read `scope` and `meta.warnings` before acting on the number. `scope` says what the two sides were drawn from; the warnings say what was excluded.
+
+## Does this work with a v1 test suite?
+
+Partly. The server itself is a v2 feature - it was added in 2.1.0, so there is no `mcp` command on 1.x at all. But it never imports the library your project has installed: it is a [ts-morph](https://ts-morph.com/) analyzer that matches on the `playwright-page-object` import specifier and on decorator names. You can therefore run the 2.x server (`npx playwright-page-object mcp`) against a suite still on 1.x, and because v2 kept almost every decorator name, most of it reads correctly.
+
+Three things do not.
+
+| Gap | Effect on a v1 suite |
+| --- | --- |
+| `@ListStrictSelector` is not recognised | Removed in v2 and absent from the analyzer's decorator sets. That accessor is missing from the selector tree and its selector is uncounted in coverage. The class itself may still be indexed on `baseClass` or `fixture` evidence, so this shows up as a quietly thinner tree rather than a missing class. |
+| v1 locator calls are not swept | The raw sweep matches exactly `getByTestId`, `getItemByTestId`, `filterByItemTestId`, `filterByHasTestId`. v1's `filterByTestId` and `getItemByIdMask` are not in that set, so `includeRawLocators: true` misses them and their test IDs read as uncovered. |
+| `meta.apiHints` describes the v2 runtime | The hints name `.filterByItemTestId(id)`, `.getItemByTestId(id)` and `.expect(...)` - precisely the APIs v2 renamed or introduced. Against a v1 install that syntax does not exist. |
+
+The third is the one to plan around. Discovery and test-ID work are reliable on a v1 suite; **writing a test body from `meta.apiHints` is not**, because the hints are confidently wrong rather than absent. Treat the tree as a map of what exists and check call syntax against your installed version, or migrate first - see [Migration v1 to v2](/reference/migration-v1-to-v2/).
 
 ## What else should I expect?
 
