@@ -1,6 +1,7 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { describe, expect, it } from "vitest";
 import {
+	LIBRARY_BASE_CLASSES,
 	MEMBER_DECORATORS,
 	ROOT_DECORATORS,
 } from "../../analysis/page-objects/libraryImports";
@@ -112,10 +113,33 @@ describe("server instructions", () => {
 			}
 		}
 
-		// The base class is the thing people wrongly assume is required.
-		expect(text).toContain("Extending PageObject is not required");
-		// And absence of an index must not read as absence of page objects.
+		// Absence of an index must not read as absence of page objects.
 		expect(text).toMatch(/not that the repository has no page objects/i);
+	});
+
+	/**
+	 * Decorators are one of four discovery paths, not the boundary.
+	 * `discoverPageObjects` also registers a class for extending a library base
+	 * class, for a `createFixtures` binding, and for being passed as a factory
+	 * argument — so an undecorated class that only extends `PageObject` is
+	 * indexed. The first draft of the scope paragraph said "only classes whose
+	 * accessors carry selector decorators", which would have told every session
+	 * that a whole style of page object is invisible when it is not.
+	 */
+	it("describes every discovery path, not just decorators", async () => {
+		const text = await instructions();
+		const listDescription = (await tools()).get("list_page_objects") ?? "";
+
+		for (const where of [text, listDescription]) {
+			// The base classes, named individually.
+			for (const base of LIBRARY_BASE_CLASSES) {
+				expect(where, `${base} is not mentioned`).toContain(base);
+			}
+			expect(where).toContain("createFixtures");
+		}
+
+		// And the instructions must not re-assert the boundary that was wrong.
+		expect(text).not.toMatch(/see only classes whose accessors/i);
 	});
 
 	/**

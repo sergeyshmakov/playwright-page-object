@@ -83,11 +83,15 @@ Pin `--playwright-config` when you re-root like this. At the monorepo root the s
 
 ### How do I know a package is missing?
 
-The server tells you. Any response whose walk hit a module outside the scan carries `ui-scope-incomplete`, and it names the modules:
+The server tells you, but the two tools say it differently.
+
+`map_coverage` raises **`ui-scope-incomplete`**, naming the modules:
 
 > N component tag(s) come from M module(s) outside the scanned sources (`@acme/ui`). Test ids rendered inside them are invisible here, so an id may exist without appearing in this report and a selector for one reads as dead.
 
 When those sources are resolvable inside the repository, the hint names the directory to pass to `--project-root`. A module that resolves into `node_modules` has no usable re-root target - its IDs can only be confirmed from the package itself.
+
+`get_testid_tree` does **not** emit that diagnostic. It reports the same situation structurally: the boundary node is marked `external-module`, `fidelity` drops to `"partial"`, and `fidelityReason` counts the holes. So do not wait for `ui-scope-incomplete` on a tree response - read `fidelity` instead, and see [Limitations](/mcp/limitations/#where-does-the-component-walk-stop) for every boundary reason.
 
 Read `scope` on any `map_coverage` response to confirm what was actually scanned:
 
@@ -131,7 +135,7 @@ Servers are fully independent: separate workspaces, separate caches, and separat
 
 Often, yes - it is the simplest setup and it works up to the file limit. The trade-offs:
 
-- **`--max-files` defaults to 8000.** A large monorepo can exceed it, at which point the scan is capped and results are drawn from an arbitrary subset. Raise it, or narrow with `--src-dir`.
+- **`--max-files` defaults to 8000.** Crossing it does not degrade quietly - the call is **refused** with `max_files_exceeded`, and every later call raises again until you raise `--max-files` or narrow the scan with `--src-dir`. There is no partial-but-usable scan to fall back on. The cap counts files *parsed*, which includes anything the resolver pulls in, not just the files you analyse.
 - **Everything shares one attribute.** If apps disagree on `data-testid` versus `data-tid`, one server cannot serve both correctly. Split them.
 - **Config discovery has more candidates.** Pin `--playwright-config` if the ranked choice is not the one you want.
 - **`list_page_objects` returns every app's classes.** That is useful for cross-app work and noisy for single-app work; the `filter` argument is a plain substring of class name and file path.

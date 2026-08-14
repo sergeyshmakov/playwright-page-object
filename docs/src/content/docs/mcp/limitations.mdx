@@ -14,24 +14,24 @@ That design has a cost, and this page states it plainly. Read [Troubleshooting](
 
 | Limitation | Affects |
 | --- | --- |
-| Page-object tools only see classes with selector decorators | [`list_page_objects`, `get_page_object_tree`](#can-i-use-the-server-without-selector-decorators) |
+| Page-object tools only see classes that use this library | [`list_page_objects`, `get_page_object_tree`](#can-i-use-the-server-without-selector-decorators) |
 | Test IDs built at runtime cannot be read | [`get_testid_tree`, `map_coverage`](#what-happens-to-a-test-id-built-from-a-variable) |
 | Component boundaries stop the walk | [`get_testid_tree`](#where-does-the-component-walk-stop) |
 | Coverage counts only what it can compare | [`map_coverage`](#why-can-a-coverage-number-mislead) |
 
 ## Can I use the server without selector decorators?
 
-Yes, partly. You can point the server at any Playwright repository and get real answers on the first call, but two of the five tools have nothing to report until selectors are declared with decorators.
+Yes. You can point the server at any Playwright repository and get real answers on the first call. Decorators are not the boundary the page-object tools draw - using the library at all is.
 
 | Tool | Without selector decorators |
 | --- | --- |
 | `get_testid_tree` | **Works fully.** It reads JSX and TSX and the resolved test-ID attribute. It never looks at your test code. |
 | `map_coverage` | **Works, with a flag.** Pass `includeRawLocators: true` so plain `getByTestId()` calls count as selectors. Without it the page-object side is empty and every rendered ID reads as uncovered. |
 | `query_coverage` | Works wherever `map_coverage` does - it pages a report that call already built. |
-| `list_page_objects` | Returns an empty array plus a hint. Nothing is indexed. |
-| `get_page_object_tree` | Nothing to address. There is no class for it to return. |
+| `list_page_objects` | **Still works if you use the library at all.** Decorators are only one of four ways a class is indexed - see below. It returns an empty array only when nothing in scope uses the library. |
+| `get_page_object_tree` | Works for any class `list_page_objects` indexed. |
 
-So the honest summary is: **anyone can start, and the test-ID half of the server is useful immediately.** The page-object half is what decorators unlock.
+So the honest summary is: **anyone can start, and the test-ID half of the server is useful immediately.** The page-object half needs the library to be used somehow - not necessarily through decorators.
 
 The trap is `map_coverage` at its default of `includeRawLocators: false`. On a suite of plain `getByTestId()` calls that default reports `rawSelectors: 0` and files every rendered ID under `uncoveredTestIds`, which reads like "nothing is tested". The server says so itself rather than letting you believe it - every such response carries a `raw-locators-disabled` warning:
 
@@ -41,11 +41,18 @@ Measured on this repository's own example app, turning the flag on moved four se
 
 ## What makes a class visible to the page-object tools?
 
-The **member decorators**, not the base class. A class is indexed when its accessors use `@Selector`, `@ListSelector`, `@RootSelector`, or a `@SelectorBy*` variant.
+Any **one** of four kinds of evidence.
 
-It does not have to extend `PageObject` or `RootPageObject`. The example app ships `PlainHostCheckoutPage`, a plain class whose only inherited member is `readonly page`, and `list_page_objects` indexes it as host kind `pageFallback` with all six of its members. See [Plain Classes](/guides/plain-classes/) for that style and [Incremental Adoption](/guides/incremental-adoption/) for moving an existing suite one accessor at a time.
+| Evidence | A class qualifies by |
+| --- | --- |
+| `decorator` | Carrying `@Selector`, `@ListSelector`, `@RootSelector`, `@ListRootSelector`, or a `@SelectorBy*` / `@RootSelectorBy*` variant |
+| `baseClass` | Extending `PageObject`, `ListPageObject`, or `RootPageObject` |
+| `fixture` | Being bound in a `createFixtures` map |
+| `factoryArg` | Being passed as a decorator's factory argument |
 
-What stays invisible is a page object that declares its locators in a constructor or as ordinary properties, because there is no decorator for the analysis to read. If `list_page_objects` comes back empty on a repository that clearly has page objects, that is the reason, and the response says so:
+Neither decorators nor a base class is required on its own. The example app ships `PlainHostCheckoutPage`, a plain class whose only inherited member is `readonly page`, and it is indexed as host kind `pageFallback` with all six members - on decorator evidence alone. Equally, a class that only extends `PageObject` and declares nothing is indexed on `baseClass` evidence, with no decorators anywhere. See [Plain Classes](/guides/plain-classes/) and [Incremental Adoption](/guides/incremental-adoption/).
+
+What stays invisible is a page object in a suite that never uses this library - locators declared in a constructor or as ordinary properties, in a class that extends nothing of ours and appears in no fixture map. If `list_page_objects` comes back empty on a repository that clearly has page objects, that is the reason, and the response says so:
 
 > No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with `--src-dir <dir>`; also check that those files import from "playwright-page-object".
 
