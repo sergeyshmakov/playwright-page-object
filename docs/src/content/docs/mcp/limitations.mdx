@@ -25,7 +25,7 @@ Yes. You can point the server at any Playwright repository and get real answers 
 
 | Tool | Without selector decorators |
 | --- | --- |
-| `get_testid_tree` | **Works fully.** It reads JSX and TSX and the resolved test-ID attribute. It never looks at your test code. |
+| `get_testid_tree` | **Works fully.** It reads JSX and TSX and the resolved test-ID attribute - it never reads your page objects or specs *as tests*. It does scan any in-scope `.tsx` / `.jsx` file, including test-side ones; see below. |
 | `map_coverage` | **Works, with a flag.** Pass `includeRawLocators: true` so plain `getByTestId()` calls count as selectors. Without it the page-object side is empty and every rendered ID reads as uncovered. |
 | `query_coverage` | Works wherever `map_coverage` does - it pages a report that call already built. |
 | `list_page_objects` | **Still works if you use the library at all.** Decorators are only one of four ways a class is indexed - see below. It returns an empty array only when nothing in scope uses the library. |
@@ -38,6 +38,18 @@ The trap is `map_coverage` at its default of `includeRawLocators: false`. On a s
 > Direct locator calls (getByTestId, getItemByTestId, filterByItemTestId, filterByHasTestId) were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with `includeRawLocators: true` to include them.
 
 Measured on this repository's own example app, turning the flag on moved four selectors out of the blind spot and the coverage ratio from `0.31` to `0.38`.
+
+### Does the scan include test files?
+
+Yes, if they are JSX. The test-ID scan takes every in-scope `.tsx` / `.jsx` file by extension - it does not exclude `*.spec.tsx`, `*.test.tsx`, or anything under a test directory. A fixture component or an inline render helper written in a `.tsx` spec therefore contributes its test IDs to `get_testid_tree` and to the coverage denominator exactly as application markup would.
+
+That is usually harmless and occasionally wrong: a test ID that only ever exists inside a spec will show up as rendered. To exclude them, narrow the scan with a negated `--src-dir`, which prunes before parsing:
+
+```bash
+npx playwright-page-object mcp --src-dir src --src-dir '!**/*.spec.tsx'
+```
+
+A `.ts` spec is never scanned for test IDs - only JSX-bearing extensions are.
 
 ## What makes a class visible to the page-object tools?
 
