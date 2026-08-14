@@ -138,6 +138,13 @@ describe("server instructions", () => {
 			expect(where).toContain("createFixtures");
 		}
 
+		// `factoryArg` is the one path that does not reach the list. `runDiscovery`
+		// skips a class whose evidence is exactly {factoryArg} unless the internal
+		// `includeControls` option is set, and `handleListPageObjects` never sets
+		// it — so promising the list covers all four paths overstated it.
+		expect(listDescription).toMatch(/NOT listed here/);
+		expect(text).toMatch(/left out of list_page_objects/);
+
 		// And the instructions must not re-assert the boundary that was wrong.
 		expect(text).not.toMatch(/see only classes whose accessors/i);
 	});

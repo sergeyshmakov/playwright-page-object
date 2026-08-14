@@ -48,7 +48,9 @@ Any **one** of four kinds of evidence.
 | `decorator` | Carrying `@Selector`, `@ListSelector`, `@RootSelector`, `@ListRootSelector`, or a `@SelectorBy*` / `@RootSelectorBy*` variant |
 | `baseClass` | Extending `PageObject`, `ListPageObject`, or `RootPageObject` |
 | `fixture` | Being bound in a `createFixtures` map |
-| `factoryArg` | Being passed as a decorator's factory argument |
+| `factoryArg` | Being passed as a decorator's factory argument - see the caveat below |
+
+`factoryArg` is the one that does not behave uniformly: a control whose *only* evidence is being passed as a factory argument is excluded from `list_page_objects`, because it is a control rather than a page object. `get_page_object_tree` still expands it inline and the coverage tools still read it, so it is addressable - just not enumerable from the index.
 
 Neither decorators nor a base class is required on its own. The example app ships `PlainHostCheckoutPage`, a plain class whose only inherited member is `readonly page`, and it is indexed as host kind `pageFallback` with all six members - on decorator evidence alone. Equally, a class that only extends `PageObject` and declares nothing is indexed on `baseClass` evidence, with no decorators anywhere. See [Plain Classes](/guides/plain-classes/) and [Incremental Adoption](/guides/incremental-adoption/).
 

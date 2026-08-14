@@ -144,7 +144,9 @@ A root-scoped server is a good default when packages share one attribute and one
 
 ## Which tsconfig does it use?
 
-Explicit `--tsconfig` wins. Otherwise the server takes the nearest `tsconfig.json` walking up from the Playwright `testDir` toward the project root, which in a monorepo is usually the e2e tsconfig next to the specs rather than the root one. See [Configuration](/mcp/configuration/#how-does-the-server-choose-a-tsconfig) for the full order.
+Explicit `--tsconfig` wins. Failing that, **`<project-root>/tsconfig.json` is checked before anything near the specs** - only when the root has none does the server walk up from the Playwright `testDir` to find the nearest one.
+
+That order matters most in exactly the setup this page recommends. Re-root at the repository root to reach a shared UI package and, if a `tsconfig.json` sits there, the e2e config beside your specs is **not** used - its `paths`, `include`, and compiler options are not in effect. Pass `--tsconfig` explicitly when you want the e2e one. See [Configuration](/mcp/configuration/#how-does-the-server-choose-a-tsconfig) for the full order.
 
 ## How do I verify the scope is right?
 
