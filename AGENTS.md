@@ -76,3 +76,9 @@ from a constant. Add to it when you add a claim.
 Prefer deriving text from the source of truth over restating it — `server.ts`
 already interpolates the `format` default from the schema and the handle lifetime
 from its constant, because both had drifted.
+
+# OpenWolf
+
+@.wolf/OPENWOLF.md
+
+This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
