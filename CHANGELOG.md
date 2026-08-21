@@ -1,3 +1,10 @@
+# [2.2.0](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.1.1...v2.2.0) (2026-08-21)
+
+
+### Features
+
+* make MCP coverage loop self-diagnosing ([#80](https://github.com/sergeyshmakov/playwright-page-object/issues/80)) ([405c9a2](https://github.com/sergeyshmakov/playwright-page-object/commit/405c9a2c3340ad21fe699e77513838bfcb3e1ef0))
+
 ## [2.1.1](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.1.0...v2.1.1) (2026-08-14)
 
 
