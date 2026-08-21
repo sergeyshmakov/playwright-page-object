@@ -85,6 +85,12 @@ export const getTestIdTreeInput = z.object({
 		.describe(
 			'Test-id attribute name, e.g. "data-tid". Defaults to the server-resolved attribute.',
 		),
+	assumeForwarded: z
+		.boolean()
+		.optional()
+		.describe(
+			"Treat test IDs written on component tags as rendered for this call. Overrides the --assume-forwarded server default, including false to restore conservative classification. Source evidence remains reach: component-prop.",
+		),
 	// Outline by default: measured 4.6x smaller than json on the same component
 	// tree, and it is what this tool's description tells you to read with.
 	format: z
@@ -131,6 +137,12 @@ export const mapCoverageInput = z.object({
 			"Limit the page-object side to one file, path relative to the project root exactly as list_page_objects reports it (a leading ./ and Windows separators are accepted). A path that declares no page object fails with file_not_found rather than reporting everything as uncovered.",
 		),
 	attribute: z.string().optional(),
+	assumeForwarded: z
+		.boolean()
+		.optional()
+		.describe(
+			"Treat test IDs written on component tags as rendered for this report. Overrides the --assume-forwarded server default, including false to restore conservative classification. Every affected match stays labelled as assumed.",
+		),
 	// Optional rather than `.default(true)`, because the useful default depends
 	// on the call: scoping with class/file narrows the selectors and cannot
 	// narrow the rendered ids they are compared against, so uncoveredTestIds
@@ -183,7 +195,7 @@ export const queryCoverageInput = z.object({
 		.string()
 		.min(1)
 		.describe(
-			"Opaque handle from a previous map_coverage call (meta.coverageId). Carries that call's class / file / attribute / includeRawLocators scope, so none of them is restated here.",
+			"Opaque handle from a previous map_coverage call (meta.coverageId). Carries that call's class / file / attribute / includeRawLocators / assumeForwarded scope, so none of them is restated here.",
 		),
 	bucket: z
 		.enum(COVERAGE_BUCKETS)

@@ -59,7 +59,7 @@ describe("environmentHint — an incomplete UI scope", () => {
 	 * is a single flag. That it needs a restart is the part a caller cannot guess
 	 * and would spend a call discovering.
 	 */
-	it("names the flag that acts on widespread unproven forwarding", () => {
+	it("names the per-call override for widespread unproven forwarding", () => {
 		const hint = environmentHint([
 			{
 				code: "forwarding-unproven-widespread",
@@ -71,8 +71,8 @@ describe("environmentHint — an incomplete UI scope", () => {
 
 		expect(hint).toContain("--assume-forwarded");
 		expect(hint).toContain("13 of 29");
-		// A tool argument would be tried first and silently do nothing.
-		expect(hint).toContain("restart");
+		expect(hint).toContain("assumeForwarded: true");
+		expect(hint).not.toContain("restart the server");
 	});
 
 	// It is last for a reason: an analysis reading the wrong attribute produces a

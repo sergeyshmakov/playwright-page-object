@@ -161,6 +161,19 @@ describe("server instructions", () => {
 		expect(text).toContain("get_testid_tree reads JSX/TSX");
 	});
 
+	it("documents per-call forwarding overrides without rewriting source evidence", async () => {
+		const descriptions = await tools();
+		const tree = descriptions.get("get_testid_tree") ?? "";
+		const coverage = descriptions.get("map_coverage") ?? "";
+
+		expect(getTestIdTreeInput.parse({}).assumeForwarded).toBeUndefined();
+		expect(mapCoverageInput.parse({}).assumeForwarded).toBeUndefined();
+		expect(tree).toContain("assumeForwarded overrides the server default");
+		expect(tree).toContain('reach: "component-prop"');
+		expect(coverage).toContain("including false");
+		expect(coverage).toContain('forwarding: "assumed"');
+	});
+
 	it("quotes limits from the schemas rather than restating them", async () => {
 		const text = await instructions();
 		// The paging walk it describes has to be the one the schema allows.

@@ -29,9 +29,8 @@ export interface McpServerOptions {
 	 * Count a test id written on a component tag as rendered, for repositories
 	 * whose components forward props as a rule (`--assume-forwarded`).
 	 *
-	 * A server-level switch rather than a tool argument: it changes what the word
-	 * "rendered" means in every answer, and that has to be a property of the
-	 * repository the server was started against, not of one call.
+	 * This is the server default. `map_coverage` and `get_testid_tree` may override
+	 * it per call so a client can compare both interpretations without restarting.
 	 */
 	assumeForwarded?: boolean;
 }

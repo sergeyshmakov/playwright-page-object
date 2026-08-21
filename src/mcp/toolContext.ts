@@ -99,11 +99,11 @@ export function environmentHint(
 	// Its sibling above names `--project-root` exactly and even pre-empts the
 	// wrong flag; this one said "re-run assuming forwarding" and named nothing,
 	// so the one piece of advice a reader could not act on was the one whose fix
-	// is a single flag. It is a startup flag, not a tool argument, which is the
-	// part a caller cannot guess and would waste a call discovering.
+	// is a single tool argument. A server flag still supplies the default, but a
+	// per-call override is what lets an MCP client compare both answers in place.
 	const forwarding = byCode("forwarding-unproven-widespread");
 	if (forwarding) {
-		return `${forwarding.data?.unproven} of ${forwarding.data?.selectors} test-id selector(s) match only ids written as component props, which is what a component library that forwards props as a matter of course looks like. If yours does, restart the server with --assume-forwarded to count them as matches; it is a server flag, not a tool argument, so it needs a restart. Every id and match it changes is labelled in the response.`;
+		return `${forwarding.data?.unproven} of ${forwarding.data?.selectors} test-id selector(s) match only ids written as component props, which is what a component library that forwards props as a matter of course looks like. If yours does, re-call map_coverage with assumeForwarded: true to count them as matches. Every id and match it changes is labelled in the response; assumeForwarded: false restores the conservative answer even when the server started with --assume-forwarded.`;
 	}
 
 	return undefined;

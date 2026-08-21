@@ -74,6 +74,7 @@ export function lookupHint(
 	catchAllSkipped: number,
 	propOnly: boolean,
 	families: string[] = [],
+	assumeForwarded = false,
 ): string | undefined {
 	if (found === 0) {
 		const quarantined =
@@ -96,6 +97,9 @@ export function lookupHint(
 		return `No rendered element with test id "${needle}" was found.${quarantined} Call get_testid_tree without testId to see the full tree, or map_coverage to check for renamed ids.`;
 	}
 	if (propOnly) {
+		if (assumeForwarded) {
+			return `Every occurrence of "${needle}" is written as a prop on a component tag. This call treats it as rendered because assumeForwarded is true; each occurrence keeps reach: "component-prop" so the assumption is not mistaken for proven forwarding.`;
+		}
 		return `Every occurrence of "${needle}" is written as a prop on a component tag, and nothing proved the component forwards it to a host element. It may not exist in the DOM at all; check the component before writing a selector for it.`;
 	}
 	return undefined;
