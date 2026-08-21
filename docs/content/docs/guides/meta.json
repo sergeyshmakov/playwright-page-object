@@ -1,0 +1,13 @@
+{
+	"title": "Guides",
+	"pages": [
+		"plain-classes",
+		"page-only-hosts",
+		"fragments",
+		"custom-controls",
+		"built-in-pom",
+		"lists",
+		"fixtures",
+		"incremental-adoption"
+	]
+}

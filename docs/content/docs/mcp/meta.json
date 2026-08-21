@@ -1,0 +1,13 @@
+{
+	"title": "MCP Server",
+	"pages": [
+		"index",
+		"quick-start",
+		"workflows",
+		"tools",
+		"configuration",
+		"limitations",
+		"monorepos",
+		"troubleshooting"
+	]
+}
