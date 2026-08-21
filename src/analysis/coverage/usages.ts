@@ -2,6 +2,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import type { discoverInternal } from "../page-objects/discover";
 import { readExpressionValue } from "../tsx/scanTestIds";
 import type { SelectorInfo, SelectorUsage, SourceLoc } from "../types";
+import { lexicalDeclaration, unwrapTransparent } from "../util/ast";
 import { literalPrefixOf, parseRegexLiteral } from "../util/literal";
 import { keyFold, matchesAnyGlob } from "../util/paths";
 import type { Workspace } from "../workspace";
@@ -125,6 +126,127 @@ export function collectSelectorUsages(
 	}
 
 	return usages;
+}
+
+/**
+ * Exact test-id selectors embedded in `locator()` expressions of page objects.
+ *
+ * A composed selector often keeps one static attribute in a local constant and
+ * another in the outer template: ``locator(`${row} [data-testid="Cell"]`)``.
+ * Reading only the final expression loses both. Literal fragments plus one
+ * local-identifier hop preserve the static evidence without pretending a
+ * dynamic interpolation names an id.
+ */
+export function collectComposedLocatorUsages(
+	discovery: ReturnType<typeof discoverInternal>,
+	attribute: string,
+): SelectorUsage[] {
+	const usages: SelectorUsage[] = [];
+	const seenDeclarations = new Set<string>();
+	const seenUsages = new Set<string>();
+	for (const entry of discovery.classes.values()) {
+		if (seenDeclarations.has(entry.key)) {
+			continue;
+		}
+		seenDeclarations.add(entry.key);
+		for (const call of entry.declaration.getDescendantsOfKind(
+			SyntaxKind.CallExpression,
+		)) {
+			if (rawCallName(call) !== "locator") {
+				continue;
+			}
+			const [argument] = call.getArguments();
+			if (!argument) {
+				continue;
+			}
+			const ids = new Set<string>();
+			for (const fragment of stringFragments(argument, new Set())) {
+				for (const id of exactAttributeIds(fragment, attribute)) {
+					ids.add(id);
+				}
+			}
+			if (ids.size === 0) {
+				continue;
+			}
+			const loc = discovery.ctx.ws.loc(call);
+			const method = call.getFirstAncestorByKind(SyntaxKind.MethodDeclaration);
+			for (const id of ids) {
+				const key = `${entry.key}:${loc.line}:${loc.column ?? 0}:${id}`;
+				if (seenUsages.has(key)) {
+					continue;
+				}
+				seenUsages.add(key);
+				usages.push({
+					defId: entry.key,
+					memberPath: method
+						? `${entry.className}.${method.getName()}`
+						: `${entry.className}.locator`,
+					loc,
+					kind: "testId",
+					text: call.getText().replace(/\s+/g, " ").slice(0, 200),
+					testId: id,
+					dynamic: false,
+					origin: "raw",
+				});
+			}
+		}
+	}
+	return usages;
+}
+
+function stringFragments(node: Node, seen: Set<string>): string[] {
+	const expression = unwrapTransparent(node);
+	if (
+		Node.isStringLiteral(expression) ||
+		Node.isNoSubstitutionTemplateLiteral(expression)
+	) {
+		return [expression.getLiteralText()];
+	}
+	if (Node.isTemplateExpression(expression)) {
+		const fragments = [expression.getHead().getLiteralText()];
+		for (const span of expression.getTemplateSpans()) {
+			fragments.push(...stringFragments(span.getExpression(), seen));
+			fragments.push(span.getLiteral().getLiteralText());
+		}
+		return fragments;
+	}
+	if (
+		Node.isBinaryExpression(expression) &&
+		expression.getOperatorToken().getKind() === SyntaxKind.PlusToken
+	) {
+		return [
+			...stringFragments(expression.getLeft(), seen),
+			...stringFragments(expression.getRight(), seen),
+		];
+	}
+	if (!Node.isIdentifier(expression)) {
+		return [];
+	}
+	const declaration =
+		lexicalDeclaration(expression, expression.getText()) ??
+		expression
+			.getSourceFile()
+			.getVariableDeclarations()
+			.find((candidate) => candidate.getName() === expression.getText());
+	if (!declaration || !Node.isVariableDeclaration(declaration)) {
+		return [];
+	}
+	const key = `${declaration.getSourceFile().getFilePath()}:${declaration.getStart()}`;
+	if (seen.has(key)) {
+		return [];
+	}
+	seen.add(key);
+	const initializer = declaration.getInitializer();
+	return initializer ? stringFragments(initializer, seen) : [];
+}
+
+function exactAttributeIds(fragment: string, attribute: string): string[] {
+	const escaped = attribute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const selector = new RegExp(
+		`\\[\\s*${escaped}\\s*=\\s*(["'])([^"'\\]]+)\\1\\s*\\]`,
+		"g",
+	);
+	return [...fragment.matchAll(selector)].map((match) => match[2] ?? "");
 }
 
 function toUsage(

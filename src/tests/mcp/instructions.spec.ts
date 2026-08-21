@@ -161,6 +161,14 @@ describe("server instructions", () => {
 		expect(text).toContain("get_testid_tree reads JSX/TSX");
 	});
 
+	it("describes the composed locator evidence coverage can extract", async () => {
+		const text = (await tools()).get("map_coverage") ?? "";
+
+		expect(text).toContain('[<attribute>="id"]');
+		expect(text).toContain("discovered page-object classes");
+		expect(text).toContain("dynamic fragments are not guessed");
+	});
+
 	it("documents per-call forwarding overrides without rewriting source evidence", async () => {
 		const descriptions = await tools();
 		const tree = descriptions.get("get_testid_tree") ?? "";

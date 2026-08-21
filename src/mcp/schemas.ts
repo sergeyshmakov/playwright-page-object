@@ -158,7 +158,7 @@ export const mapCoverageInput = z.object({
 		.boolean()
 		.default(false)
 		.describe(
-			"Also scan the sources for direct getByTestId / getItemByTestId / filterByItemTestId / filterByHasTestId calls. Off by default, so an id under uncoveredTestIds means no page object selects it - not that it is untested. Turn on before concluding a test id is unused.",
+			'Also scan the sources for direct getByTestId / getItemByTestId / filterByItemTestId / filterByHasTestId calls, plus exact [<attribute>="id"] selectors inside locator() expressions in discovered page-object classes. Off by default, so an id under uncoveredTestIds means no declared decorator or enabled raw/composed locator selects it - not that it is untested.',
 		),
 	buckets: z
 		.array(z.enum(COVERAGE_BUCKETS))

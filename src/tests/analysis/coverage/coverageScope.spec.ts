@@ -48,6 +48,81 @@ describe("buildCoverageReport — raw locator sweep", () => {
 		expect(matched?.selector.kind).toBe("testIdPattern");
 		expect(matched?.ui.id).toBe("Orphan");
 	});
+
+	it("extracts exact test ids from composed page-object locator strings", () => {
+		const pageObject = {
+			"e2e/ComposedPage.ts": [
+				libImport("RootPageObject", "RootSelector"),
+				"@RootSelector()",
+				"export class ComposedPage extends RootPageObject {",
+				"  cell(rowId: string) {",
+				`    const row = \`[data-testid="ApplyPromoButton"][data-row-id="${hole("rowId")}"]\`;`,
+				`    return this.$.locator(\`${hole("row")} [data-testid = 'Orphan']\`);`,
+				"  }",
+				"}",
+			].join("\n"),
+		};
+		const off = report(pageObject);
+		const on = report(pageObject, { includeRawLocators: true });
+
+		expect(off.uncoveredTestIds.map((entry) => entry.id)).toEqual(
+			expect.arrayContaining(["ApplyPromoButton", "Orphan"]),
+		);
+		expect(on.uncoveredTestIds.map((entry) => entry.id)).not.toEqual(
+			expect.arrayContaining(["ApplyPromoButton", "Orphan"]),
+		);
+		expect(
+			on.matched
+				.filter((entry) =>
+					["ApplyPromoButton", "Orphan"].includes(entry.ui.id ?? ""),
+				)
+				.map((entry) => entry.selector.origin),
+		).toEqual(["raw", "raw"]);
+	});
+
+	it("does not invent an id from a dynamic locator interpolation", () => {
+		const result = report(
+			{
+				"e2e/DynamicPage.ts": [
+					libImport("RootPageObject", "RootSelector"),
+					"@RootSelector()",
+					"export class DynamicPage extends RootPageObject {",
+					"  cell(id: string) {",
+					`    return this.$.locator(\`[data-testid="${hole("id")}"]\`);`,
+					"  }",
+					"}",
+				].join("\n"),
+			},
+			{ includeRawLocators: true },
+		);
+
+		expect(result.uncoveredTestIds.map((entry) => entry.id)).toContain(
+			"Orphan",
+		);
+		expect(result.matched.some((entry) => entry.ui.id === "Orphan")).toBe(
+			false,
+		);
+	});
+
+	it("uses the resolved custom test-id attribute", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({
+				"src/App.tsx":
+					'export function App() { return <div data-tid="Cell" />; }',
+				"e2e/CustomPage.ts": [
+					libImport("RootPageObject", "RootSelector"),
+					"@RootSelector()",
+					"export class CustomPage extends RootPageObject {",
+					`  cell() { return this.$.locator('[data-tid="Cell"]'); }`,
+					"}",
+				].join("\n"),
+			}),
+			{ attribute: "data-tid", includeRawLocators: true },
+		);
+
+		expect(result.uncoveredTestIds).toEqual([]);
+		expect(result.matched[0]?.ui.id).toBe("Cell");
+	});
 });
 
 /**
