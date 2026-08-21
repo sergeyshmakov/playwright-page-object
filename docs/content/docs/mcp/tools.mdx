@@ -67,7 +67,7 @@ That means `repeat` warnings of this code are still in force and their text has 
 | `root` | `list_page_objects`, `get_page_object_tree` | Absolute path of the analyzed project root |
 | `tsconfig` | `list_page_objects` | Project-relative config that supplied the analyzed program, or absent for the fallback source scan |
 | `tsconfigCandidates` | `list_page_objects` | Only when the index is empty: up to five other configs whose file sets contain direct `playwright-page-object` imports, with `file`, `filesCovered`, and `filesImportingLibrary` |
-| `tsconfigCandidatesTruncated` | `list_page_objects` | More configs or candidates existed than the bounded empty-index diagnostic reported |
+| `tsconfigCandidatesTruncated` | `list_page_objects` | More configs, candidates, or selected source files existed than the bounded empty-index diagnostic reported |
 | `attribute` | all | Test-ID attribute this call read the sources with |
 | `attributeSource` | all | `"param"`, `"playwright-config"`, or `"default"` |
 | `playwrightConfig` | all | Project-relative path of the config that was read; absent when none was found |
