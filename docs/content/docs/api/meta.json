@@ -1,0 +1,10 @@
+{
+	"title": "API",
+	"pages": [
+		"decorators",
+		"page-object",
+		"root-page-object",
+		"list-page-object",
+		"create-fixtures"
+	]
+}

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+	<title>playwright-page-object logo</title>
+	<rect x="7" y="7" width="38" height="38" rx="10" stroke="#45ba4b" stroke-width="7" />
+	<rect x="19" y="19" width="38" height="38" rx="10" stroke="#45ba4b" stroke-width="7" />
+	<rect x="26" y="26" width="12" height="12" rx="3" fill="#45ba4b" />
+</svg>

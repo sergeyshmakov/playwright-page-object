@@ -1,0 +1,11 @@
+{
+	"title": "Documentation",
+	"pages": [
+		"getting-started",
+		"guides",
+		"mcp",
+		"reference",
+		"api",
+		"ai-tooling"
+	]
+}
