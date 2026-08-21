@@ -10,6 +10,7 @@ import {
 	synthesizedCompilerOptions,
 	tsConfigFileNames,
 } from "../../../analysis/config/tsconfig";
+import { findPageObjectTsConfigCandidates } from "../../../analysis/config/tsconfigAlternatives";
 import { AnalysisLimitError } from "../../../analysis/diagnostics";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import { WorkspacePool } from "../../../analysis/workspace";
@@ -259,6 +260,115 @@ describe("tsConfigFileNames", () => {
 		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
 			"src/a.ts",
 		]);
+	});
+});
+
+describe("alternate page-object tsconfig diagnosis", () => {
+	it("finds a sibling program whose files import the library", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/App.tsx":
+				'export function App() { return <div data-testid="Root" />; }',
+			"e2e/tsconfig.json": JSON.stringify({ include: ["."] }),
+			"e2e/HomePage.ts": [
+				'import { RootPageObject } from "playwright-page-object";',
+				"export class HomePage extends RootPageObject {}",
+			].join("\n"),
+			"e2e/mcp.ts": 'import type {} from "playwright-page-object/mcp";',
+			"e2e/comment.ts":
+				'// import { PageObject } from "playwright-page-object";\nexport const x = 1;',
+		});
+		const ws = pool.acquire({ projectRoot: root });
+		const result = findPageObjectTsConfigCandidates(
+			ws.project,
+			root,
+			ws.tsconfigPath,
+		);
+
+		expect(result).toEqual({
+			candidates: [
+				{
+					file: "e2e/tsconfig.json",
+					filesCovered: 3,
+					filesImportingLibrary: 1,
+				},
+			],
+		});
+	});
+
+	it("bounds the source files inspected across alternate programs", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/App.ts": "export const app = true;",
+			"e2e-a/tsconfig.json": JSON.stringify({ files: ["Page.ts"] }),
+			"e2e-a/Page.ts":
+				'import { RootPageObject } from "playwright-page-object";\nexport class Page extends RootPageObject {}',
+			"e2e-b/tsconfig.json": JSON.stringify({
+				files: ["Page.ts", "z.ts"],
+			}),
+			"e2e-b/Page.ts":
+				'import { RootPageObject } from "playwright-page-object";\nexport class Page extends RootPageObject {}',
+			"e2e-b/z.ts": "export const z = true;",
+		});
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 1 });
+
+		expect(
+			findPageObjectTsConfigCandidates(ws.project, root, ws.tsconfigPath, 2),
+		).toEqual({
+			candidates: [
+				{
+					file: "e2e-a/tsconfig.json",
+					filesCovered: 1,
+					filesImportingLibrary: 1,
+				},
+			],
+			truncated: true,
+		});
+		expect(
+			findPageObjectTsConfigCandidates(ws.project, root, ws.tsconfigPath, 3),
+		).toEqual({
+			candidates: [
+				{
+					file: "e2e-a/tsconfig.json",
+					filesCovered: 1,
+					filesImportingLibrary: 1,
+				},
+				{
+					file: "e2e-b/tsconfig.json",
+					filesCovered: 2,
+					filesImportingLibrary: 1,
+				},
+			],
+		});
+	});
+
+	it("reuses source probes shared by alternate programs", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/App.ts": "export const app = true;",
+			"shared/Page.ts":
+				'import { RootPageObject } from "playwright-page-object";\nexport class Page extends RootPageObject {}',
+			"e2e-a/tsconfig.json": JSON.stringify({ files: ["../shared/Page.ts"] }),
+			"e2e-b/tsconfig.json": JSON.stringify({ files: ["../shared/Page.ts"] }),
+		});
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 1 });
+
+		expect(
+			findPageObjectTsConfigCandidates(ws.project, root, ws.tsconfigPath, 1),
+		).toEqual({
+			candidates: [
+				{
+					file: "e2e-a/tsconfig.json",
+					filesCovered: 1,
+					filesImportingLibrary: 1,
+				},
+				{
+					file: "e2e-b/tsconfig.json",
+					filesCovered: 1,
+					filesImportingLibrary: 1,
+				},
+			],
+		});
 	});
 });
 

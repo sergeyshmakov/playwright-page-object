@@ -29,9 +29,8 @@ export interface McpServerOptions {
 	 * Count a test id written on a component tag as rendered, for repositories
 	 * whose components forward props as a rule (`--assume-forwarded`).
 	 *
-	 * A server-level switch rather than a tool argument: it changes what the word
-	 * "rendered" means in every answer, and that has to be a property of the
-	 * repository the server was started against, not of one call.
+	 * This is the server default. `map_coverage` and `get_testid_tree` may override
+	 * it per call so a client can compare both interpretations without restarting.
 	 */
 	assumeForwarded?: boolean;
 }
@@ -60,7 +59,7 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 	if (options.tsconfig !== undefined) {
 		const resolved = resolveAgainst(root, options.tsconfig);
 		if (!isFile(resolved)) {
-			problems.push(`--tsconfig is not a file: ${options.tsconfig}`);
+			problems.push(tsconfigPathProblem(root, options.tsconfig, resolved));
 		}
 	}
 	if (options.playwrightConfig !== undefined) {
@@ -128,6 +127,23 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 	}
 
 	return problems;
+}
+
+function tsconfigPathProblem(
+	root: string,
+	input: string,
+	resolved: string,
+): string {
+	if (path.isAbsolute(input)) {
+		return `--tsconfig is not a file: ${resolved}`;
+	}
+	let problem = `--tsconfig is not a file: ${resolved} (resolved from ${JSON.stringify(input)} against --project-root ${root})`;
+	const fromCwd = path.resolve(input);
+	if (fromCwd !== resolved && isFile(fromCwd) && isInside(root, fromCwd)) {
+		const relative = path.relative(root, fromCwd) || path.basename(fromCwd);
+		problem += `; did you mean --tsconfig ${JSON.stringify(relative)}?`;
+	}
+	return problem;
 }
 
 function resolveAgainst(root: string, candidate: string): string {

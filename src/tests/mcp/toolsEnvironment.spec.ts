@@ -325,4 +325,42 @@ describe("environment reporting over the transport", () => {
 			},
 		);
 	}, 30_000);
+
+	it("diagnoses an alternate tsconfig when the selected program has no page objects", async () => {
+		await withProject(
+			"ppo-empty-index-tsconfig-",
+			{
+				"tsconfig.json": JSON.stringify({ include: ["src"] }),
+				"src/App.tsx":
+					'export function App() { return <div data-testid="Root" />; }',
+				"e2e/tsconfig.json": JSON.stringify({ include: ["."] }),
+				"e2e/HomePage.ts": [
+					'import { RootPageObject } from "playwright-page-object";',
+					"export class HomePage extends RootPageObject {}",
+				].join("\n"),
+			},
+			async (client) => {
+				const { envelope } = await callTool(client, "list_page_objects", {});
+				const candidates = envelope.meta?.tsconfigCandidates as Array<{
+					file: string;
+					filesImportingLibrary: number;
+				}>;
+
+				expect(envelope.data).toEqual([]);
+				expect(envelope.meta?.tsconfig).toBe("tsconfig.json");
+				expect(candidates).toEqual([
+					{
+						file: "e2e/tsconfig.json",
+						filesCovered: 1,
+						filesImportingLibrary: 1,
+					},
+				]);
+				const hint = String(envelope.meta?.hint);
+				expect(hint).toContain(
+					"0 page objects in the analysed program (tsconfig.json, 1 files)",
+				);
+				expect(hint).toContain('--tsconfig "e2e/tsconfig.json"');
+			},
+		);
+	}, 30_000);
 });

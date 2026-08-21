@@ -22,7 +22,11 @@ import { coverageWarnings, uiScopeIncomplete } from "./coverageWarnings";
 import { partitionInventory } from "./inventory";
 import { isCatchAllPattern } from "./match";
 import { nearestIds } from "./suggest";
-import { collectSelectorUsages, sweepRawLocators } from "./usages";
+import {
+	collectComposedLocatorUsages,
+	collectSelectorUsages,
+	sweepRawLocators,
+} from "./usages";
 
 export interface CoverageOptions {
 	attribute?: string;
@@ -134,7 +138,12 @@ function computeCoverageReport(
 	const partition = partitionInventory(uiTree.inventory, assumeForwarded);
 	// Kept apart from the raw sweep below: `scope.pageObjectFilesScanned` counts
 	// these and only these.
-	const pageObjectUsages = collectSelectorUsages(discovery);
+	const pageObjectUsages = [
+		...collectSelectorUsages(discovery),
+		...(options.includeRawLocators
+			? collectComposedLocatorUsages(discovery, attribute.attribute)
+			: []),
+	];
 	const usages = [
 		...pageObjectUsages,
 		// Deliberately unscoped, even when `poInclude` is set. `poInclude` narrows
@@ -241,6 +250,7 @@ function computeCoverageReport(
 						occurrences: match.ui.occurrences.map(
 							(occurrence) => occurrence.loc,
 						),
+						...(match.ui.assumed ? { assumed: true as const } : {}),
 					},
 					confidence: match.outcome.confidence,
 					...(match.outcome.probe ? { probe: match.outcome.probe } : {}),
@@ -353,6 +363,7 @@ function computeCoverageReport(
 					patternSource: ui.patternSource,
 					occurrences: ui.occurrences,
 					suggestion: suggestionFor(ui),
+					...(ui.assumed ? { assumed: true as const } : {}),
 					...(speculative ? { speculativeSelectors: speculative } : {}),
 				};
 			})

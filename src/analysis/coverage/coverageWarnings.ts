@@ -213,7 +213,7 @@ export function coverageWarnings(inputs: WarningInputs): Diagnostic[] {
 		out.push(
 			info(
 				"raw-locators-disabled",
-				"Direct locator calls (getByTestId, getItemByTestId, filterByItemTestId, filterByHasTestId) were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them.",
+				"Direct locator calls (getByTestId, getItemByTestId, filterByItemTestId, filterByHasTestId) and exact test-id attributes inside locator() expressions in page-object classes were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them.",
 			),
 		);
 	}

@@ -25,6 +25,39 @@ describe("buildCoverageReport", () => {
 		expect(orphan?.occurrences).toHaveLength(1);
 	});
 
+	it("keeps render locations and JSX context on every uncovered id", () => {
+		const report = buildCoverageReport(
+			makeWorkspace({
+				"src/App.tsx": [
+					"export function App({ show }: { show: boolean }) {",
+					"  const rows = [1];",
+					"  return <>",
+					'    {show && <button data-testid="ConditionalAction" />}',
+					'    {rows.map((row) => <span key={row} data-testid="RepeatedRow" />)}',
+					"  </>;",
+					"}",
+				].join("\n"),
+			}),
+		);
+		const conditional = report.uncoveredTestIds.find(
+			(entry) => entry.id === "ConditionalAction",
+		);
+		const repeated = report.uncoveredTestIds.find(
+			(entry) => entry.id === "RepeatedRow",
+		);
+
+		expect(conditional?.occurrences[0]).toMatchObject({
+			loc: { file: "src/App.tsx", line: 4 },
+			conditional: true,
+			reach: "element",
+		});
+		expect(repeated?.occurrences[0]).toMatchObject({
+			loc: { file: "src/App.tsx", line: 5 },
+			repeated: true,
+			reach: "element",
+		});
+	});
+
 	it("reports a typo'd selector as dead and suggests the real id", () => {
 		const dead = result.deadSelectors.find(
 			(entry) => entry.memberPath === "HomePage.Typo",

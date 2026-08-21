@@ -159,11 +159,13 @@ export function handleMapCoverage(
 		}
 	}
 
+	const assumeForwarded =
+		args.assumeForwarded ?? options.assumeForwarded ?? false;
 	const report = buildCoverageReport(workspace, {
 		attribute: args.attribute,
 		poInclude,
 		includeRawLocators: args.includeRawLocators,
-		assumeForwarded: options.assumeForwarded,
+		assumeForwarded,
 	});
 
 	// A scoped call narrows the selectors and cannot narrow the ids they are
@@ -213,7 +215,7 @@ export function handleMapCoverage(
 	const coverageId = options.handles?.create(workspace, {
 		report,
 		attributeSource,
-		assumeForwarded: options.assumeForwarded === true ? true : undefined,
+		assumeForwarded,
 		alsoIncluded,
 		note,
 	});
@@ -247,7 +249,7 @@ export function handleMapCoverage(
 			coverageId,
 			alsoIncluded,
 			note,
-			assumeForwarded: options.assumeForwarded === true ? true : undefined,
+			assumeForwarded: assumeForwarded ? true : undefined,
 			ignored,
 			offset: offset > 0 ? offset : undefined,
 			shown: Object.keys(paging.shown).length > 0 ? paging.shown : undefined,

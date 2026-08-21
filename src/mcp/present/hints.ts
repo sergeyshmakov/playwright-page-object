@@ -3,13 +3,40 @@ import {
 	nearestIds,
 	nearestNames,
 	type PageObjectSummary,
+	type PageObjectTsConfigCandidate,
 } from "../../analysis";
 import { hintForSuggestions, ToolError } from "../errors";
 import { MAX_ERROR_LIST } from "../respond";
 import { isScannedFile } from "./paths";
 
-const EMPTY_INDEX_HINT =
-	'No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with --src-dir <dir>; also check that those files import from "playwright-page-object".';
+export interface EmptyIndexContext {
+	tsconfig: string | null;
+	scanned: number;
+	candidates: PageObjectTsConfigCandidate[];
+	candidatesTruncated?: true;
+}
+
+function emptyIndexHint(context: EmptyIndexContext): string {
+	const program = context.tsconfig ?? "no tsconfig (fallback source scan)";
+	const lead = `0 page objects in the analysed program (${program}, ${context.scanned} files).`;
+	if (context.candidates.length === 0) {
+		const probe = context.candidatesTruncated
+			? "No candidate was found within the completed portion of this bounded diagnostic. Additional tsconfigs or source files were omitted."
+			: 'No other tsconfig under the project root selects a source file that imports "playwright-page-object".';
+		return `${lead} ${probe} Check that the page-object files are included by the selected tsconfig, or restart with the correct --tsconfig; use --src-dir only when you can name every application and test source directory that must remain in scope.`;
+	}
+	const candidates = context.candidates
+		.map(
+			(candidate) =>
+				`${candidate.file} covers ${candidate.filesImportingLibrary} file(s) that import "playwright-page-object" (${candidate.filesCovered} analysable files total).`,
+		)
+		.join(" ");
+	const truncated = context.candidatesTruncated
+		? " Additional tsconfigs or source files were omitted from this bounded diagnostic."
+		: "";
+	const preferred = context.candidates[0]?.file ?? "<other tsconfig>";
+	return `${lead} ${candidates}${truncated} Restart the MCP server with --tsconfig ${JSON.stringify(preferred)}. If that config excludes application sources, also pass --src-dir for every application and test source directory that must remain in the scan.`;
+}
 
 /**
  * What to say when the page came back empty.
@@ -25,9 +52,10 @@ export function listEmptyHint(
 	offset: number,
 	total: number,
 	indexed: PageObjectSummary[],
+	emptyContext?: EmptyIndexContext,
 ): string | undefined {
 	if (indexed.length === 0) {
-		return EMPTY_INDEX_HINT;
+		return emptyContext ? emptyIndexHint(emptyContext) : undefined;
 	}
 	if (total === 0) {
 		const nearest = nearestIds(
@@ -49,6 +77,7 @@ export function lookupHint(
 	catchAllSkipped: number,
 	propOnly: boolean,
 	families: string[] = [],
+	assumeForwarded = false,
 ): string | undefined {
 	if (found === 0) {
 		const quarantined =
@@ -71,6 +100,9 @@ export function lookupHint(
 		return `No rendered element with test id "${needle}" was found.${quarantined} Call get_testid_tree without testId to see the full tree, or map_coverage to check for renamed ids.`;
 	}
 	if (propOnly) {
+		if (assumeForwarded) {
+			return `Every occurrence of "${needle}" is written as a prop on a component tag. This call treats it as rendered because assumeForwarded is true; each occurrence keeps reach: "component-prop" so the assumption is not mistaken for proven forwarding.`;
+		}
 		return `Every occurrence of "${needle}" is written as a prop on a component tag, and nothing proved the component forwards it to a host element. It may not exist in the DOM at all; check the component before writing a selector for it.`;
 	}
 	return undefined;

@@ -27,7 +27,7 @@ Yes. You can point the server at any Playwright repository and get real answers 
 | Tool | Without selector decorators |
 | --- | --- |
 | `get_testid_tree` | **Works fully.** It reads JSX and TSX and the resolved test-ID attribute - it never reads your page objects or specs *as tests*. It does scan any in-scope `.tsx` / `.jsx` file, including test-side ones; see below. |
-| `map_coverage` | **Works, with a flag.** Pass `includeRawLocators: true` so plain `getByTestId()` calls count as selectors. Without it the page-object side is empty and every rendered ID reads as uncovered. |
+| `map_coverage` | **Works, with a flag.** Pass `includeRawLocators: true` so plain `getByTestId()` calls count as selectors. In discovered page-object classes, it also extracts exact test-ID equality fragments from `locator()` expressions. Without the flag the raw side is empty and every rendered ID reads as uncovered. |
 | `query_coverage` | Works wherever `map_coverage` does - it pages a report that call already built. |
 | `list_page_objects` | **Still works if you use the library at all.** Decorators are only one of four ways a class is indexed - see below. It returns an empty array only when nothing in scope uses the library. |
 | `get_page_object_tree` | Works for any class `list_page_objects` indexed. |
@@ -36,7 +36,7 @@ So the honest summary is: **anyone can start, and the test-ID half of the server
 
 The trap is `map_coverage` at its default of `includeRawLocators: false`. On a suite of plain `getByTestId()` calls that default reports `rawSelectors: 0` and files every rendered ID under `uncoveredTestIds`, which reads like "nothing is tested". The server says so itself rather than letting you believe it - every such response carries a `raw-locators-disabled` warning:
 
-> Direct locator calls (getByTestId, getItemByTestId, filterByItemTestId, filterByHasTestId) were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with `includeRawLocators: true` to include them.
+> Direct locator calls (getByTestId, getItemByTestId, filterByItemTestId, filterByHasTestId) and exact test-id attributes inside locator() expressions in page-object classes were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with `includeRawLocators: true` to include them.
 
 Measured on this repository's own example app, turning the flag on moved four selectors out of the blind spot and the coverage ratio from `0.31` to `0.38`.
 
@@ -67,11 +67,11 @@ Any **one** of four kinds of evidence.
 
 Neither decorators nor a base class is required on its own. The example app ships `PlainHostCheckoutPage`, a plain class whose only inherited member is `readonly page`, and it is indexed as host kind `pageFallback` with all six members - on decorator evidence alone. Equally, a class that only extends `PageObject` and declares nothing is indexed on `baseClass` evidence, with no decorators anywhere. See [Plain Classes](/guides/plain-classes/) and [Incremental Adoption](/guides/incremental-adoption/).
 
-What stays invisible is a page object in a suite that never uses this library - locators declared in a constructor or as ordinary properties, in a class that extends nothing of ours and appears in no fixture map. If `list_page_objects` comes back empty on a repository that clearly has page objects, that is the reason, and the response says so:
+What stays invisible is a page object in a suite that never uses this library - locators declared in a constructor or as ordinary properties, in a class that extends nothing of ours and appears in no fixture map. If `list_page_objects` comes back empty, the response first names the selected TypeScript program and checks sibling configs for direct library imports:
 
-> No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with `--src-dir <dir>`; also check that those files import from "playwright-page-object".
+> 0 page objects in the analysed program (tsconfig.json, N files). e2e/tsconfig.json covers M file(s) that import "playwright-page-object". Restart the MCP server with `--tsconfig "e2e/tsconfig.json"`.
 
-An agent that sees an empty index should not conclude the repository has no page objects. It should conclude the repository has none *this server can read*.
+When a candidate exists, the problem is the selected program, not proof that the repository has no page objects. When none exists, the hint says so; then check whether the selected config includes the files and whether they directly import the package. `--src-dir` restricts a program rather than widening it, so use it only after choosing the correct tsconfig and only when you can name every app and test directory that must remain.
 
 ## What happens to a test ID built from a variable?
 
@@ -110,7 +110,7 @@ If your project writes a different attribute, pass `attribute: "data-tid"` on th
 - **`depth-limit-reached`** and **`node-budget-reached`** - budgets, not boundaries. Re-call with a larger `depth` or a narrower root.
 - **`spread-props`** - `{...props}` may carry a test ID the walk cannot see. This one hides a *value*, not a subtree; the node's children are still present.
 
-Prop forwarding is resolved one hop. A test ID written as a prop on a component tag is **not** counted as rendered unless forwarding to a host element was proven, because a component is free to ignore a prop. [`assumeForwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding) turns that into an explicit assumption when you know your codebase forwards.
+Prop forwarding is resolved one hop. A test ID written as a prop on a component tag is **not** counted as rendered unless forwarding to a host element was proven, because a component is free to ignore a prop. Per-call [`assumeForwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding) turns that into an explicit assumption when you know your codebase forwards; `--assume-forwarded` supplies the server default.
 
 Because of all this, **absence from a partial tree is never proof of absence**. The server refuses to imply otherwise: a holed tree says where the holes are, and if a walk reaches no test ID at all it omits the nodes entirely rather than shipping an ID-less shell that looks like a finding. To ask the complete question, pass `testId` to look one ID up across the whole scan.
 

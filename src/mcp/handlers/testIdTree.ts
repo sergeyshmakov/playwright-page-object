@@ -7,6 +7,7 @@ import {
 	type Workspace,
 } from "../../analysis";
 import { ToolError } from "../errors";
+import type { McpServerOptions } from "../options";
 import { renderTestIdOutline } from "../outline";
 import {
 	blindScan,
@@ -35,7 +36,7 @@ import { planWarnings } from "../warnings";
 export function handleGetTestIdTree(
 	workspace: Workspace,
 	args: z.infer<typeof getTestIdTreeInput>,
-	session: ToolSession = {},
+	options: Pick<McpServerOptions, "assumeForwarded"> & ToolSession = {},
 ) {
 	// `followComponents` is a real engine option now, so it no longer has to be
 	// faked as `depth: 1`. That collapse reported every component boundary as
@@ -43,6 +44,8 @@ export function handleGetTestIdTree(
 	// out when they had simply asked for one level.
 	const depth = args.depth;
 	const followComponents = args.followComponents;
+	const assumeForwarded =
+		args.assumeForwarded ?? options.assumeForwarded ?? false;
 	// Before anything reads it, and whatever the call goes on to ask for: a
 	// `file` naming nothing is the caller's mistake in every branch.
 	const scope = args.file ? resolveEntryFile(workspace, args.file) : undefined;
@@ -104,13 +107,14 @@ export function handleGetTestIdTree(
 		// a caveat on the inventory, which is the one thing that is always
 		// complete.
 		const full = withoutTreeShapeWarnings(tree.warnings);
-		const warnings = planWarnings(session.warnings, full);
+		const warnings = planWarnings(options.warnings, full);
 		return ok(
 			{ occurrences },
 			{
 				attribute: tree.attribute,
 				attributeSource: tree.attributeSource,
 				playwrightConfig: configFileOf(workspace),
+				assumeForwarded: assumeForwarded ? true : undefined,
 				// "That id is not rendered anywhere" is the single most misleading
 				// answer this server can give when the attribute or the scope is
 				// wrong, and this branch used to ship it with no warnings at all.
@@ -123,6 +127,7 @@ export function handleGetTestIdTree(
 						catchAllSkipped,
 						propOnly,
 						families,
+						assumeForwarded,
 					),
 				),
 			},
@@ -220,12 +225,13 @@ export function handleGetTestIdTree(
 
 	const roots = tree.roots;
 	const gap = traversalGap(roots, tree.truncated === true);
-	const warnings = planWarnings(session.warnings, tree.warnings);
+	const warnings = planWarnings(options.warnings, tree.warnings);
 	const blind = blindScan(tree.warnings, roots, gap);
 	const meta: Record<string, unknown> = {
 		attribute: tree.attribute,
 		attributeSource: tree.attributeSource,
 		playwrightConfig: configFileOf(workspace),
+		assumeForwarded: assumeForwarded ? true : undefined,
 		note: scope?.note,
 		fidelity: tree.fidelity,
 		fidelityReason: tree.fidelityReason,

@@ -152,6 +152,31 @@ describe("handleGetTestIdTree", () => {
 		expect(out.ok).toBe(true);
 		expect(JSON.stringify(out.data)).toContain("Orphan");
 	});
+
+	it("labels a per-call forwarding assumption without rewriting source evidence", () => {
+		const forwardingApp = {
+			"src/App.tsx": [
+				"function Card() { return <div />; }",
+				'export function App() { return <Card data-testid="Ghost" />; }',
+			].join("\n"),
+		};
+		const out = envelope(
+			handleGetTestIdTree(makeWorkspace(forwardingApp), {
+				testId: "Ghost",
+				depth: 4,
+				followComponents: true,
+				format: "json",
+				assumeForwarded: true,
+			}),
+		);
+		const data = out.data as {
+			occurrences: Array<{ reach: string }>;
+		};
+
+		expect(out.meta?.assumeForwarded).toBe(true);
+		expect(data.occurrences[0]?.reach).toBe("component-prop");
+		expect(String(out.meta?.hint)).toContain("treats it as rendered");
+	});
 });
 
 describe("handleMapCoverage", () => {
@@ -183,6 +208,56 @@ describe("handleMapCoverage", () => {
 		// `buckets` wins over `includeUnused`, and the loser is named rather than
 		// dropped in silence.
 		expect(JSON.stringify(out.meta?.ignored)).toContain("includeUnused");
+	});
+
+	it("lets a tool call override the server forwarding default both ways", () => {
+		const forwardingApp = {
+			"src/App.tsx": [
+				"function Card() { return <div />; }",
+				'export function App() { return <Card data-testid="Ghost" />; }',
+			].join("\n"),
+			"e2e/GhostPage.ts": [
+				libImport("RootPageObject", "RootSelector", "Selector"),
+				"@RootSelector()",
+				"export class GhostPage extends RootPageObject {",
+				'  @Selector("Ghost") accessor Ghost!: unknown;',
+				"}",
+			].join("\n"),
+		};
+		const ws = makeWorkspace(forwardingApp);
+		const enabled = envelope(
+			handleMapCoverage(
+				ws,
+				{
+					assumeForwarded: true,
+					includeRawLocators: false,
+					limit: 50,
+					offset: 0,
+				},
+				{ assumeForwarded: false },
+			),
+		);
+		const disabled = envelope(
+			handleMapCoverage(
+				ws,
+				{
+					assumeForwarded: false,
+					includeRawLocators: false,
+					limit: 50,
+					offset: 0,
+				},
+				{ assumeForwarded: true },
+			),
+		);
+
+		expect(
+			(enabled.data as { summary: { matched: number } }).summary.matched,
+		).toBe(1);
+		expect(enabled.meta?.assumeForwarded).toBe(true);
+		expect(
+			(disabled.data as { summary: { matched: number } }).summary.matched,
+		).toBe(0);
+		expect(disabled.meta?.assumeForwarded).toBeUndefined();
 	});
 });
 
