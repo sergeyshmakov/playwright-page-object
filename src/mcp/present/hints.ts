@@ -21,7 +21,7 @@ function emptyIndexHint(context: EmptyIndexContext): string {
 	const lead = `0 page objects in the analysed program (${program}, ${context.scanned} files).`;
 	if (context.candidates.length === 0) {
 		const probe = context.candidatesTruncated
-			? "No candidate was found among the inspected tsconfigs. Additional tsconfigs were omitted from this bounded diagnostic."
+			? "No candidate was found within the completed portion of this bounded diagnostic. Additional tsconfigs or source files were omitted."
 			: 'No other tsconfig under the project root selects a source file that imports "playwright-page-object".';
 		return `${lead} ${probe} Check that the page-object files are included by the selected tsconfig, or restart with the correct --tsconfig; use --src-dir only when you can name every application and test source directory that must remain in scope.`;
 	}
@@ -32,7 +32,7 @@ function emptyIndexHint(context: EmptyIndexContext): string {
 		)
 		.join(" ");
 	const truncated = context.candidatesTruncated
-		? " Additional tsconfigs were omitted from this bounded diagnostic."
+		? " Additional tsconfigs or source files were omitted from this bounded diagnostic."
 		: "";
 	const preferred = context.candidates[0]?.file ?? "<other tsconfig>";
 	return `${lead} ${candidates}${truncated} Restart the MCP server with --tsconfig ${JSON.stringify(preferred)}. If that config excludes application sources, also pass --src-dir for every application and test source directory that must remain in the scan.`;

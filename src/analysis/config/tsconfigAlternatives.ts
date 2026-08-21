@@ -12,6 +12,7 @@ import {
 	toPosix,
 	toPosixRelative,
 } from "../util/paths";
+import { DEFAULT_MAX_FILES } from "../workspaceBuild";
 import { SCAN_EXTENSIONS, tsConfigFileNames } from "./tsconfig";
 
 /** A sibling tsconfig whose program contains direct imports of this package. */
@@ -26,7 +27,7 @@ export interface PageObjectTsConfigCandidate {
 
 export interface PageObjectTsConfigCandidates {
 	candidates: PageObjectTsConfigCandidate[];
-	/** More configs existed than the bounded diagnostic inspected. */
+	/** More configs, candidates, or source files existed than the diagnostic reported. */
 	truncated?: true;
 }
 
@@ -48,8 +49,12 @@ export function findPageObjectTsConfigCandidates(
 	project: Project,
 	projectRoot: string,
 	selectedTsconfig: string | null,
+	maxFiles = DEFAULT_MAX_FILES,
 ): PageObjectTsConfigCandidates {
 	const root = toPosix(projectRoot).replace(/\/+$/, "");
+	const sourceFileLimit = Number.isFinite(maxFiles)
+		? Math.max(0, Math.min(Math.floor(maxFiles), DEFAULT_MAX_FILES))
+		: DEFAULT_MAX_FILES;
 	let found: string[];
 	try {
 		found = [
@@ -82,9 +87,11 @@ export function findPageObjectTsConfigCandidates(
 			);
 		});
 
-	const truncated = configs.length > MAX_CONFIGS_PROBED;
+	let truncated = configs.length > MAX_CONFIGS_PROBED;
 	const candidates: PageObjectTsConfigCandidate[] = [];
-	for (const config of configs.slice(0, MAX_CONFIGS_PROBED)) {
+	const importsByFile = new Map<string, boolean>();
+	let filesProbed = 0;
+	configLoop: for (const config of configs.slice(0, MAX_CONFIGS_PROBED)) {
 		const selected = tsConfigFileNames(config);
 		if (!selected) {
 			continue;
@@ -92,7 +99,18 @@ export function findPageObjectTsConfigCandidates(
 		const files = selected.filter((file) => isAnalysableSource(root, file));
 		let filesImportingLibrary = 0;
 		for (const file of files) {
-			if (importsLibrary(file)) {
+			const key = foldPath(toPosix(path.resolve(file)));
+			let imports = importsByFile.get(key);
+			if (imports === undefined) {
+				if (filesProbed >= sourceFileLimit) {
+					truncated = true;
+					break configLoop;
+				}
+				imports = importsLibrary(file);
+				importsByFile.set(key, imports);
+				filesProbed += 1;
+			}
+			if (imports) {
 				filesImportingLibrary += 1;
 			}
 		}

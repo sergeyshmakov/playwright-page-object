@@ -42,8 +42,8 @@ describe("an empty page-object index", () => {
 			candidatesTruncated: true,
 		});
 
-		expect(hint).toContain("inspected tsconfigs");
-		expect(hint).toContain("Additional tsconfigs were omitted");
+		expect(hint).toContain("completed portion");
+		expect(hint).toContain("Additional tsconfigs or source files were omitted");
 		expect(hint).not.toContain("No other tsconfig under the project root");
 	});
 });

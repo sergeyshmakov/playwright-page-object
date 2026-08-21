@@ -50,6 +50,7 @@ export function handleListPageObjects(
 					workspace.project,
 					workspace.root,
 					workspace.tsconfigPath,
+					workspace.options.maxFiles,
 				)
 			: undefined;
 	// Planned once and used everywhere below: the hint is built from the *full*

@@ -295,6 +295,81 @@ describe("alternate page-object tsconfig diagnosis", () => {
 			],
 		});
 	});
+
+	it("bounds the source files inspected across alternate programs", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/App.ts": "export const app = true;",
+			"e2e-a/tsconfig.json": JSON.stringify({ files: ["Page.ts"] }),
+			"e2e-a/Page.ts":
+				'import { RootPageObject } from "playwright-page-object";\nexport class Page extends RootPageObject {}',
+			"e2e-b/tsconfig.json": JSON.stringify({
+				files: ["Page.ts", "z.ts"],
+			}),
+			"e2e-b/Page.ts":
+				'import { RootPageObject } from "playwright-page-object";\nexport class Page extends RootPageObject {}',
+			"e2e-b/z.ts": "export const z = true;",
+		});
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 1 });
+
+		expect(
+			findPageObjectTsConfigCandidates(ws.project, root, ws.tsconfigPath, 2),
+		).toEqual({
+			candidates: [
+				{
+					file: "e2e-a/tsconfig.json",
+					filesCovered: 1,
+					filesImportingLibrary: 1,
+				},
+			],
+			truncated: true,
+		});
+		expect(
+			findPageObjectTsConfigCandidates(ws.project, root, ws.tsconfigPath, 3),
+		).toEqual({
+			candidates: [
+				{
+					file: "e2e-a/tsconfig.json",
+					filesCovered: 1,
+					filesImportingLibrary: 1,
+				},
+				{
+					file: "e2e-b/tsconfig.json",
+					filesCovered: 2,
+					filesImportingLibrary: 1,
+				},
+			],
+		});
+	});
+
+	it("reuses source probes shared by alternate programs", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/App.ts": "export const app = true;",
+			"shared/Page.ts":
+				'import { RootPageObject } from "playwright-page-object";\nexport class Page extends RootPageObject {}',
+			"e2e-a/tsconfig.json": JSON.stringify({ files: ["../shared/Page.ts"] }),
+			"e2e-b/tsconfig.json": JSON.stringify({ files: ["../shared/Page.ts"] }),
+		});
+		const ws = pool.acquire({ projectRoot: root, maxFiles: 1 });
+
+		expect(
+			findPageObjectTsConfigCandidates(ws.project, root, ws.tsconfigPath, 1),
+		).toEqual({
+			candidates: [
+				{
+					file: "e2e-a/tsconfig.json",
+					filesCovered: 1,
+					filesImportingLibrary: 1,
+				},
+				{
+					file: "e2e-b/tsconfig.json",
+					filesCovered: 1,
+					filesImportingLibrary: 1,
+				},
+			],
+		});
+	});
 });
 
 /**
