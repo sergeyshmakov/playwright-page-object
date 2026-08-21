@@ -58,7 +58,7 @@ test("removes the first cart item", async ({ checkoutPage }) => {
 });
 ```
 
-**Adding an accessor to an existing page object** is the same first two calls: check the tree so you do not duplicate one, then `map_coverage {"class": "…", "buckets": ["uncoveredTestIds"]}` for rendered IDs nothing selects yet. Each entry carries a ready-to-paste `suggestion` such as `@Selector("ApplyPromoButton")`.
+**Adding an accessor to an existing page object** is the same first two calls: check the tree so you do not duplicate one, then `map_coverage {"class": "…", "buckets": ["uncoveredTestIds"]}` for rendered IDs nothing selects yet. Each entry carries a ready-to-paste `suggestion` such as `@Selector("ApplyPromoButton")` and every source site under `occurrences[].loc`; `conditional` and `repeated` on the occurrence help distinguish singleton from list-shaped UI.
 
 ## How do I fix a locator that times out?
 
@@ -70,7 +70,7 @@ Ask what UI source proves reaches a host element before you ask what changed:
 Two results look like failures and are not:
 
 - **An empty lookup for a prefix.** `@ListSelector("Row")` matches `Row_1`, `Row_2`, … and nothing renders `Row` itself. The response says so and suggests trying `Row_0`. The selector is not dead.
-- **Every occurrence `reach: "component-prop"`.** The ID is written on a component tag and nothing proved the component forwards it to a host element. It may not be in the DOM at all — read the component before writing a selector for it, or see [`--assume-forwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding) if your design system forwards as a rule.
+- **Every occurrence `reach: "component-prop"`.** The ID is written on a component tag and nothing proved the component forwards it to a host element. It may not be in the DOM at all — read the component before writing a selector for it, or re-call with `assumeForwarded: true` if your design system forwards as a rule. [`--assume-forwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding) sets that default; `false` restores conservative interpretation for one call.
 
 ## How do I rename a test ID without breaking the suite?
 
@@ -109,7 +109,7 @@ Whether "not found" is conclusive depends on the response type and scan scope:
 | `get_testid_tree {"testId": …}` | Independent of tree fidelity and authoritative for explicit static or pattern declarations in the scanned JSX/TSX. It cannot rule out unresolved spreads or out-of-scope source |
 | `deadSelectors` entry with `scopeIncomplete: true` | Unverified. Part of the UI was invisible to this run |
 | An occurrence with `reach: "component-prop"` | Unproven, not absent. It reaches the DOM only if the component forwards it |
-| `uncoveredTestIds` without `includeRawLocators: true` | Not "untested" — direct `getByTestId` calls were not scanned |
+| `uncoveredTestIds` without `includeRawLocators: true` | Not "untested" — direct `getByTestId`-family calls and exact test-ID fragments inside page-object `locator()` expressions were not scanned |
 
 The same care applies to the numbers:
 

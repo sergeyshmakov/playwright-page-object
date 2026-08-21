@@ -65,6 +65,9 @@ That means `repeat` warnings of this code are still in force and their text has 
 | Field | Tools | Meaning |
 | --- | --- | --- |
 | `root` | `list_page_objects`, `get_page_object_tree` | Absolute path of the analyzed project root |
+| `tsconfig` | `list_page_objects` | Project-relative config that supplied the analyzed program, or absent for the fallback source scan |
+| `tsconfigCandidates` | `list_page_objects` | Only when the index is empty: up to five other configs whose file sets contain direct `playwright-page-object` imports, with `file`, `filesCovered`, and `filesImportingLibrary` |
+| `tsconfigCandidatesTruncated` | `list_page_objects` | More configs or candidates existed than the bounded empty-index diagnostic reported |
 | `attribute` | all | Test-ID attribute this call read the sources with |
 | `attributeSource` | all | `"param"`, `"playwright-config"`, or `"default"` |
 | `playwrightConfig` | all | Project-relative path of the config that was read; absent when none was found |
@@ -86,7 +89,7 @@ That means `repeat` warnings of this code are still in force and their text has 
 | `coverageId` | `map_coverage`, `query_coverage` | Opaque handle to this exact report, spent by `query_coverage` |
 | `nextOffset` | `map_coverage`, `query_coverage` | Where the next page of a cut list starts. Its absence means the list is exhausted |
 | `truncatedBuckets` | `map_coverage`, `query_coverage` | Lists the size cap cut below what `limit` had already selected |
-| `assumeForwarded` | `map_coverage`, `query_coverage` | The server runs with `--assume-forwarded` |
+| `assumeForwarded` | `get_testid_tree`, `map_coverage`, `query_coverage` | The effective forwarding assumption is true for this lookup or report. It may come from the tool argument or the server default; false is omitted |
 
 `attributeSource` is worth reading on every call. `"default"` means no config set `use.testIdAttribute` and Playwright's `data-testid` was assumed, which is correct for most repositories and wrong for the ones that migrated away from it.
 
@@ -284,6 +287,7 @@ The tool has two modes. A tree call uses `file`, `component`, `depth`, `followCo
 | `depth` | integer 1 to 10 | `4` | |
 | `followComponents` | boolean | `true` | Inline the subtrees of child components imported from other files |
 | `attribute` | string | optional | Per-call override of the resolved test-ID attribute |
+| `assumeForwarded` | boolean | server default, otherwise `false` | Interpret component-prop occurrences as rendered for this lookup. Explicit `false` overrides `--assume-forwarded`; source evidence still says `reach: "component-prop"` |
 | `format` | `"json"` \| `"outline"` | `"outline"` | Outline is the default because it is 4.6× smaller on the same tree. Pass `"json"` when something parses fields. Tree mode only — lookup mode always returns JSON occurrences |
 
 With neither `file` nor `component`, the walk starts from the auto-detected app entry.
@@ -395,8 +399,9 @@ The same call with `followComponents: false` from the app entry shows the other 
 | `class` | string | optional | Narrow the page-object side to the file declaring this class |
 | `file` | string | optional | Limit the page-object side to one file, spelled as `list_page_objects` reports it. A leading `./` and Windows separators are accepted |
 | `attribute` | string | optional | Per-call override of the test-ID attribute |
+| `assumeForwarded` | boolean | server default, otherwise `false` | Treat component-prop IDs as rendered for this report. Explicit `false` overrides `--assume-forwarded` |
 | `includeUnused` | boolean | `true`, or `false` when `class`/`file` is set | Include `uncoveredTestIds`. Ignored when `buckets` is given |
-| `includeRawLocators` | boolean | `false` | Also scan for direct `getByTestId` / `getItemByTestId` / `filterByItemTestId` / `filterByHasTestId` calls |
+| `includeRawLocators` | boolean | `false` | Also scan for direct `getByTestId` / `getItemByTestId` / `filterByItemTestId` / `filterByHasTestId` calls and exact test-ID equality fragments inside `locator()` expressions in discovered page-object classes |
 | `buckets` | array | optional | Return only these lists. `[]` returns `summary` and `scope` alone. Wins over `includeUnused`, which is then echoed in `meta.ignored` |
 | `limit` | integer 1 to 200 | `50` | Per bucket. A coverage entry averages ~800 bytes, so even 200 is a large response; the ceiling exists so the schema cannot advertise a page nobody should ask for |
 | `offset` | integer ≥ 0 | `0` | Applied to every returned bucket. To page one list, prefer `query_coverage` |
@@ -411,12 +416,14 @@ Omit `class` and `file` to scan the whole project. Scoping happens by path, so `
 
 | Bucket | Contents |
 | --- | --- |
-| `matched` | Selector/ID pairs with a `confidence` of `exact`, `pattern`, `regex`, `probe`, or `prefix`; see below, because `confidence` is not certainty |
-| `uncoveredTestIds` | Host-element test IDs that no page-object test-ID selector covers, each with a ready-to-paste decorator `suggestion` |
-| `deadSelectors` | Page-object test-ID selectors with no match among visible host-element IDs, with `nearestTestIds` suggestions |
-| `nonTestIdSelectors` | Role, text, label, placeholder, alt and title selectors. Reported for awareness and never counted as dead |
-| `unknownSelectors` | Selectors that could be neither matched nor called dead, with the evidence that was found |
-| `unknownTestIds` | Test-ID occurrences the scanner cannot place on a rendered host element: `dynamic-value`, `forwarding-unproven`, or `unanchored-pattern` |
+| `matched` | `selector`, `ui`, `confidence`, and optional `probe`, `forwarding`, `unprovenOccurrences`, `unprovenAt`. `confidence` is `exact`, `pattern`, `regex`, `probe`, or `prefix`; see below, because it is not certainty |
+| `uncoveredTestIds` | `id` (not `testId`), `patternSource`, `occurrences`, `suggestion`, and optional `assumed`, `speculativeSelectors`. Every occurrence retains its render `loc`, `conditional`, and `repeated` evidence |
+| `deadSelectors` | `defId`, `memberPath`, `loc`, `text`, `origin`, `nearestTestIds`, and optional `scopeIncomplete` for a test-ID selector with no visible host-element match |
+| `nonTestIdSelectors` | `kind`, `defId`, `memberPath`, `loc`, `text` for role, text, label, placeholder, alt, and title selectors. Reported for awareness and never counted as dead |
+| `unknownSelectors` | `defId`, `memberPath`, `loc`, `reason`, `raw`, `origin`, and optional `evidence` for a selector that could be neither matched nor called dead |
+| `unknownTestIds` | `reason`, `occurrence`, and optional `patternSource` for `dynamic-value`, `forwarding-unproven`, or `unanchored-pattern` evidence |
+
+For an uncovered ID, the actionable render path is `occurrences[].loc.file` and `occurrences[].loc.line`, with `loc.column` when available. `conditional: true` and `repeated: true` stay on each occurrence, so a caller can see both where the ID renders and whether a list selector may be appropriate. The array is intentional: the same ID can render at more than one source site, which a single `renderedIn` field would lose.
 
 ### `confidence` is how the string matched, not whether the selector works
 
@@ -494,7 +501,7 @@ The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by def
 			{
 				"code": "raw-locators-disabled",
 				"severity": "info",
-				"message": "Direct locator calls … were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them."
+				"message": "Direct locator calls … and exact test-id attributes inside locator() expressions in page-object classes were not scanned; an uncovered test id does not necessarily mean it is untested. Re-run with includeRawLocators: true to include them."
 			}
 		]
 	}
@@ -503,11 +510,13 @@ The same asymmetry is why `uncoveredTestIds` is left out of a scoped call by def
 
 `ApplyPromoButton` has no page-object test-ID selector because both page objects reach the button by role. It appears under `uncoveredTestIds`, but it is not unused. This distinction helps an agent reuse the existing role selector instead of adding another locator.
 
+Its render site is already in `occurrences[0].loc`; if the JSX were inside a branch or `.map(...)`, that same occurrence would also carry `conditional: true` or `repeated: true`. IDs promoted by `assumeForwarded` carry `assumed: true`; matching selector/ID pairs additionally carry `forwarding: "assumed"`.
+
 ---
 
 ## `query_coverage`
 
-`query_coverage` pages one bucket of a report `map_coverage` has already built, addressed by the opaque `meta.coverageId` that call returned. Use it to walk a long list to its end without restating the original scope, which the handle carries.
+`query_coverage` pages one bucket of a report `map_coverage` has already built, addressed by the opaque `meta.coverageId` that call returned. Use it to walk a long list to its end without restating the original class, file, attribute, raw-locator, or forwarding scope, which the handle carries.
 
 ### Parameters
 

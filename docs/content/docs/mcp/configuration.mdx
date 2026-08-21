@@ -23,7 +23,7 @@ If the server is not connected yet, follow the [quick start](/mcp/quick-start/) 
 | Wrong Playwright config selected | `--playwright-config` |
 | Computed test-ID attribute | `--attribute` |
 | Oversized scan | `--src-dir` |
-| Components routinely forward test-ID props | `--assume-forwarded` |
+| Components routinely forward test-ID props | Per-call `assumeForwarded: true`, or `--assume-forwarded` as the server default |
 
 ## Which CLI options are available?
 
@@ -39,7 +39,7 @@ npx playwright-page-object mcp [options]
 | `--src-dir <dir>` | tsconfig `include` | Restrict scanning to this directory. Repeatable |
 | `--attribute <name>` | see below | Test-ID attribute name |
 | `--max-files <n>` | `8000` | Cap on files parsed. Roughly 0.13 MB of RSS per file, so the default ceiling is about a gigabyte |
-| `--assume-forwarded` | off | Count a test ID written on a component tag as rendered in `map_coverage` |
+| `--assume-forwarded` | off | Default `assumeForwarded` to true for `map_coverage` and `get_testid_tree`; either tool can override it per call |
 | `--log-level <level>` | `error` | stderr verbosity: `silent`, `error`, `info`, `debug` |
 
 The server logs only to stderr. stdout carries the JSON-RPC stream, so changing `--log-level` does not mix log messages into the protocol.
@@ -60,6 +60,8 @@ $ npx playwright-page-object mcp --project-root example --src-dir nope
 
 Run the same command in a terminal when an MCP client reports a startup failure. The stderr message usually identifies the invalid path directly.
 
+A bad relative `--tsconfig` reports the absolute path it resolved, the `--project-root` used as its base, and—when the path instead resolves from the shell's cwd to a real file inside that root—a root-relative `did you mean --tsconfig …?` suggestion. This makes the path base explicit without changing the rule that all relative server paths resolve from `--project-root`.
+
 ## How does the server choose a tsconfig?
 
 In order:
@@ -70,6 +72,8 @@ In order:
 4. None. The server falls back to synthesized compiler options and a `**/*.{ts,tsx,mts,cts,jsx}` scan, and reports a `no-tsconfig` diagnostic.
 
 `testDir` comes from the Playwright config. A relative value resolves against the directory of the config layer that wrote it, an absent one means the config's own directory (Playwright's default), and a computed one is left unknown with a `testdir-unresolved` note rather than guessed.
+
+If `list_page_objects` finds zero classes, it performs a bounded, demand-driven check of other `tsconfig*.json` files under the project root. `meta.tsconfig` names the selected program and `meta.tsconfigCandidates` lists alternatives whose file sets contain direct `playwright-page-object` imports, including the number of analyzable and importing files. The hint recommends the strongest candidate. This probe runs only for an empty index, so healthy calls do not pay to expand every sibling config.
 
 ## How does the server choose a Playwright config?
 
@@ -211,7 +215,7 @@ The server checks files already loaded in the workspace on every tool call. It r
 
 **No restart needed:** editing a page object, editing a component, adding or deleting either, or editing the Playwright config. New files are normally visible on the next call because their directory changed. If a file is created inside a pre-existing nested directory with no loaded source, discovery can take up to one second. Newly created Playwright configs follow that same rescan path.
 
-**Restart needed:** any change to a CLI flag. The flags define the server's workspace, so a different `--attribute`, `--src-dir`, `--project-root`, `--playwright-config`, `--tsconfig`, `--max-files`, or `--assume-forwarded` requires a new process. Moving page objects outside the scanned directories also requires a new `--src-dir` value.
+**Restart needed:** any change to a CLI flag. The flags define the server's workspace, so a different `--attribute`, `--src-dir`, `--project-root`, `--playwright-config`, `--tsconfig`, or `--max-files` requires a new process. Changing `--assume-forwarded` also changes the server default, but `map_coverage` and `get_testid_tree` can answer either way immediately through their per-call `assumeForwarded` argument. Moving page objects outside the scanned directories requires a new workspace scope.
 
 ## When should I assume prop forwarding?
 
@@ -223,13 +227,15 @@ A test ID written on a component tag reaches the DOM only if that component pass
 
 By default the server does not assume it does. The occurrence is recorded with `reach: "component-prop"`, kept out of the rendered side of `map_coverage`, and any selector matching only it lands in `unknownSelectors` rather than in `matched` or `deadSelectors`.
 
-Component libraries that forward props as a rule make that conservative. `--assume-forwarded` promotes those IDs to rendered, with three labeling guarantees:
+Component libraries that forward props as a rule make that conservative. Pass `assumeForwarded: true` to `map_coverage` or a `get_testid_tree` lookup to apply that interpretation for one call. Pass `false` to restore the conservative interpretation even when the server started with `--assume-forwarded`; the CLI flag is only the default.
 
-- `meta.assumeForwarded: true` on every `map_coverage` response.
+Coverage promotion has three labeling guarantees:
+
+- `meta.assumeForwarded: true` on the response and on pages read through its coverage handle.
 - A `forwarding-assumed` warning counting the promoted IDs.
-- `forwarding: "assumed"` on every affected entry in `matched`, and `assumed: true` on the affected ID groups.
+- `assumed: true` on every promoted ID in `matched[].ui` or `uncoveredTestIds`, and `forwarding: "assumed"` on every affected entry in `matched`.
 
-Nothing is silently upgraded, so you can always tell a proven match from an assumed one. It is a server-level flag rather than a tool argument so every `map_coverage` call from that server uses the same classification. Other tools still report the source evidence without applying the assumption.
+Nothing is silently upgraded, so you can always tell a proven match from an assumed one. A `get_testid_tree` lookup also preserves `reach: "component-prop"` on every occurrence: the argument changes the interpretation and hint, not the source evidence.
 
 One number moves in the direction you may not expect: `summary.uiTestIds` **falls**. An ID written as a prop and the host element it reaches become one ID once forwarding is assumed; before, they were counted separately. In one internal-repository measurement, the count moved from 1,571 to 1,287 while `matched` moved from 627 to 1,430. Nothing was lost: two partial facts merged into one. `coverage` moved little because the assumption grew the numerator and denominator together. Your counts will depend on your component patterns.
 

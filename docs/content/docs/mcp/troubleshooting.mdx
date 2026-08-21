@@ -27,13 +27,17 @@ The hint distinguishes three causes, because two of them are the call's own argu
 
 | Hint says | Cause | Fix |
 | --- | --- | --- |
-| "No classes with playwright-page-object decorators were found" | The index itself is empty | See below |
+| "0 page objects in the analysed program (…)" | The selected TypeScript program contains no discoverable page object | Read `meta.tsconfigCandidates` and the rest of the hint |
 | "No page object matches filter … but the index holds N" | Your `filter` matched nothing | Widen it. The hint lists the closest class names |
 | "offset N is past the end of M result(s)" | You paged past the end | Re-call with a smaller `offset` |
 
-An index that is genuinely empty has two usual causes. Either the page objects are outside the scanned scope, which `--src-dir` fixes, or they do not import from `playwright-page-object` at all. Discovery is evidence-based: a class is indexed because it carries a library decorator, extends a library base class, or is bound in a fixture. A class whose *only* evidence is being passed as a factory argument is a control: `map_coverage` analyzes it, and `list_page_objects` deliberately leaves it out, so a control can be absent from the index and present in the coverage scan. A class that re-exports decorators through a local wrapper module is not recognized.
+An index that is genuinely empty has two usual causes. The selected tsconfig's program does not contain the page-object files, or the files contain no direct evidence of this library. `meta.tsconfig` names the program that was analyzed. When another `tsconfig*.json` under the project root selects files that directly import `playwright-page-object`, `meta.tsconfigCandidates` reports up to five candidates with `file`, `filesCovered`, and `filesImportingLibrary`, and the hint gives the exact `--tsconfig` restart command.
 
-Check `meta.scanned` in the same response. A small number there means the scope is wrong, not the discovery.
+Do not reach first for `--src-dir`: it restricts the selected program rather than widening it. Use the candidate `--tsconfig` first. Add repeatable `--src-dir` values only if that config excludes application sources, and then name every application and test directory that must remain in the scan.
+
+When no alternate config qualifies, check that the selected tsconfig includes the page-object files and that those files directly import from `playwright-page-object`. Discovery is evidence-based: a class is indexed because it carries a library decorator, extends a library base class, or is bound in a fixture. A class whose *only* evidence is being passed as a factory argument is a control: `map_coverage` analyzes it, and `list_page_objects` deliberately leaves it out, so a control can be absent from the index and present in the coverage scan. A class that re-exports decorators through a local wrapper module is not recognized.
+
+Check `meta.scanned` in the same response. A small number confirms that the analyzed program is narrower than expected.
 
 ## Why does `map_coverage` say every selector is dead?
 
@@ -97,7 +101,7 @@ $ npx playwright-page-object mcp --project-root apps/web --src-dir missing-src
 --src-dir does not exist: missing-src
 ```
 
-The startup checks require `--project-root` to be a directory and `--tsconfig` and `--playwright-config` to be files. Each non-exclusion `--src-dir` must stay within the project root, must not contain a `..` path segment, and, when it is a plain path rather than a glob, must exist. These mistakes would otherwise invalidate the whole session.
+The startup checks require `--project-root` to be a directory and `--tsconfig` and `--playwright-config` to be files. Each non-exclusion `--src-dir` must stay within the project root, must not contain a `..` path segment, and, when it is a plain path rather than a glob, must exist. These mistakes would otherwise invalidate the whole session. A bad relative `--tsconfig` message prints its absolute resolved path and the `--project-root` used as the base; if the same input resolves from the shell cwd to a real file inside the root, it also suggests the correct root-relative argument.
 
 If the configured command prints the package's top-level help instead of starting, the `mcp` subcommand is missing from `args`. A healthy stdio server can wait silently for an MCP handshake, so use `npx playwright-page-object mcp --help` as the terminal-safe diagnostic. When the package is not installed locally, add `-y` so `npx` cannot block on an install prompt that the client has no TTY to answer.
 
@@ -184,7 +188,7 @@ The `coverageId` you passed to `query_coverage` can no longer be spent. Four cau
 
 The last one is the interesting case, and it is deliberate. A report built before an edit describes a repository that no longer exists — every entry carries a file and a line, and those lines have moved. Continuing to answer from it would produce a page that is wrong in a way nothing in its shape reveals.
 
-Recover by re-calling `map_coverage` with the arguments that produced the ID and using the new `meta.coverageId`. The ID does not carry its own scope in a readable form, so you have to restate `class` / `file` / `attribute` / `includeRawLocators` yourself.
+Recover by re-calling `map_coverage` with the arguments that produced the ID and using the new `meta.coverageId`. The ID does not carry its own scope in a readable form, so you have to restate `class` / `file` / `attribute` / `includeRawLocators` / `assumeForwarded` yourself.
 
 ## Why can `deadSelectors` contain live selectors?
 
@@ -192,10 +196,10 @@ Recover by re-calling `map_coverage` with the arguments that produced the ID and
 
 - Scope: the component lives outside the scanned sources. Look for `ui-scope-incomplete` in `meta.warnings` and for `scope.externalComponentModules`, which names modules supplying component tags the scan could not resolve. If `meta.hint` names a concrete `--project-root`, restart there. Otherwise inspect the named modules directly; installed packages or unresolved modules may not expose a source directory this server can scan. Widening `--src-dir` outside the project root is refused at startup.
 - Dynamic IDs: the element builds its ID at runtime, so it lands in `unknownTestIds` with reason `dynamic-value`. A selector whose literal appears inside that expression is reported as unknown, not dead.
-- Forwarding: the ID is written on a component tag and nothing proved it reaches a host element. Check for `testid-forwarding-unproven` and `forwarding-unproven-widespread`. If your components forward as a rule, restart with [`--assume-forwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding).
+- Forwarding: the ID is written on a component tag and nothing proved it reaches a host element. Check for `testid-forwarding-unproven` and `forwarding-unproven-widespread`. If your components forward as a rule, re-call `map_coverage` with `assumeForwarded: true`; use [`--assume-forwarded`](/mcp/configuration/#when-should-i-assume-prop-forwarding) only when that should be the server default.
 - Attribute: a wrong attribute makes every test-ID selector look dead at once. Check the resolved attribute and its source first.
 
-An ID in `uncoveredTestIds` has no matching page-object test-ID selector. It may still be reached by role, text, or another non-test-ID selector. Direct `getByTestId` calls are excluded by default, so pass `includeRawLocators: true` before concluding that an ID is unused. The `raw-locators-disabled` warning marks reports that skipped that sweep.
+An ID in `uncoveredTestIds` has no matching page-object test-ID selector. It may still be reached by role, text, or another non-test-ID selector. Direct `getByTestId`-family calls and exact test-ID equality fragments inside page-object `locator()` expressions are excluded by default, so pass `includeRawLocators: true` before concluding that an ID is unused. The `raw-locators-disabled` warning marks reports that skipped that sweep. The entry's `occurrences[].loc` points directly to every render site; `conditional` and `repeated` remain on each occurrence.
 
 Ids whose pattern matches everything are quarantined rather than counted, under `unanchored-testid-pattern`. Counted, a single `data-testid={someVariable}` would make every selector in the project look covered and empty the dead list entirely. Give those elements a literal prefix to make them matchable.
 
@@ -279,10 +283,10 @@ Every code the server can put in `meta.warnings` is part of the wire contract, s
 
 | Code | Meaning and next step |
 | --- | --- |
-| `raw-locators-disabled` | Direct `getByTestId`-family calls were not scanned, so an uncovered ID is not necessarily untested. Re-run with `includeRawLocators: true` |
+| `raw-locators-disabled` | Direct `getByTestId`-family calls and exact test-ID equality fragments in page-object `locator()` expressions were not scanned, so an uncovered ID is not necessarily untested. Re-run with `includeRawLocators: true` |
 | `testid-forwarding-unproven` | Some IDs are written as component props with no proof they reach the DOM |
-| `forwarding-unproven-widespread` | Enough selectors land on unproven props that the run is worth repeating with `--assume-forwarded` |
-| `forwarding-assumed` | `--assume-forwarded` is on; the message counts the IDs it promoted, and every affected entry is labeled |
+| `forwarding-unproven-widespread` | Enough selectors land on unproven props that the run is worth repeating with per-call `assumeForwarded: true` |
+| `forwarding-assumed` | The effective forwarding assumption is on; the message counts the IDs it promoted, and every affected ID and match is labeled |
 | `unanchored-testid-pattern` | A pattern matches every possible ID, so it was quarantined rather than allowed to match one. Give those elements a literal prefix |
 | `no-matchable-testids` | Nothing in the scan was matchable, so `summary.coverage` has no denominator and is `null` |
 | `coverage-scope-narrowed` | You scoped the page-object side while the UI side stayed project-wide. `coverage` is `null`; the two counts still ship |
