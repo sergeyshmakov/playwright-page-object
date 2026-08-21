@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://pom.shmakov.tools/sitemap-index.xml

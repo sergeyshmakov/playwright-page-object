@@ -127,9 +127,26 @@ for (const file of [
 	path.join("out", "google9835a2061220351a.html"),
 	path.join("out", "logo.svg"),
 	path.join("out", "robots.txt"),
+	path.join("out", "sitemap.xml"),
 	path.join("out", "blog", "rss.xml"),
 ]) {
 	if (!existsSync(file)) throw new Error(`missing static output: ${file}`);
+}
+
+const robots = await readFile(path.join("out", "robots.txt"), "utf8");
+if (!robots.includes(`Sitemap: ${SITE}/sitemap.xml`)) {
+	throw new Error("robots.txt must advertise /sitemap.xml");
+}
+
+const sitemap = await readFile(path.join("out", "sitemap.xml"), "utf8");
+const sitemapUrls = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)]
+	.map(([, url]) => url)
+	.sort();
+const expectedSitemapUrls = routes.map((route) => `${SITE}${route}`).sort();
+if (JSON.stringify(sitemapUrls) !== JSON.stringify(expectedSitemapUrls)) {
+	throw new Error(
+		`sitemap URLs differ from public routes:\n${JSON.stringify(sitemapUrls, null, 2)}`,
+	);
 }
 
 for (const file of [
