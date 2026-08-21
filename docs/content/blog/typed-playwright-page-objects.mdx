@@ -1,5 +1,5 @@
 ---
-title: "How to Build Typed Playwright Page Objects with Decorators"
+title: "How to build typed Playwright page objects with decorators"
 description: "Raw Playwright page objects get repetitive, and POM base classes grow teeth. Here's a typed, decorator-based pattern in TypeScript with no inheritance."
 date: 2026-06-07
 authors: sergei
@@ -152,26 +152,53 @@ The [Quick Start](/getting-started/quick-start/) is a complete working example i
 
 ## FAQ
 
-### Is playwright-page-object a framework or a library?
+<BlogFaq>
+<BlogFaqItem
+  id="is-playwright-page-object-a-framework-or-a-library"
+  title="Is playwright-page-object a framework or a library?"
+>
 
 A library, and a small one. It adds decorators and a couple of optional base classes to the standard `@playwright/test` runner. There's no bespoke test command, no config file it owns, and no runtime it boots. Your existing Playwright setup keeps working; you opt into the page object layer file by file.
 
-### Does it work with the standard @playwright/test runner?
+</BlogFaqItem>
+<BlogFaqItem
+  id="does-it-work-with-the-standard-playwrighttest-runner"
+  title="Does it work with the standard @playwright/test runner?"
+>
 
 Yes. Page objects are plain TypeScript classes. Instantiate one with `new CheckoutPage(page)` inside a test, or wire it through `createFixtures` so it arrives as a fixture argument. Nothing about the runner, reporters, or `playwright.config.ts` changes.
 
-### What is the TypeScript `accessor` keyword?
+</BlogFaqItem>
+<BlogFaqItem
+  id="what-is-the-typescript-accessor-keyword"
+  title="What is the TypeScript accessor keyword?"
+>
 
 `accessor` is a TypeScript 5.0 (and ECMAScript Stage-3) feature that declares an auto-implemented getter/setter pair backed by a private field. Decorators can wrap that getter, which is how this library returns a freshly resolved `Locator` on every read. The [TypeScript 5.0 notes](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html) cover the syntax.
 
-### Do I need `experimentalDecorators` in my tsconfig?
+</BlogFaqItem>
+<BlogFaqItem
+  id="do-i-need-experimentaldecorators-in-my-tsconfig"
+  title="Do I need experimentalDecorators in my tsconfig?"
+>
 
 No. The library uses standard ECMAScript decorators, supported natively in TypeScript 5.0+, so the legacy `experimentalDecorators` flag stays off. Target `ES2015` or higher (`ES2022` is a good default) and you're set. See [Installation](/getting-started/installation/) for the full requirements.
 
-### Can I use Playwright page objects without inheritance?
+</BlogFaqItem>
+<BlogFaqItem
+  id="can-i-use-playwright-page-objects-without-inheritance"
+  title="Can I use Playwright page objects without inheritance?"
+>
 
 Yes, and that's the default. A plain class with `@RootSelector` and `accessor` properties needs no base class. If you drop `@RootSelector`, selectors chain from `page.locator("body")` instead. The built-in `PageObject` base exists only for the cases that want its wait helpers, and it's opt-in.
 
-### Does this reduce flaky Playwright tests?
+</BlogFaqItem>
+<BlogFaqItem
+  id="does-this-reduce-flaky-playwright-tests"
+  title="Does this reduce flaky Playwright tests?"
+>
 
 It removes one specific cause: stale cached locator references. Because accessors rebuild the chain on every access, a page re-render between two `await`s can't leave you holding an outdated handle. It won't fix flakiness from application races or network timing, which is what Playwright's [auto-waiting](https://playwright.dev/docs/actionability) is for.
+
+</BlogFaqItem>
+</BlogFaq>

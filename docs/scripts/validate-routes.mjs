@@ -16,10 +16,12 @@ const routes = [
 	"/api/root-page-object/",
 	"/blog/",
 	"/blog/authors/sergei-shmakov/",
+	"/blog/openspec-playwright-tests-ai-agents/",
 	"/blog/playwright-page-object-mcp-server/",
 	"/blog/tags/ai-agents/",
 	"/blog/tags/e2e/",
 	"/blog/tags/mcp/",
+	"/blog/tags/openspec/",
 	"/blog/tags/page-object-model/",
 	"/blog/tags/playwright/",
 	"/blog/tags/test-automation/",
@@ -56,6 +58,7 @@ const exactTitles = new Map([
 	["/blog/tags/ai-agents/", "AI Agents | playwright-page-object"],
 	["/blog/tags/e2e/", "E2E | playwright-page-object"],
 	["/blog/tags/mcp/", "MCP | playwright-page-object"],
+	["/blog/tags/openspec/", "OpenSpec | playwright-page-object"],
 	[
 		"/blog/tags/page-object-model/",
 		"Page Object Model | playwright-page-object",
@@ -64,12 +67,16 @@ const exactTitles = new Map([
 	["/blog/tags/test-automation/", "Test Automation | playwright-page-object"],
 	["/blog/tags/typescript/", "TypeScript | playwright-page-object"],
 	[
+		"/blog/openspec-playwright-tests-ai-agents/",
+		"OpenSpec to Playwright tests with AI agents",
+	],
+	[
 		"/blog/playwright-page-object-mcp-server/",
-		"Why AI Agents Guess Playwright Selectors | POM MCP",
+		"Why AI agents guess Playwright selectors | POM MCP",
 	],
 	[
 		"/blog/typed-playwright-page-objects/",
-		"How to Build Typed Playwright Page Objects with Decorators | playwright-page-object",
+		"How to build typed Playwright page objects with decorators | playwright-page-object",
 	],
 	["/mcp/", "Playwright Page Object MCP Server | playwright-page-object"],
 	["/mcp/configuration/", "Playwright Page Object MCP Configuration"],
@@ -79,6 +86,56 @@ const exactTitles = new Map([
 	["/mcp/tools/", "Playwright Page Object MCP Tool Reference"],
 	["/mcp/troubleshooting/", "Playwright Page Object MCP Troubleshooting"],
 	["/mcp/workflows/", "Playwright Page Object MCP Workflow Guide"],
+]);
+
+const exactHeadings = new Map([
+	[
+		"/blog/openspec-playwright-tests-ai-agents/",
+		"From OpenSpec to Playwright tests with AI agents",
+	],
+	[
+		"/blog/playwright-page-object-mcp-server/",
+		"Why AI agents guess Playwright selectors and how MCP helps",
+	],
+	[
+		"/blog/typed-playwright-page-objects/",
+		"How to build typed Playwright page objects with decorators",
+	],
+]);
+
+const faqAnchors = new Map([
+	[
+		"/blog/openspec-playwright-tests-ai-agents/",
+		[
+			"does-openspec-generate-playwright-tests",
+			"are-test-ids-required-for-playwright-tests-with-ai-agents",
+			"is-this-the-same-as-playwright-test-agents",
+			"can-mcp-coverage-replace-running-playwright",
+			"when-should-the-openspec-change-be-archived",
+		],
+	],
+	[
+		"/blog/playwright-page-object-mcp-server/",
+		[
+			"does-the-mcp-server-work-with-data-tid-or-other-custom-attributes",
+			"does-it-execute-my-code-or-launch-a-browser",
+			"do-i-need-the-playwright-page-object-decorators-for-it-to-be-useful",
+			"which-mcp-clients-does-it-support",
+			"does-it-work-in-a-monorepo",
+			"how-fresh-are-the-results",
+		],
+	],
+	[
+		"/blog/typed-playwright-page-objects/",
+		[
+			"is-playwright-page-object-a-framework-or-a-library",
+			"does-it-work-with-the-standard-playwrighttest-runner",
+			"what-is-the-typescript-accessor-keyword",
+			"do-i-need-experimentaldecorators-in-my-tsconfig",
+			"can-i-use-playwright-page-objects-without-inheritance",
+			"does-this-reduce-flaky-playwright-tests",
+		],
+	],
 ]);
 
 function fileForRoute(route) {
@@ -119,12 +176,47 @@ for (const route of routes) {
 			throw new Error(`${route}: title is ${title}; expected ${expectedTitle}`);
 		}
 	}
+
+	const expectedHeading = exactHeadings.get(route);
+	if (expectedHeading) {
+		const heading = match(html, /<h1[^>]*>(.*?)<\/h1>/, "H1", route);
+		if (heading !== expectedHeading) {
+			throw new Error(
+				`${route}: H1 is ${heading}; expected ${expectedHeading}`,
+			);
+		}
+	}
+
+	for (const anchor of faqAnchors.get(route) ?? []) {
+		if (!html.includes(`id="${anchor}"`)) {
+			throw new Error(`${route}: missing FAQ anchor #${anchor}`);
+		}
+	}
+}
+
+const mermaidRoute = "/blog/openspec-playwright-tests-ai-agents/";
+const mermaidHtml = await readFile(fileForRoute(mermaidRoute), "utf8");
+const mermaidMarkers = mermaidHtml.match(/data-mermaid-diagram="true"/g) ?? [];
+const renderedMermaid =
+	mermaidHtml.match(
+		/data-mermaid-diagram="true"[^>]*><svg[\s\S]*?<\/svg><\/div>/g,
+	) ?? [];
+if (mermaidMarkers.length !== 1 || renderedMermaid.length !== 1) {
+	throw new Error(
+		`${mermaidRoute}: expected 1 server-rendered Mermaid diagram; found ${mermaidMarkers.length} markers and ${renderedMermaid.length} SVGs`,
+	);
+}
+
+const workflowImage = "/images/blog/openspec-playwright-agent-workflow.webp";
+if (!mermaidHtml.includes(`src="${workflowImage}"`)) {
+	throw new Error(`${mermaidRoute}: missing workflow image ${workflowImage}`);
 }
 
 for (const file of [
 	path.join("out", "404.html"),
 	path.join("out", "favicon.svg"),
 	path.join("out", "google9835a2061220351a.html"),
+	path.join("out", "images", "blog", "openspec-playwright-agent-workflow.webp"),
 	path.join("out", "logo.svg"),
 	path.join("out", "robots.txt"),
 	path.join("out", "sitemap.xml"),

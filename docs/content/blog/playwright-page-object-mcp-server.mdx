@@ -1,9 +1,9 @@
 ---
-title: "Why AI Agents Guess Playwright Selectors, and How MCP Helps"
+title: "Why AI agents guess Playwright selectors and how MCP helps"
 description: "Why AI agents invent Playwright selectors, and how five local MCP tools expose page-object graphs and JSX/TSX test IDs before coding."
 head:
   - tag: title
-    content: "Why AI Agents Guess Playwright Selectors | POM MCP"
+    content: "Why AI agents guess Playwright selectors | POM MCP"
 date: 2026-08-06
 lastUpdated: 2026-08-12
 authors: sergei
@@ -125,29 +125,56 @@ The server also isn't a substitute for knowing the library. Pair it with the [Ag
 
 ## FAQ
 
-### Does the MCP server work with data-tid or other custom attributes?
+<BlogFaq>
+<BlogFaqItem
+  id="does-the-mcp-server-work-with-data-tid-or-other-custom-attributes"
+  title="Does the MCP server work with data-tid or other custom attributes?"
+>
 
 Yes. It searches the repository for your Playwright config, reads `use.testIdAttribute` across supported merge layers and imported base configs, and falls back to `data-testid`. If that attribute appears nowhere in the scanned components, the response can suggest a stronger candidate. For computed configs, pass `--attribute data-tid` when registering the server. `get_testid_tree` and `map_coverage` also accept per-call overrides.
 
-### Does it execute my code or launch a browser?
+</BlogFaqItem>
+<BlogFaqItem
+  id="does-it-execute-my-code-or-launch-a-browser"
+  title="Does it execute my code or launch a browser?"
+>
 
 No. The analyzer reads TypeScript, JSX, and TSX source without running your app, launching Playwright, or making network requests. It returns results to the MCP client, so review that client's data-handling policy before using it with private code. If the package is not installed locally, `npx` may contact npm during setup.
 
-### Do I need the playwright-page-object decorators for it to be useful?
+</BlogFaqItem>
+<BlogFaqItem
+  id="do-i-need-the-playwright-page-object-decorators-for-it-to-be-useful"
+  title="Do I need the playwright-page-object decorators for it to be useful?"
+>
 
 The page-object tools, `list_page_objects` and `get_page_object_tree`, need classes the library can identify through decorators, base classes, or fixtures. Factory relationships can then expand the nested controls of those discovered classes. `get_testid_tree` can build a flat inventory from JSX or TSX without those decorators, although tree fidelity depends on component patterns it can resolve. `map_coverage` needs both page-object selectors and UI source.
 
-### Which MCP clients does it support?
+</BlogFaqItem>
+<BlogFaqItem
+  id="which-mcp-clients-does-it-support"
+  title="Which MCP clients does it support?"
+>
 
 Any MCP client that can launch a local stdio server, including Claude Code, Cursor, VS Code, and Codex CLI. The server speaks the standard protocol over stdin/stdout. Registration snippets for each client are in the [quick start](/mcp/quick-start/).
 
-### Does it work in a monorepo?
+</BlogFaqItem>
+<BlogFaqItem
+  id="does-it-work-in-a-monorepo"
+  title="Does it work in a monorepo?"
+>
 
 Yes, per app. Run one server per package with `--project-root apps/web`, and add `--attribute` if apps use different test-ID attributes. A single server pointed at the monorepo root also works up to the configurable `--max-files` cap. When component tags resolve outside the scanned scope, `map_coverage` adds a `ui-scope-incomplete` warning before you act on an absent ID.
 
-### How fresh are the results?
+</BlogFaqItem>
+<BlogFaqItem
+  id="how-fresh-are-the-results"
+  title="How fresh are the results?"
+>
 
 Edits to files already loaded in the workspace and deletions are reflected on the next tool call. Creating a file normally changes a scanned directory and triggers immediate discovery. In the remaining case, a new file inside a pre-existing nested directory with no loaded source, the one-second rescan interval is the backstop. New Playwright configs follow the same rescan. No restart is required for source changes; restart only when you change server flags such as `--project-root`, `--src-dir`, or `--attribute`.
+
+</BlogFaqItem>
+</BlogFaq>
 
 ---
 
