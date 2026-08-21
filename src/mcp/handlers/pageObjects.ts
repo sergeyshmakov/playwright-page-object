@@ -2,6 +2,7 @@ import type * as z from "zod";
 import {
 	buildPageObjectTree,
 	discoverPageObjects,
+	findPageObjectTsConfigCandidates,
 	type Workspace,
 } from "../../analysis";
 import { apiHintsFor } from "../api";
@@ -43,6 +44,14 @@ export function handleListPageObjects(
 	const offset = args.offset;
 	const shown = items.slice(offset, offset + args.limit);
 	const end = offset + shown.length;
+	const alternatives =
+		index.pageObjects.length === 0
+			? findPageObjectTsConfigCandidates(
+					workspace.project,
+					workspace.root,
+					workspace.tsconfigPath,
+				)
+			: undefined;
 	// Planned once and used everywhere below: the hint is built from the *full*
 	// warnings, because `environmentHint` reads their `data`, and an abbreviated
 	// warning has none. That split is the whole safety net - the advice survives
@@ -53,6 +62,9 @@ export function handleListPageObjects(
 		shown.map(summaryEntry),
 		{
 			root: index.projectRoot,
+			tsconfig: index.tsconfig,
+			tsconfigCandidates: alternatives?.candidates,
+			tsconfigCandidatesTruncated: alternatives?.truncated,
 			attribute: index.testIdAttribute,
 			attributeSource: index.testIdAttributeSource,
 			playwrightConfig: configFileOf(workspace),
@@ -66,7 +78,12 @@ export function handleListPageObjects(
 			hint: withEnvironmentHint(
 				index.warnings,
 				shown.length === 0
-					? listEmptyHint(args.filter, offset, total, index.pageObjects)
+					? listEmptyHint(args.filter, offset, total, index.pageObjects, {
+							tsconfig: index.tsconfig,
+							scanned: index.stats.filesScanned,
+							candidates: alternatives?.candidates ?? [],
+							candidatesTruncated: alternatives?.truncated,
+						})
 					: undefined,
 			),
 		},

@@ -3,13 +3,37 @@ import {
 	nearestIds,
 	nearestNames,
 	type PageObjectSummary,
+	type PageObjectTsConfigCandidate,
 } from "../../analysis";
 import { hintForSuggestions, ToolError } from "../errors";
 import { MAX_ERROR_LIST } from "../respond";
 import { isScannedFile } from "./paths";
 
-const EMPTY_INDEX_HINT =
-	'No classes with playwright-page-object decorators were found. If your page objects live elsewhere, restart the server with --src-dir <dir>; also check that those files import from "playwright-page-object".';
+export interface EmptyIndexContext {
+	tsconfig: string | null;
+	scanned: number;
+	candidates: PageObjectTsConfigCandidate[];
+	candidatesTruncated?: true;
+}
+
+function emptyIndexHint(context: EmptyIndexContext): string {
+	const program = context.tsconfig ?? "no tsconfig (fallback source scan)";
+	const lead = `0 page objects in the analysed program (${program}, ${context.scanned} files).`;
+	if (context.candidates.length === 0) {
+		return `${lead} No other tsconfig under the project root selects a source file that imports "playwright-page-object". Check that the page-object files are included by the selected tsconfig, or restart with the correct --tsconfig; use --src-dir only when you can name every application and test source directory that must remain in scope.`;
+	}
+	const candidates = context.candidates
+		.map(
+			(candidate) =>
+				`${candidate.file} covers ${candidate.filesImportingLibrary} file(s) that import "playwright-page-object" (${candidate.filesCovered} analysable files total).`,
+		)
+		.join(" ");
+	const truncated = context.candidatesTruncated
+		? " Additional tsconfigs were omitted from this bounded diagnostic."
+		: "";
+	const preferred = context.candidates[0]?.file ?? "<other tsconfig>";
+	return `${lead} ${candidates}${truncated} Restart the MCP server with --tsconfig ${JSON.stringify(preferred)}. If that config excludes application sources, also pass --src-dir for every application and test source directory that must remain in the scan.`;
+}
 
 /**
  * What to say when the page came back empty.
@@ -25,9 +49,10 @@ export function listEmptyHint(
 	offset: number,
 	total: number,
 	indexed: PageObjectSummary[],
+	emptyContext?: EmptyIndexContext,
 ): string | undefined {
 	if (indexed.length === 0) {
-		return EMPTY_INDEX_HINT;
+		return emptyContext ? emptyIndexHint(emptyContext) : undefined;
 	}
 	if (total === 0) {
 		const nearest = nearestIds(

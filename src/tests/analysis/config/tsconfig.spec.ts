@@ -10,6 +10,7 @@ import {
 	synthesizedCompilerOptions,
 	tsConfigFileNames,
 } from "../../../analysis/config/tsconfig";
+import { findPageObjectTsConfigCandidates } from "../../../analysis/config/tsconfigAlternatives";
 import { AnalysisLimitError } from "../../../analysis/diagnostics";
 import { discoverPageObjects } from "../../../analysis/page-objects/discover";
 import { WorkspacePool } from "../../../analysis/workspace";
@@ -259,6 +260,40 @@ describe("tsConfigFileNames", () => {
 		expect(ws.sourceFiles().map((file) => ws.rel(file.getFilePath()))).toEqual([
 			"src/a.ts",
 		]);
+	});
+});
+
+describe("alternate page-object tsconfig diagnosis", () => {
+	it("finds a sibling program whose files import the library", () => {
+		const root = scratch({
+			"tsconfig.json": JSON.stringify({ include: ["src"] }),
+			"src/App.tsx":
+				'export function App() { return <div data-testid="Root" />; }',
+			"e2e/tsconfig.json": JSON.stringify({ include: ["."] }),
+			"e2e/HomePage.ts": [
+				'import { RootPageObject } from "playwright-page-object";',
+				"export class HomePage extends RootPageObject {}",
+			].join("\n"),
+			"e2e/mcp.ts": 'import type {} from "playwright-page-object/mcp";',
+			"e2e/comment.ts":
+				'// import { PageObject } from "playwright-page-object";\nexport const x = 1;',
+		});
+		const ws = pool.acquire({ projectRoot: root });
+		const result = findPageObjectTsConfigCandidates(
+			ws.project,
+			root,
+			ws.tsconfigPath,
+		);
+
+		expect(result).toEqual({
+			candidates: [
+				{
+					file: "e2e/tsconfig.json",
+					filesCovered: 3,
+					filesImportingLibrary: 1,
+				},
+			],
+		});
 	});
 });
 

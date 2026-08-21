@@ -60,7 +60,7 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 	if (options.tsconfig !== undefined) {
 		const resolved = resolveAgainst(root, options.tsconfig);
 		if (!isFile(resolved)) {
-			problems.push(`--tsconfig is not a file: ${options.tsconfig}`);
+			problems.push(tsconfigPathProblem(root, options.tsconfig, resolved));
 		}
 	}
 	if (options.playwrightConfig !== undefined) {
@@ -128,6 +128,23 @@ export function validateServerOptions(options: McpServerOptions): string[] {
 	}
 
 	return problems;
+}
+
+function tsconfigPathProblem(
+	root: string,
+	input: string,
+	resolved: string,
+): string {
+	if (path.isAbsolute(input)) {
+		return `--tsconfig is not a file: ${resolved}`;
+	}
+	let problem = `--tsconfig is not a file: ${resolved} (resolved from ${JSON.stringify(input)} against --project-root ${root})`;
+	const fromCwd = path.resolve(input);
+	if (fromCwd !== resolved && isFile(fromCwd) && isInside(root, fromCwd)) {
+		const relative = path.relative(root, fromCwd) || path.basename(fromCwd);
+		problem += `; did you mean --tsconfig ${JSON.stringify(relative)}?`;
+	}
+	return problem;
 }
 
 function resolveAgainst(root: string, candidate: string): string {

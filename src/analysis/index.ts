@@ -29,6 +29,11 @@ export {
 	type TsConfigLocation,
 } from "./config/tsconfig";
 export {
+	findPageObjectTsConfigCandidates,
+	type PageObjectTsConfigCandidate,
+	type PageObjectTsConfigCandidates,
+} from "./config/tsconfigAlternatives";
+export {
 	classifySelector,
 	type SelectorClassification,
 } from "./coverage/classify";

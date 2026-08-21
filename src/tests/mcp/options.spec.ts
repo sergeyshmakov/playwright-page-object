@@ -82,6 +82,26 @@ describe("validateServerOptions", () => {
 		expect(problems[0]).toContain("--tsconfig");
 	});
 
+	it("shows the resolved tsconfig path and suggests a cwd-relative correction", () => {
+		const projectRoot = path.join(process.cwd(), "example");
+		const problems = validateServerOptions({
+			projectRoot,
+			tsconfig: "example/tsconfig.json",
+		});
+		const expected = path.join(projectRoot, "example", "tsconfig.json");
+
+		expect(problems).toEqual([
+			`--tsconfig is not a file: ${expected} (resolved from "example/tsconfig.json" against --project-root ${projectRoot}); did you mean --tsconfig "tsconfig.json"?`,
+		]);
+	});
+
+	it("does not claim an absolute tsconfig was resolved against the root", () => {
+		const missing = path.join(root, "nope", "tsconfig.json");
+		expect(
+			validateServerOptions({ projectRoot: root, tsconfig: missing }),
+		).toEqual([`--tsconfig is not a file: ${missing}`]);
+	});
+
 	it("names every missing src dir, not just the first", () => {
 		const problems = validateServerOptions({
 			projectRoot: root,
