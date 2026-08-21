@@ -43,6 +43,7 @@ const scanned = await scanURLs({
 			"ai-agents",
 			"e2e",
 			"mcp",
+			"openspec",
 			"page-object-model",
 			"playwright",
 			"test-automation",
