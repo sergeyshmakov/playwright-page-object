@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lookupHint } from "../../../mcp/present/hints";
+import { listEmptyHint, lookupHint } from "../../../mcp/present/hints";
 
 /**
  * What a lookup says beyond the occurrence list.
@@ -30,5 +30,20 @@ describe("the concrete id a family hint names", () => {
 		const hint = lookupHint("Nope", 0, 0, false, []);
 		expect(hint).toContain("No rendered element");
 		expect(hint).not.toContain("id family");
+	});
+});
+
+describe("an empty page-object index", () => {
+	it("does not rule out candidates that the bounded config probe omitted", () => {
+		const hint = listEmptyHint(undefined, 0, 0, [], {
+			tsconfig: "tsconfig.json",
+			scanned: 1,
+			candidates: [],
+			candidatesTruncated: true,
+		});
+
+		expect(hint).toContain("inspected tsconfigs");
+		expect(hint).toContain("Additional tsconfigs were omitted");
+		expect(hint).not.toContain("No other tsconfig under the project root");
 	});
 });

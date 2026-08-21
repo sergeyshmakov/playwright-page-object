@@ -20,7 +20,10 @@ function emptyIndexHint(context: EmptyIndexContext): string {
 	const program = context.tsconfig ?? "no tsconfig (fallback source scan)";
 	const lead = `0 page objects in the analysed program (${program}, ${context.scanned} files).`;
 	if (context.candidates.length === 0) {
-		return `${lead} No other tsconfig under the project root selects a source file that imports "playwright-page-object". Check that the page-object files are included by the selected tsconfig, or restart with the correct --tsconfig; use --src-dir only when you can name every application and test source directory that must remain in scope.`;
+		const probe = context.candidatesTruncated
+			? "No candidate was found among the inspected tsconfigs. Additional tsconfigs were omitted from this bounded diagnostic."
+			: 'No other tsconfig under the project root selects a source file that imports "playwright-page-object".';
+		return `${lead} ${probe} Check that the page-object files are included by the selected tsconfig, or restart with the correct --tsconfig; use --src-dir only when you can name every application and test source directory that must remain in scope.`;
 	}
 	const candidates = context.candidates
 		.map(
