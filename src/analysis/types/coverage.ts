@@ -181,6 +181,11 @@ export interface CoverageReport {
 	uncoveredTestIds: Array<{
 		id: string | null;
 		patternSource: string | null;
+		/**
+		 * Every proven render site for this id. Read `loc.file`, `loc.line` and the
+		 * optional `loc.column`; `conditional` and `repeated` retain the JSX context
+		 * needed to choose between a singleton and list selector.
+		 */
 		occurrences: TestIdOccurrence[];
 		suggestion: string;
 		/**

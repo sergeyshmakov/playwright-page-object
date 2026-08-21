@@ -169,6 +169,25 @@ describe("server instructions", () => {
 		expect(text).toContain("dynamic fragments are not guessed");
 	});
 
+	it("names the machine-readable coverage bucket fields", async () => {
+		const text = (await tools()).get("map_coverage") ?? "";
+
+		expect(text).toContain("id (not testId)");
+		expect(text).toContain("occurrences[]");
+		expect(text).toContain("loc.file");
+		expect(text).toContain("conditional/repeated");
+		for (const bucket of [
+			"matched",
+			"uncoveredTestIds",
+			"deadSelectors",
+			"nonTestIdSelectors",
+			"unknownSelectors",
+			"unknownTestIds",
+		]) {
+			expect(text).toContain(bucket);
+		}
+	});
+
 	it("documents per-call forwarding overrides without rewriting source evidence", async () => {
 		const descriptions = await tools();
 		const tree = descriptions.get("get_testid_tree") ?? "";
