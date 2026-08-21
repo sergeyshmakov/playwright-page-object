@@ -153,6 +153,8 @@ export interface CoverageReport {
 			id: string | null;
 			patternSource: string | null;
 			occurrences: SourceLoc[];
+			/** The id only counts as rendered because forwarding was assumed. */
+			assumed?: true;
 		};
 		confidence: MatchConfidence;
 		probe?: string;
@@ -188,6 +190,8 @@ export interface CoverageReport {
 		 */
 		occurrences: TestIdOccurrence[];
 		suggestion: string;
+		/** The id only counts as rendered because forwarding was assumed. */
+		assumed?: true;
 		/**
 		 * Selectors that matched this id speculatively but were credited to a
 		 * stronger piece of evidence elsewhere. It may well be covered.

@@ -198,6 +198,7 @@ describe("server instructions", () => {
 		expect(tree).toContain("assumeForwarded overrides the server default");
 		expect(tree).toContain('reach: "component-prop"');
 		expect(coverage).toContain("including false");
+		expect(coverage).toContain("every affected ID carries assumed: true");
 		expect(coverage).toContain('forwarding: "assumed"');
 	});
 

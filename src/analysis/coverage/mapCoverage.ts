@@ -250,6 +250,7 @@ function computeCoverageReport(
 						occurrences: match.ui.occurrences.map(
 							(occurrence) => occurrence.loc,
 						),
+						...(match.ui.assumed ? { assumed: true as const } : {}),
 					},
 					confidence: match.outcome.confidence,
 					...(match.outcome.probe ? { probe: match.outcome.probe } : {}),
@@ -362,6 +363,7 @@ function computeCoverageReport(
 					patternSource: ui.patternSource,
 					occurrences: ui.occurrences,
 					suggestion: suggestionFor(ui),
+					...(ui.assumed ? { assumed: true as const } : {}),
 					...(speculative ? { speculativeSelectors: speculative } : {}),
 				};
 			})

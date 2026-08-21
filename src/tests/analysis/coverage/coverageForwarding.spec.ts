@@ -35,11 +35,23 @@ describe("buildCoverageReport — assuming forwarding", () => {
 		expect(result.summary.assumedForwardedTestIds).toBe(1);
 		expect(result.matched).toHaveLength(1);
 		expect(result.matched[0].forwarding).toBe("assumed");
+		expect(result.matched[0].ui.assumed).toBe(true);
 		expect(result.unknownSelectors).toEqual([]);
 		const warning = result.warnings.find(
 			(entry) => entry.code === "forwarding-assumed",
 		);
 		expect(warning?.severity).toBe("warning");
+	});
+
+	it("labels an assumed id even when no selector covers it", () => {
+		const result = buildCoverageReport(
+			makeWorkspace({ ...FILES, "e2e/GhostPage.ts": "export {};" }),
+			{ assumeForwarded: true },
+		);
+		const ghost = result.uncoveredTestIds.find((entry) => entry.id === "Ghost");
+
+		expect(ghost?.assumed).toBe(true);
+		expect(ghost?.occurrences[0]?.reach).toBe("component-prop");
 	});
 
 	/**
