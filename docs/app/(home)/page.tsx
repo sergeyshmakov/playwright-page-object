@@ -33,41 +33,57 @@ export default async function HomePage() {
 				className="pom-hero-grid pointer-events-none absolute inset-0 opacity-70"
 			/>
 			<section className="relative mx-auto w-full max-w-6xl px-6 py-20 sm:py-28">
-				<h1 className="max-w-4xl text-balance text-4xl font-semibold tracking-tight sm:text-6xl">
-					Typed Page Objects for Playwright
-				</h1>
-				<p className="mt-6 max-w-3xl text-pretty text-lg leading-8 text-fd-muted-foreground sm:text-xl">
-					Decorator-driven, lazy locator chains in plain TypeScript classes.
-				</p>
-				<div className="mt-9 flex flex-wrap gap-3">
-					<Link
-						href="/getting-started/quick-start/"
-						className="rounded-lg bg-fd-primary px-5 py-3 font-medium text-fd-primary-foreground transition-opacity hover:opacity-90"
-					>
-						Quick Start
-					</Link>
-					<Link
-						href="/mcp/"
-						className="rounded-lg border bg-fd-background px-5 py-3 font-medium transition-colors hover:bg-fd-accent"
-					>
-						MCP Server
-					</Link>
-					<a
-						href={repositoryUrl}
-						rel="noreferrer noopener"
-						target="_blank"
-						className="rounded-lg border bg-fd-background px-5 py-3 font-medium transition-colors hover:bg-fd-accent"
-					>
-						View on GitHub
-					</a>
-					<a
-						href={npmUrl}
-						rel="noreferrer noopener"
-						target="_blank"
-						className="rounded-lg border bg-fd-background px-5 py-3 font-medium transition-colors hover:bg-fd-accent"
-					>
-						View on npm
-					</a>
+				<div className="grid items-center gap-12 lg:grid-cols-[minmax(0,12fr)_minmax(0,8fr)]">
+					<div>
+						<h1 className="max-w-4xl text-balance text-4xl font-semibold tracking-tight sm:text-6xl">
+							Typed Page Objects for Playwright
+						</h1>
+						<p className="mt-6 max-w-3xl text-pretty text-lg leading-8 text-fd-muted-foreground sm:text-xl">
+							Decorator-driven, lazy locator chains in plain TypeScript classes.
+						</p>
+						<div className="mt-9 flex flex-wrap gap-3">
+							<Link
+								href="/getting-started/quick-start/"
+								className="rounded-lg bg-fd-primary px-5 py-3 font-medium text-fd-primary-foreground transition-opacity hover:opacity-90"
+							>
+								Quick Start
+							</Link>
+							<Link
+								href="/mcp/"
+								className="rounded-lg border bg-fd-background px-5 py-3 font-medium transition-colors hover:bg-fd-accent"
+							>
+								MCP Server
+							</Link>
+							<a
+								href={repositoryUrl}
+								rel="noreferrer noopener"
+								target="_blank"
+								className="rounded-lg border bg-fd-background px-5 py-3 font-medium transition-colors hover:bg-fd-accent"
+							>
+								View on GitHub
+							</a>
+							<a
+								href={npmUrl}
+								rel="noreferrer noopener"
+								target="_blank"
+								className="rounded-lg border bg-fd-background px-5 py-3 font-medium transition-colors hover:bg-fd-accent"
+							>
+								View on npm
+							</a>
+						</div>
+					</div>
+					{/* The logo's own grammar at hero scale: outlined squares that
+					    nest, each holding the element it resolves to. Opacity carries
+					    the depth, so it needs no dark-mode variant. */}
+					<img
+						src="/hero.svg"
+						alt="Abstract nested page objects, each resolving to an element"
+						width={440}
+						height={440}
+						loading="eager"
+						decoding="async"
+						className="mx-auto hidden h-auto w-full max-w-sm lg:block"
+					/>
 				</div>
 
 				<div className="mt-16 grid items-start gap-5 lg:grid-cols-2">

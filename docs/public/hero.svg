@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 440" fill="none" role="img" aria-label="Abstract nested page objects, each resolving to an element">
+	<title>Nested page objects</title>
+
+	<!--
+		The logo's own grammar at hero scale: outlined rounded squares that nest,
+		each holding one filled node. That is the library's whole idea — a page
+		object contains fragments, a fragment resolves to an element — and it is
+		drawn with strokes rather than fills because the logo is, which keeps this
+		distinct from the filled motifs on the sibling sites.
+
+		Depth is carried by opacity alone, so the composition reads on both the
+		light and the dark ground with no second version. No soft wash behind it: a
+		radial fade inside a bounding box shows its own edges unless the fade
+		completes before them, and it would fight the grid the hero section already
+		lays down.
+	-->
+	<g stroke="#45ba4b" stroke-width="15">
+		<rect x="52" y="52" width="196" height="196" rx="44" opacity=".22" />
+		<rect x="122" y="122" width="196" height="196" rx="44" opacity=".48" />
+		<rect x="192" y="192" width="196" height="196" rx="44" />
+	</g>
+
+	<!-- the element each object resolves to, weighted the same way as its frame -->
+	<g fill="#45ba4b">
+		<rect x="139" y="139" width="22" height="22" rx="6" opacity=".22" />
+		<rect x="205" y="205" width="30" height="30" rx="8" opacity=".48" />
+		<rect x="271" y="271" width="38" height="38" rx="11" />
+	</g>
+</svg>
