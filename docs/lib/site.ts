@@ -5,6 +5,10 @@ export const siteUrl = "https://pom.shmakov.tools";
 export const repositoryUrl =
 	"https://github.com/sergeyshmakov/playwright-page-object";
 export const npmUrl = "https://www.npmjs.com/package/playwright-page-object";
+export const ogImagePath = "/og-default.png";
+export const ogImageAlt =
+	"playwright-page-object — typed page objects for Playwright";
+
 export const authorName = "Sergei Shmakov";
 
 export function absoluteUrl(path: string): URL {

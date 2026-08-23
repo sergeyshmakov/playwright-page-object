@@ -10,6 +10,7 @@ import { createRelativeLink } from "fumadocs-ui/mdx";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getMDXComponents } from "@/components/mdx";
+import { ogImage } from "@/lib/og";
 import { absoluteUrl, repositoryUrl, siteName } from "@/lib/site";
 import { pageTitle, source } from "@/lib/source";
 
@@ -75,6 +76,7 @@ export async function generateMetadata(
 			title,
 			description: page.data.description,
 			url: canonical,
+			images: [ogImage],
 		},
 	};
 }

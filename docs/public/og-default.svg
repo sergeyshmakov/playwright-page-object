@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" fill="none">
+	<title>playwright-page-object — Typed Page Objects for Playwright</title>
+
+	<!--
+		Source for public/og-default.png. Crawlers do not render SVG, so the PNG is
+		what ships — see scripts/render-png.mjs. Keeping the source here means the
+		card can be edited as text rather than in an image editor, and stays in step
+		with the logo it carries.
+
+		The logo is reproduced exactly as public/logo.svg draws it, strokes and all.
+		Light ground rather than a dark gradient, matching the near-white docs.
+	-->
+	<defs>
+		<linearGradient id="og-ground" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#ffffff" />
+			<stop offset="1" stop-color="#eef7ef" />
+		</linearGradient>
+	</defs>
+
+	<rect width="1200" height="630" fill="url(#og-ground)" />
+
+	<!-- A rule at the foot, so the card reads as a card on a white timeline
+	     rather than bleeding into it. -->
+	<rect y="624" width="1200" height="6" fill="#45ba4b" />
+
+	<!-- left column: identity, headline, credentials -->
+
+	<!-- the logo, unchanged from public/logo.svg -->
+	<g transform="translate(80 72) scale(0.9375)">
+		<rect x="7" y="7" width="38" height="38" rx="10" stroke="#45ba4b" stroke-width="7" />
+		<rect x="19" y="19" width="38" height="38" rx="10" stroke="#45ba4b" stroke-width="7" />
+		<rect x="26" y="26" width="12" height="12" rx="3" fill="#45ba4b" />
+	</g>
+
+	<text x="156" y="118" font-family="Segoe UI, Arial, Helvetica, sans-serif"
+	      font-size="34" font-weight="600" fill="#0f2113" letter-spacing="-.5">playwright-page-object</text>
+
+	<text font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="66"
+	      font-weight="700" fill="#0f2113" letter-spacing="-2.2">
+		<tspan x="80" y="255">Typed Page Objects</tspan>
+		<tspan x="80" y="330">for Playwright</tspan>
+	</text>
+
+	<text x="80" y="396" font-family="Segoe UI, Arial, Helvetica, sans-serif"
+	      font-size="27" font-weight="400" fill="#425347">Decorator-driven, lazy locator chains in</text>
+	<text x="80" y="434" font-family="Segoe UI, Arial, Helvetica, sans-serif"
+	      font-size="27" font-weight="400" fill="#425347">plain TypeScript classes.</text>
+
+	<!-- credentials, separated by rules rather than bullets so they read as
+	     distinct facts rather than a list. Rules sit an equal 20px from the text
+	     on either side, measured against the rendered widths. -->
+	<g font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="22" font-weight="600" fill="#348a39">
+		<text x="80" y="524">TypeScript</text>
+		<text x="222" y="524">MCP server</text>
+		<text x="368" y="524">MIT</text>
+	</g>
+	<g fill="#c7e5c9">
+		<rect x="202" y="506" width="2" height="22" />
+		<rect x="348" y="506" width="2" height="22" />
+	</g>
+
+	<!-- right column: the nested-objects motif from the hero -->
+
+	<g transform="translate(706 92) scale(0.9)">
+		<g stroke="#45ba4b" stroke-width="15">
+			<rect x="8" y="8" width="196" height="196" rx="44" opacity=".22" />
+			<rect x="78" y="78" width="196" height="196" rx="44" opacity=".48" />
+			<rect x="148" y="148" width="196" height="196" rx="44" />
+		</g>
+		<g fill="#45ba4b">
+			<rect x="95" y="95" width="22" height="22" rx="6" opacity=".22" />
+			<rect x="161" y="161" width="30" height="30" rx="8" opacity=".48" />
+			<rect x="227" y="227" width="38" height="38" rx="11" />
+		</g>
+	</g>
+</svg>

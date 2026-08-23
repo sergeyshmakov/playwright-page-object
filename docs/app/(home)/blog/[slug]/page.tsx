@@ -6,6 +6,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getMDXComponents } from "@/components/mdx";
 import { authors, tagSlug } from "@/lib/blog";
+import { ogImage } from "@/lib/og";
 import { absoluteUrl, repositoryUrl, siteName } from "@/lib/site";
 import { blog, pageTitle } from "@/lib/source";
 
@@ -122,6 +123,7 @@ export async function generateMetadata(
 			description: page.data.description,
 			url: canonical,
 			publishedTime: `${page.data.date}T00:00:00.000Z`,
+			images: [ogImage],
 		},
 	};
 }
