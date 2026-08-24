@@ -69,8 +69,8 @@
 		</g>
 		<g fill="#45ba4b">
 			<rect x="95" y="95" width="22" height="22" rx="6" opacity=".22" />
-			<rect x="161" y="161" width="30" height="30" rx="8" opacity=".48" />
-			<rect x="227" y="227" width="38" height="38" rx="11" />
+			<rect x="165" y="165" width="22" height="22" rx="6" opacity=".48" />
+			<rect x="235" y="235" width="22" height="22" rx="6" />
 		</g>
 	</g>
 </svg>

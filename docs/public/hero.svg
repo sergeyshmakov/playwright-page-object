@@ -23,7 +23,7 @@
 	<!-- the element each object resolves to, weighted the same way as its frame -->
 	<g fill="#45ba4b">
 		<rect x="139" y="139" width="22" height="22" rx="6" opacity=".22" />
-		<rect x="205" y="205" width="30" height="30" rx="8" opacity=".48" />
-		<rect x="271" y="271" width="38" height="38" rx="11" />
+		<rect x="209" y="209" width="22" height="22" rx="6" opacity=".48" />
+		<rect x="279" y="279" width="22" height="22" rx="6" />
 	</g>
 </svg>
