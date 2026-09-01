@@ -1,3 +1,10 @@
+## [2.2.1](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.0...v2.2.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* **deps:** bump the npm-production group with 2 updates ([#81](https://github.com/sergeyshmakov/playwright-page-object/issues/81)) ([568af79](https://github.com/sergeyshmakov/playwright-page-object/commit/568af7950a1b30251dd94494745b380b7c6e19a4))
+
 # [2.2.0](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.1.1...v2.2.0) (2026-08-21)
 
 
