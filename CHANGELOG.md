@@ -1,3 +1,11 @@
+## [2.2.2](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.1...v2.2.2) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deps:** bump brace-expansion from 5.0.9 to 5.0.12 ([#98](https://github.com/sergeyshmakov/playwright-page-object/issues/98)) ([18faa87](https://github.com/sergeyshmakov/playwright-page-object/commit/18faa875b6799b245740613d7f56402d93068b0e))
+* **deps:** bump the npm-production group with 2 updates ([#93](https://github.com/sergeyshmakov/playwright-page-object/issues/93)) ([0411721](https://github.com/sergeyshmakov/playwright-page-object/commit/041172121304384064b48e9d18fccaf8169b8f07))
+
 ## [2.2.1](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.0...v2.2.1) (2026-09-01)
 
 
