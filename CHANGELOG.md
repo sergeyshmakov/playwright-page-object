@@ -1,3 +1,10 @@
+## [2.2.3](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.2...v2.2.3) (2026-10-14)
+
+
+### Bug Fixes
+
+* **deps:** bump source-map-js from 1.2.1 to 1.2.2 ([#106](https://github.com/sergeyshmakov/playwright-page-object/issues/106)) ([e84b681](https://github.com/sergeyshmakov/playwright-page-object/commit/e84b6816402e86fff6baa6c3dac1e87fe400ece7))
+
 ## [2.2.2](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.1...v2.2.2) (2026-10-01)
 
 
