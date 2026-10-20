@@ -46,13 +46,17 @@ jobs:
           # pending" means anything: a check run appears only once its job is
           # queued, and an empty list is not a pass.
           required='["validate","cli (ubuntu-latest)","cli (windows-latest)"]'
+          # Giving up is final for this run: re-running a failed check does not
+          # fire pull_request_target again. Re-running THIS job does, against the
+          # same head commit, so that is how a passing retry gets its merge back.
+          resume="Once CI passes, re-run this job to merge (or merge by hand)."
           deadline=$((SECONDS + 45 * 60))
           while :; do
             runs="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100" \
               --jq '.check_runs | map(select(.name != "auto-merge") | {name, status, conclusion})')"
             failed="$(jq -r 'map(select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not)) | .name) | join(", ")' <<<"$runs")"
             if [ -n "$failed" ]; then
-              echo "::error::Not merging: $failed did not pass."
+              echo "::error::Not merging: $failed did not pass. $resume"
               exit 1
             fi
             pending="$(jq 'map(select(.status != "completed")) | length' <<<"$runs")"
@@ -61,7 +65,7 @@ jobs:
               break
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::Gave up waiting for CI (pending: $pending, not started: ${missing:-none})."
+              echo "::error::Gave up waiting for CI (pending: $pending, not started: ${missing:-none}). $resume"
               exit 1
             fi
             sleep 20
