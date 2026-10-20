@@ -17,6 +17,10 @@ This prevents the painful case of a large PR being rejected because of a directi
 
 ## Local development
 
+Working on the repository needs Node 22.18 or newer (Volta pins 24.19.0),
+because tsup 9 and vitest 5 do. The published package still supports Node
+20, per `engines` in `package.json`.
+
 ```bash
 npm ci
 npm run dev       # tsup watch mode
