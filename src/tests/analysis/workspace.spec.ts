@@ -111,6 +111,10 @@ describe("WorkspacePool.acquire", () => {
 		}
 	});
 
+	// Only the clock is fake: the first acquire builds a real project and the six
+	// after it revalidate it. About a second alone, but 5.3-6.4 s under a full
+	// parallel run on Windows, which failed the pre-commit hook on the default 5 s
+	// in four of six runs.
 	it("keeps a workspace alive while calls keep arriving", () => {
 		vi.useFakeTimers();
 		try {
@@ -125,7 +129,7 @@ describe("WorkspacePool.acquire", () => {
 		} finally {
 			vi.useRealTimers();
 		}
-	});
+	}, 30_000);
 
 	/**
 	 * The default refused every call on the repositories this server exists for —
