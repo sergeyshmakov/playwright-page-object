@@ -1,3 +1,12 @@
+## [2.2.4](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.3...v2.2.4) (2026-10-20)
+
+
+### Bug Fixes
+
+* **deps:** bump @modelcontextprotocol/server from 2.1.0 to 2.3.0 ([#115](https://github.com/sergeyshmakov/playwright-page-object/issues/115)) ([2bad2a7](https://github.com/sergeyshmakov/playwright-page-object/commit/2bad2a7af7dd9783d430bb56e3676291cc4e42b4))
+* **deps:** bump @modelcontextprotocol/server from 2.3.0 to 2.3.1 ([#118](https://github.com/sergeyshmakov/playwright-page-object/issues/118)) ([838ed20](https://github.com/sergeyshmakov/playwright-page-object/commit/838ed20fed97b884ce3326a04d6466179bae5d61))
+* **deps:** bump vite from 8.0.16 to 8.3.4 ([#114](https://github.com/sergeyshmakov/playwright-page-object/issues/114)) ([46879dd](https://github.com/sergeyshmakov/playwright-page-object/commit/46879ddae695e7c851cede0199ce61097bff02bc))
+
 ## [2.2.3](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.2...v2.2.3) (2026-10-14)
 
 
