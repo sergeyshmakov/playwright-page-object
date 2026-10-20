@@ -72,6 +72,10 @@ updates:
         versions: [ ">=17" ]
       - dependency-name: "typescript"
         versions: [ ">=6" ]
+      # The site builds on Node 24 (deploy-docs.yml pins 24.19.0); a newer
+      # @types/node types APIs that runtime does not have. PR #99 proposed 26.
+      - dependency-name: "@types/node"
+        versions: [ ">=25" ]
 
   - package-ecosystem: "npm"
     directory: "/example"
