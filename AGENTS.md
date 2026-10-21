@@ -53,8 +53,16 @@ root `package.json` changes.
 
 Merging anything to `main` with a user token also releases every `fix:` that
 GITHUB_TOKEN merges left unreleased, because those pushes start no workflow
-(the daily publish cron sweeps them). Before a merge, run
-`git log <last tag>..origin/main --format=%s` and know what it will cut.
+(the daily publish cron sweeps them). Before a merge, list what is already
+waiting to release. Read whole messages, not subjects: a `BREAKING CHANGE:`
+footer in a body cuts a major.
+
+```bash
+git log "$(git describe --tags --abbrev=0 origin/main)"..origin/main --format=%B \
+  | grep -E '^(feat|fix|perf)(\([^)]*\))?!?:|^BREAKING[ -]CHANGE:|^(revert:|Revert ")'
+```
+
+No output means nothing is waiting. Then add what the PR itself will land.
 
 ### Squash merges
 
