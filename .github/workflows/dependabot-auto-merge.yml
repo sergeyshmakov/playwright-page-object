@@ -1,29 +1,77 @@
 name: Dependabot auto-merge
 
-# Auto-merges Dependabot PRs for patch and minor bumps once required checks pass.
-# Major bumps are left for manual review. CI is the safety net: auto-merge waits
-# for required status checks, so a red build (e.g. a breaking minor) never merges.
-# Requires the repo "Allow auto-merge" setting to be enabled.
+# Merges Dependabot PRs for patch and minor bumps once every other check on the
+# PR's head commit has passed. Major bumps are left for manual review.
+#
+# The job waits for CI itself instead of using GitHub's auto-merge. `main` has
+# no required status checks, and without them `gh pr merge --auto` either merges
+# a clean PR on the spot -- #106 landed 23 seconds before its `validate` job
+# started -- or refuses with "Protected branch rules not configured" (#96, #105).
+# Required checks are not the fix: semantic-release pushes the release commit to
+# `main` with GITHUB_TOKEN, and a required-checks rule would reject that push.
 
 on: pull_request_target
 
 permissions:
   contents: write
   pull-requests: write
+  checks: read
+
+# A new head commit supersedes the wait on the old one.
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
     if: ${{ github.actor == 'dependabot[bot]' }}
+    timeout-minutes: 50
     steps:
       - name: Fetch Dependabot metadata
         id: meta
         # For grouped PRs this reports the highest semver bump in the group.
         uses: dependabot/fetch-metadata@v3
 
-      - name: Enable auto-merge for patch and minor updates
+      - name: Merge patch and minor updates once CI passes
         if: ${{ steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor' }}
-        run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # PR Check runs these on every PR. They must exist before "nothing is
+          # pending" means anything: a check run appears only once its job is
+          # queued, and an empty list is not a pass.
+          required='["validate","cli (ubuntu-latest)","cli (windows-latest)"]'
+          # Giving up is final for this run: re-running a failed check does not
+          # fire pull_request_target again. Re-running THIS job does, against the
+          # same head commit, so that is how a passing retry gets its merge back.
+          resume="Once CI passes, re-run this job to merge (or merge by hand)."
+          deadline=$((SECONDS + 45 * 60))
+          while :; do
+            runs="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100" \
+              --jq '.check_runs | map(select(.name != "auto-merge") | {name, status, conclusion})')"
+            failed="$(jq -r 'map(select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not)) | .name) | join(", ")' <<<"$runs")"
+            if [ -n "$failed" ]; then
+              echo "::error::Not merging: $failed did not pass. $resume"
+              exit 1
+            fi
+            pending="$(jq 'map(select(.status != "completed")) | length' <<<"$runs")"
+            missing="$(jq -r --argjson req "$required" '$req - map(.name) | join(", ")' <<<"$runs")"
+            if [ "$pending" -eq 0 ] && [ -z "$missing" ]; then
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Gave up waiting for CI (pending: $pending, not started: ${missing:-none}). $resume"
+              exit 1
+            fi
+            sleep 20
+          done
+          # --subject: the squash subject decides the release, so say it outright.
+          # --match-head-commit: never merge a head these checks did not run on.
+          gh pr merge "$PR_URL" --squash \
+            --subject "$PR_TITLE (#$PR_NUMBER)" \
+            --match-head-commit "$HEAD_SHA"
