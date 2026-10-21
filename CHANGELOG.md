@@ -1,3 +1,10 @@
+## [2.2.5](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.4...v2.2.5) (2026-10-21)
+
+
+### Bug Fixes
+
+* **deps:** bump zod to 4.6.7 and resolve.exports to 2.0.4 ([d9031ab](https://github.com/sergeyshmakov/playwright-page-object/commit/d9031abc1912b4f2ab6f8ad44f56d982fec8ef8f)), closes [#115](https://github.com/sergeyshmakov/playwright-page-object/issues/115)
+
 ## [2.2.4](https://github.com/sergeyshmakov/playwright-page-object/compare/v2.2.3...v2.2.4) (2026-10-20)
 
 
