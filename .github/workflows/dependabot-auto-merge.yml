@@ -1,7 +1,9 @@
 name: Dependabot auto-merge
 
 # Merges Dependabot PRs for patch and minor bumps once every other check on the
-# PR's head commit has passed. Major bumps are left for manual review.
+# PR's head commit has passed. Major bumps are left for manual review. A
+# `fix(deps)` that touches only the lockfile is merged as `chore(deps)`, so it
+# does not cut a release that changes nothing for consumers.
 #
 # The job waits for CI itself instead of using GitHub's auto-merge. `main` has
 # no required status checks, and without them `gh pr merge --auto` either merges
@@ -71,8 +73,23 @@ jobs:
             fi
             sleep 20
           done
-          # --subject: the squash subject decides the release, so say it outright.
+          # The squash subject decides the release, so it is set outright. A
+          # `fix(deps)` that changes only the lockfile ships nothing a consumer
+          # installs -- the lockfile is not published, and consumers resolve our
+          # package.json ranges themselves -- so it lands as `chore(deps)`. It stays
+          # `fix(deps)` when the root package.json changes, i.e. a range moved.
+          # 2.2.1-2.2.4 were cut by nothing else: #81, #93, #98, #106, #114, #115
+          # and #118, every one of them lockfile-only.
+          subject="$PR_TITLE"
+          if [[ "$subject" == "fix(deps):"* ]]; then
+            # Assigned on its own line so a failed lookup stops the job instead of
+            # reading as "package.json untouched" and silently dropping a release.
+            files="$(gh pr diff "$PR_URL" --name-only)"
+            if ! grep -qx 'package.json' <<<"$files"; then
+              subject="chore(deps):${subject#"fix(deps):"}"
+            fi
+          fi
           # --match-head-commit: never merge a head these checks did not run on.
           gh pr merge "$PR_URL" --squash \
-            --subject "$PR_TITLE (#$PR_NUMBER)" \
+            --subject "$subject (#$PR_NUMBER)" \
             --match-head-commit "$HEAD_SHA"

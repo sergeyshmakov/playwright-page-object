@@ -17,6 +17,8 @@ updates:
       - "dependencies"
     # Production-dep bumps must publish (semantic-release ignores `chore:`), so
     # security fixes to runtime deps reach npm. Dev-dep bumps stay release-free.
+    # A lockfile-only `fix(deps)` changes nothing consumers install, so the
+    # auto-merge workflow lands it as `chore(deps)` (see AGENTS.md).
     commit-message:
       prefix: "fix(deps)"
       prefix-development: "chore(deps-dev)"
