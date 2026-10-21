@@ -38,5 +38,8 @@
 		"serve": "^14.2.6",
 		"tailwindcss": "^4.3.3",
 		"typescript": "^5.9.3"
+	},
+	"overrides": {
+		"compression": "^1.8.2"
 	}
 }
