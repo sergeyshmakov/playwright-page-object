@@ -35,14 +35,34 @@ The same rule covers `example/` and any other directory outside `dist`.
 `.github/dependabot.yml` pins the prefix per ecosystem, deliberately:
 
 - root `npm` → `fix(deps)` / `chore(deps-dev)`, so runtime-dependency and
-  security bumps do reach npm.
+  security bumps do reach npm — **when they change `package.json`**. A
+  `fix(deps)` PR that touches only `package-lock.json` ships nothing a consumer
+  installs: the lockfile is not published, and consumers resolve our ranges
+  themselves. The auto-merge job merges those as `chore(deps)`. Releases
+  2.2.1–2.2.4 were cut by nothing but such PRs. Dependabot also uses the
+  production prefix for *indirect* dependencies, dev-only ones included (vite in
+  #114, source-map-js in #106), so the title alone does not tell you.
 - `/docs` and `/example` → `chore(deps)` / `chore(deps-dev)`, because neither
   ships. Dependabot's own default would pick `fix(deps)` for any
   *production-type* dependency — react and react-dom are production deps of the
   example app — and cut an empty patch release for a change present in nothing.
 
 If you merge such a PR by hand, check the subject before squashing and rewrite it
-if the prefix would release.
+if the prefix would release. Apply the same test: `fix(deps)` only when the
+root `package.json` changes.
+
+Merging anything to `main` with a user token also releases every `fix:` that
+GITHUB_TOKEN merges left unreleased, because those pushes start no workflow
+(the daily publish cron sweeps them). Before a merge, list what is already
+waiting to release. Read whole messages, not subjects: a `BREAKING CHANGE:`
+footer in a body cuts a major.
+
+```bash
+git log "$(git describe --tags --abbrev=0 origin/main)"..origin/main --format=%B \
+  | grep -E '^(feat|fix|perf)(\([^)]*\))?!?:|^BREAKING[ -]CHANGE:|^(revert:|Revert ")'
+```
+
+No output means nothing is waiting. Then add what the PR itself will land.
 
 ### Squash merges
 
