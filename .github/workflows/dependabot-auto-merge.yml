@@ -47,8 +47,9 @@ jobs:
           # queued, and an empty list is not a pass.
           required='["validate","cli (ubuntu-latest)","cli (windows-latest)"]'
           # Giving up is final for this run: re-running a failed check does not
-          # fire pull_request_target again. Re-running THIS job does, against the
-          # same head commit, so that is how a passing retry gets its merge back.
+          # fire pull_request_target again. Re-running THIS job does not either;
+          # it replays the original event, so it polls the same head commit again
+          # and merges it once the retried check has passed.
           resume="Once CI passes, re-run this job to merge (or merge by hand)."
           deadline=$((SECONDS + 45 * 60))
           while :; do
