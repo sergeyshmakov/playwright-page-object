@@ -16,7 +16,7 @@ release decision, not a formatting one.
 
 ### Changes under `docs/` always use `docs:`
 
-The published package is `files: ["dist"]`. Nothing under `docs/` — the Starlight
+The published package is `files: ["dist"]`. Nothing under `docs/` — the Fumadocs
 site, its config, its styles, its content — ever reaches an npm consumer, so a
 docs change must never cut a release.
 

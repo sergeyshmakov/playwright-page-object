@@ -61,7 +61,7 @@ Releases are automated via `semantic-release` on merge to `main`. Do not bump th
 
 ## Docs
 
-The documentation site lives in [`docs/`](./docs) and is built with Astro Starlight. To preview locally:
+The documentation site lives in [`docs/`](./docs) and is built with Fumadocs on Next.js. To preview locally:
 
 ```bash
 cd docs
